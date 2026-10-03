@@ -16,11 +16,15 @@ concurrency:
 
 env:
   # Keep every large download inside the workspace. windows-latest has ~14 GB free on C:
-  # but a far larger D: (where github.workspace lives), and actions/cache only takes
-  # workspace-relative paths. scripts/*.mjs apply the same defaults when these are unset.
+  # but a far larger D: (where github.workspace lives). scripts/*.mjs apply the same
+  # defaults when these are unset.
   CAMOUFOX_INSTALL_DIR: ${{ github.workspace }}/.cache/camoufox
   ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
-  ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+  # Deliberately OUTSIDE the repository: the root package.json sets "type": "module", and
+  # electron-builder extracts its CommonJS `icons` tool into this directory and runs it with
+  # `node`, which would then load it as ESM and fail with "require is not defined in ES module
+  # scope". Keeping the cache outside the repo is what makes that tool load as CommonJS.
+  ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder
   PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/playwright
 
 jobs:

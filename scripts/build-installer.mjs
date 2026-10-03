@@ -46,10 +46,17 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const outDir = path.join(repoRoot, 'release')
 const require = createRequire(import.meta.url)
 
-// Keep electron-builder's ~200 MB of Electron/NSIS downloads inside the checkout, exactly
-// like scripts/dev-env.ps1 does locally and like the actions/cache steps expect in CI.
+// Keep electron-builder's Electron download inside the checkout, exactly like
+// scripts/dev-env.ps1 does locally and like the actions/cache steps expect in CI.
 process.env.ELECTRON_CACHE ??= path.join(repoRoot, '.cache', 'electron')
-process.env.ELECTRON_BUILDER_CACHE ??= path.join(repoRoot, '.cache', 'electron-builder')
+
+// ELECTRON_BUILDER_CACHE is deliberately NOT redirected into the repository, and CI points it at
+// the runner's temp directory for the same reason: electron-builder extracts its `icons` helper
+// bundle there and runs `node <cache>/icons@x/icon-tool.js`, which is **CommonJS**. Node walks up
+// from that file looking for a `package.json`, finds this repository's root one with
+// `"type": "module"`, and loads the tool as ESM — which dies with
+// "ReferenceError: require is not defined in ES module scope" and fails the whole build.
+// Leaving it outside the repository is what makes the tool load as CommonJS.
 
 /** @param {string} message */
 function fail(message) {

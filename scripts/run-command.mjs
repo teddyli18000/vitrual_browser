@@ -30,8 +30,16 @@ export function run(command, args, cwd) {
     process.platform === 'win32'
       ? spawnSync(
           process.env.ComSpec ?? 'cmd.exe',
-          ['/d', '/s', '/c', [command, ...args.map(quoteForCmd)].join(' ')],
-          { cwd, stdio: 'inherit', env: process.env },
+          // Three things are load-bearing here, and each was established by experiment:
+          //   1. every token is quoted, the command included — an absolute path such as
+          //      `C:\Program Files\nodejs\node.exe` contains a space, and so can an argument
+          //      when the repository lives under `C:\Users\John Doe\…`;
+          //   2. the whole line is wrapped in an extra pair of quotes, because `cmd /s` strips
+          //      the FIRST and LAST quote of the string it is given — without the wrapper it
+          //      strips the executable's own quotes and tries to run `C:\Program`;
+          //   3. `windowsVerbatimArguments` stops Node re-escaping those quotes as `\"`.
+          ['/d', '/s', '/c', `"${[command, ...args].map(quoteForCmd).join(' ')}"`],
+          { cwd, stdio: 'inherit', env: process.env, windowsVerbatimArguments: true },
         )
       : spawnSync(command, args, { cwd, stdio: 'inherit', env: process.env })
 

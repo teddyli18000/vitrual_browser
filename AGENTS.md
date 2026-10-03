@@ -216,3 +216,17 @@ Verified on this machine: Node 24.14, pnpm 10.33, `camoufox-js` 0.12.0,
 
 MIT for this repository's own code. Camoufox (MPL-2.0) and camoufox-js (MPL-2.0) are consumed as
 external dependencies and are not modified; their binaries are downloaded at runtime, not vendored.
+
+## Packaging gotchas (learned from the first two release runs)
+
+- **The repository root `package.json` must NOT declare `"type": "module"`.** electron-builder
+  extracts helper tools (e.g. `icons@1.1.0/icon-tool.js`) into `<repo>/.cache/electron-builder/`,
+  which is *inside* the repo, so a root-level `"type": "module"` makes Node parse those CommonJS
+  files as ESM and the packaging step dies with `ReferenceError: require is not defined in ES module
+  scope`. Every script in this repo is `.mjs` (always ESM regardless), so the field buys nothing.
+  Packages and apps keep their own `"type": "module"`.
+- **`electron` must be pinned to an exact version.** electron-builder refuses a range because it
+  downloads platform-specific binaries. With `node-linker=hoisted` there is no
+  `apps/desktop/node_modules/electron` for it to resolve the range from, so it fails with
+  "Cannot compute electron version from installed node modules". `scripts/build-installer.mjs` also
+  resolves the version itself and passes `-c.electronVersion`, as a second line of defence.
