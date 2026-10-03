@@ -34,6 +34,7 @@ import {
   ProfileSchema,
   type ProfileUpdate,
   ProfileUpdateSchema,
+  type WebglPair,
 } from '@vfox/shared'
 import type { CoreLogger } from './index.js'
 
@@ -142,7 +143,7 @@ export class Store {
   }
 
   /**
-   * Set (or clear) the profile's stored device identity and pin extra config keys.
+   * Set (or clear) the profile's stored device identity and pin the values that must not drift.
    *
    * Called once at creation and again when the identity is missing or stale, so it must be
    * idempotent and must never overwrite a config key the user already set.
@@ -150,7 +151,7 @@ export class Store {
   async applyIdentity(
     id: string,
     identity: FingerprintIdentity | null,
-    config: Record<string, unknown> = {},
+    patch: { config?: Record<string, unknown>; webgl?: WebglPair } = {},
   ): Promise<Profile> {
     return this.#enqueue(async () => {
       const current = this.requireProfile(id)
@@ -159,7 +160,9 @@ export class Store {
         identity,
         fingerprint: {
           ...current.fingerprint,
-          config: { ...current.fingerprint.config, ...config },
+          // Only an explicit pair replaces the stored one; `undefined` leaves it alone.
+          ...(patch.webgl === undefined ? {} : { webgl: patch.webgl }),
+          config: { ...current.fingerprint.config, ...patch.config },
         },
         updatedAt: new Date().toISOString(),
       })

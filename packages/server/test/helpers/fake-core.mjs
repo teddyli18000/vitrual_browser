@@ -33,7 +33,7 @@ export function createFakeCore(options) {
 
   const now = () => new Date().toISOString()
 
-  const stoppedRuntime = (profileId) => ({
+  const stoppedRuntime = profileId => ({
     profileId,
     status: 'stopped',
     pid: null,
@@ -42,11 +42,11 @@ export function createFakeCore(options) {
     lastError: null,
   })
 
-  const emit = (runtime) => {
+  const emit = runtime => {
     for (const subscriber of runtimeSubscribers) subscriber(runtime)
   }
 
-  const requireProfile = (id) => {
+  const requireProfile = id => {
     const profile = profilesById.get(id)
     if (!profile) throw new Error(`fake core: unknown profile ${id}`)
     return profile
@@ -67,9 +67,9 @@ export function createFakeCore(options) {
     profiles: {
       list: async () => [...profilesById.values()],
 
-      get: async (id) => profilesById.get(id),
+      get: async id => profilesById.get(id),
 
-      create: async (input) => {
+      create: async input => {
         const id = randomUUID()
         const profile = ProfileSchema.parse({
           id,
@@ -103,7 +103,7 @@ export function createFakeCore(options) {
         return next
       },
 
-      remove: async (id) => {
+      remove: async id => {
         requireProfile(id)
         profilesById.delete(id)
         runtimeById.delete(id)
@@ -121,7 +121,7 @@ export function createFakeCore(options) {
         })
       },
 
-      userDataDir: (id) => path.join(dataDir, 'profiles', id, 'userdata'),
+      userDataDir: id => path.join(dataDir, 'profiles', id, 'userdata'),
 
       exportZip: async (id, destFile) => {
         const profile = requireProfile(id)
@@ -144,7 +144,7 @@ export function createFakeCore(options) {
 
     groups: {
       list: async () => [...groupsById.values()],
-      create: async (name) => {
+      create: async name => {
         const group = { id: randomUUID(), name, createdAt: now() }
         groupsById.set(group.id, group)
         return group
@@ -156,7 +156,7 @@ export function createFakeCore(options) {
         groupsById.set(id, next)
         return next
       },
-      remove: async (id) => {
+      remove: async id => {
         groupsById.delete(id)
       },
     },
@@ -164,9 +164,9 @@ export function createFakeCore(options) {
     runtime: {
       list: () => [...runtimeById.values()],
 
-      get: (id) => runtimeById.get(id) ?? stoppedRuntime(id),
+      get: id => runtimeById.get(id) ?? stoppedRuntime(id),
 
-      launch: async (id) => {
+      launch: async id => {
         const profile = requireProfile(id)
         const runtime = {
           profileId: profile.id,
@@ -181,7 +181,7 @@ export function createFakeCore(options) {
         return runtime
       },
 
-      stop: async (id) => {
+      stop: async id => {
         const runtime = stoppedRuntime(id)
         runtimeById.set(id, runtime)
         emit(runtime)
@@ -200,7 +200,7 @@ export function createFakeCore(options) {
       install: async () => {
         core.installCalls += 1
         if (core.installDelayMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, core.installDelayMs))
+          await new Promise(resolve => setTimeout(resolve, core.installDelayMs))
         }
         for (const progress of core.installProgress) {
           for (const subscriber of kernelSubscribers) subscriber(progress)

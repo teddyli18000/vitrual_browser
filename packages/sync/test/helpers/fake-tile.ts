@@ -10,6 +10,8 @@ export class FakeTileBackend implements TileBackend {
   workAreaRect: Rect = { x: 0, y: 0, width: 1920, height: 1040 }
   /** When false, `place()` reports that no visible window matched the pid. */
   matches = true
+  /** Pids whose window is reported as not found, even while `matches` is true. */
+  readonly unmatched = new Set<number>()
 
   async workArea(displayIndex: number | null): Promise<Rect> {
     this.workAreaCalls.push(displayIndex)
@@ -18,7 +20,7 @@ export class FakeTileBackend implements TileBackend {
 
   async place(pid: number, rect: Rect): Promise<number> {
     this.placed.push({ pid, rect })
-    return this.matches ? 1 : 0
+    return this.matches && !this.unmatched.has(pid) ? 1 : 0
   }
 
   async focus(pid: number): Promise<void> {

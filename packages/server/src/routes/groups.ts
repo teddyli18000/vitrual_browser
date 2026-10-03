@@ -3,8 +3,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 
 import { badRequest, ok } from '../errors.js'
-import { parse } from '../validate.js'
 import type { RouteDeps } from '../types.js'
+import { parse } from '../validate.js'
 
 const GroupNameSchema = z.object({ name: z.string().min(1).max(120) })
 
@@ -33,12 +33,12 @@ export function registerGroupRoutes(app: FastifyInstance, deps: RouteDeps): void
   })
 
   // Rename. `PATCH /groups/:id { name }` keeps the route table's single `group(id)` entry.
-  app.patch(GROUP_ID, async (request) => {
+  app.patch(GROUP_ID, async request => {
     const { name } = parse(GroupNameSchema, request.body)
     return ok(await core.groups.rename(idOf(request), name))
   })
 
-  app.delete(GROUP_ID, async (request) => {
+  app.delete(GROUP_ID, async request => {
     const id = idOf(request)
     await core.groups.remove(id)
     return ok({ id, removed: true })

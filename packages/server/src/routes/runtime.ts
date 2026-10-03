@@ -16,7 +16,7 @@ export function registerRuntimeRoutes(app: FastifyInstance, deps: RouteDeps): vo
 
   app.get(API_ROUTES.runtime, async () => ok(core.runtime.list()))
 
-  app.get(`${API_ROUTES.runtime}/:id`, async (request) => {
+  app.get(`${API_ROUTES.runtime}/:id`, async request => {
     const profile = await findProfile(core, idOf(request))
     return ok(core.runtime.get(profile.id))
   })

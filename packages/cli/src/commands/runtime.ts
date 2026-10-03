@@ -16,7 +16,10 @@ export const startCommand: Command = {
   details:
     '--wait blocks until the runtime reports "running" (it resolves on the core\'s change event, ' +
     'so nothing is polled).',
-  flags: [...GLOBAL_FLAGS, { name: 'wait', kind: 'boolean', description: 'Wait until the profile is running' }],
+  flags: [
+    ...GLOBAL_FLAGS,
+    { name: 'wait', kind: 'boolean', description: 'Wait until the profile is running' },
+  ],
   run: async ({ argv, dataDir }) => {
     const parsed = parseArgs(argv, startCommand.flags)
     const output = createOutput(parsed.has('json'))

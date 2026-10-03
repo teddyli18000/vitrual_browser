@@ -26,6 +26,7 @@ export const useConnectionStore = defineStore('connection', () => {
   const error = ref<string | null>(null)
   const retrying = ref(false)
   const dataDir = ref(bridge.dataDir)
+  const dataMode = ref(bridge.dataMode)
   const version = ref(bridge.version)
   const platform = ref(bridge.platform)
 
@@ -116,6 +117,7 @@ export const useConnectionStore = defineStore('connection', () => {
     error,
     retrying,
     dataDir,
+    dataMode,
     version,
     platform,
     connect,

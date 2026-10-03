@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseProxyUrl, resolveGroup, resolveProfile, CliError } from '../dist/core.js'
+import { CliError, parseProxyUrl, resolveGroup, resolveProfile } from '../dist/core.js'
 
 describe('parseProxyUrl', () => {
   it('parses a socks5 URL with credentials', () => {
@@ -47,12 +47,12 @@ describe('parseProxyUrl', () => {
 function fakeCore(profiles) {
   return {
     profiles: {
-      get: async (id) => profiles.find((profile) => profile.id === id),
+      get: async id => profiles.find(profile => profile.id === id),
       list: async () => profiles,
     },
     groups: {
       list: async () => [],
-      create: async (name) => ({ id: `g-${name}`, name, createdAt: 'now' }),
+      create: async name => ({ id: `g-${name}`, name, createdAt: 'now' }),
     },
   }
 }

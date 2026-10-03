@@ -29,7 +29,7 @@ export function createOutput(json: boolean): Output {
   return {
     json,
     line: (text = '') => out.write(`${text}\n`),
-    note: (text) => err.write(`${text}\n`),
+    note: text => err.write(`${text}\n`),
     result: (value, human) => {
       if (json) out.write(`${JSON.stringify(value, null, 2)}\n`)
       else human()
@@ -39,9 +39,9 @@ export function createOutput(json: boolean): Output {
         out.write('(none)\n')
         return
       }
-      const cells = rows.map((row) => columns.map((column) => sanitize(column.value(row))))
+      const cells = rows.map(row => columns.map(column => sanitize(column.value(row))))
       const widths = columns.map((column, index) =>
-        Math.max(column.header.length, ...cells.map((row) => row[index]?.length ?? 0)),
+        Math.max(column.header.length, ...cells.map(row => row[index]?.length ?? 0)),
       )
       const render = (row: readonly string[]): string =>
         row
@@ -49,8 +49,8 @@ export function createOutput(json: boolean): Output {
           .join('  ')
           .trimEnd()
 
-      out.write(`${render(columns.map((column) => column.header))}\n`)
-      out.write(`${widths.map((width) => '-'.repeat(width)).join('  ')}\n`)
+      out.write(`${render(columns.map(column => column.header))}\n`)
+      out.write(`${widths.map(width => '-'.repeat(width)).join('  ')}\n`)
       for (const row of cells) out.write(`${render(row)}\n`)
     },
   }

@@ -487,4 +487,15 @@ describe('tile', () => {
       'no visible browser window matched',
     )
   })
+
+  it('tiles what it can and warns about the windows it could not find', async () => {
+    const { sync, tile, logger } = harness()
+    tile.unmatched.add(2222)
+
+    await sync.tile({ profileIds: ['master', 'slave-a'], layout: 'grid', displayIndex: null })
+
+    expect(tile.placed.map(entry => entry.pid)).toEqual([1111, 2222])
+    expect(tile.focused).toEqual([1111])
+    expect(logger.warnings.some(warning => warning.includes('tiled 1 of 2 windows'))).toBe(true)
+  })
 })

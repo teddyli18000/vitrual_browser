@@ -19,11 +19,12 @@ const childProcess = require('node:child_process')
 const realExec = childProcess.exec
 const NET_USE = /^net\s+use\s*$/i
 
-childProcess.exec = function sandboxExec(command, options, callback) {
+childProcess.exec = function sandboxExec(...args) {
+  const [command, options, callback] = args
   const cb = typeof options === 'function' ? options : callback
   if (typeof command === 'string' && NET_USE.test(command.trim()) && typeof cb === 'function') {
     queueMicrotask(() => cb(null, '', ''))
     return undefined
   }
-  return realExec.apply(this, arguments)
+  return realExec.apply(this, args)
 }

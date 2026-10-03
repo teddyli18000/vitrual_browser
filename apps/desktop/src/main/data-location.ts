@@ -9,8 +9,8 @@
 
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { app } from 'electron'
 import { ENV } from '@vfox/shared'
+import { app } from 'electron'
 
 export type DataMode = 'portable' | 'installed' | 'custom'
 

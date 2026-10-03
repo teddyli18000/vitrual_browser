@@ -17,14 +17,16 @@
  */
 
 import { mkdirSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { APP_ID, HOMEPAGE, PRODUCT_NAME } from '@vfox/shared'
-import { app, BrowserWindow, ipcMain, Menu, shell, type Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type Tray } from 'electron'
 import { BRIDGE_CHANNEL, type BridgePayload } from '../shared/bridge'
+import { type DataMode, resolveDataLocation } from './data-location.js'
 import { profileUsage } from './profile-usage.js'
 import {
+  configureLogging,
   probeProxy,
-  resolveDataDir,
   startService,
   stopAllProfiles,
   stopService,
@@ -45,6 +47,7 @@ let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let uiState: UiState
 let dataDir = ''
+let dataMode: DataMode = 'installed'
 let quitting = false
 let bridgePayload: BridgePayload = {
   apiBase: '',
@@ -52,6 +55,7 @@ let bridgePayload: BridgePayload = {
   version: '0.0.0',
   platform: process.platform,
   dataDir: '',
+  dataMode: 'installed',
   serviceError: '主进程尚未就绪',
 }
 
@@ -67,14 +71,15 @@ if (!app.requestSingleInstanceLock()) {
 /* ------------------------------------------------------------------------- bootstrap */
 
 async function bootstrap(): Promise<void> {
-  // Must happen before `ready`: in dev and CI the sandbox only allows writes inside the repo,
-  // so VFOX_DATA_DIR moves BOTH Chromium's user data and the profile store there. In a normal
-  // install it is unset and everything lands in %APPDATA%\VFox.
-  const override = resolveDataDir('')
-  if (override) {
-    mkdirSync(override, { recursive: true })
-    app.setPath('userData', override)
-    app.setPath('sessionData', override)
+  // Resolved before `ready`, and in portable/custom mode Chromium's own user data is moved too:
+  // otherwise a "portable" build would still scatter cache and cookies outside its folder.
+  const location = resolveDataLocation()
+  dataDir = location.dir
+  dataMode = location.mode
+  mkdirSync(dataDir, { recursive: true })
+  if (location.mode !== 'installed') {
+    app.setPath('userData', dataDir)
+    app.setPath('sessionData', dataDir)
   }
 
   // Sandbox every renderer, including any future one.
@@ -84,8 +89,8 @@ async function bootstrap(): Promise<void> {
 
   await app.whenReady()
 
-  dataDir = resolveDataDir(app.getPath('userData'))
-  mkdirSync(dataDir, { recursive: true })
+  // Logs live inside the data directory, so they move with a portable folder.
+  configureLogging(join(dataDir, 'logs'))
   uiState = loadUiState(dataDir)
 
   // Point the engine at a stable, app-owned directory BEFORE @vfox/server (and therefore
@@ -102,6 +107,7 @@ async function bootstrap(): Promise<void> {
     version: app.getVersion(),
     platform: process.platform,
     dataDir,
+    dataMode,
     serviceError: service.error,
   }
 
@@ -279,14 +285,12 @@ function registerIpc(): void {
     async (_event, input: { suggestedName: string; base64: string }) => {
       const window = mainWindow
       if (!window) return { saved: false, path: null as string | null }
-      const { dialog } = await import('electron')
       const result = await dialog.showSaveDialog(window, {
         title: '导出环境',
         defaultPath: input.suggestedName,
         filters: [{ name: 'VFox 环境包', extensions: ['zip'] }],
       })
       if (result.canceled || !result.filePath) return { saved: false, path: null as string | null }
-      const { writeFile } = await import('node:fs/promises')
       await writeFile(result.filePath, Buffer.from(input.base64, 'base64'))
       return { saved: true, path: result.filePath }
     },
@@ -295,7 +299,6 @@ function registerIpc(): void {
   ipcMain.handle('vfox:pick-import', async () => {
     const window = mainWindow
     if (!window) return null
-    const { dialog } = await import('electron')
     const result = await dialog.showOpenDialog(window, {
       title: '导入环境',
       properties: ['openFile'],
@@ -303,7 +306,6 @@ function registerIpc(): void {
     })
     const file = result.filePaths[0]
     if (result.canceled || !file) return null
-    const { readFile } = await import('node:fs/promises')
     const bytes = await readFile(file)
     return { name: file.split(/[\\/]/).pop() ?? file, base64: bytes.toString('base64') }
   })

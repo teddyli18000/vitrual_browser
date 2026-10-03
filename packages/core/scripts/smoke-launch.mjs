@@ -1,10 +1,13 @@
 /**
  * VFox engine smoke test — CI-only.
  *
- * Launches TWO real profiles through the real `@vfox/core` API, reads the fingerprint each engine
- * actually presents, and fails unless the two profiles are genuinely different. This is the only
- * test that proves the product does what it claims: a window opens, the engine spoofs, and two
- * profiles are not the same machine.
+ * Launches real profiles through the real `@vfox/core` API, reads the fingerprint each engine
+ * actually presents, and fails unless:
+ *   - two profiles with different fingerprints are genuinely different machines (>= 4 of the 8
+ *     compared dimensions differ), and
+ *   - relaunching the SAME profile presents exactly the same device on every dimension, which is
+ *     what `src/identity.ts` exists to guarantee.
+ * This is the only test that proves the product does what it claims.
  *
  * It cannot run inside the DSH workspace sandbox: the sandbox denies piped stdio, and Playwright
  * must pipe stdio to speak Juggler to the engine (`spawn EPERM`). Run it in CI or any unconfined
@@ -95,7 +98,10 @@ const FINGERPRINT_SCRIPT = () => {
 
   let webglVendor = null
   let webglRenderer = null
-  const gl = canvas.getContext('webgl')
+  // A canvas can only ever have ONE context type: asking this one for 'webgl' after '2d' returns
+  // null, which is why the first CI run reported no WebGL evidence at all.
+  const glCanvas = document.createElement('canvas')
+  const gl = glCanvas.getContext('webgl') ?? glCanvas.getContext('experimental-webgl')
   if (gl) {
     const debugInfo = gl.getExtension('WEBGL_debug_renderer_info')
     if (debugInfo) {
@@ -145,9 +151,35 @@ async function readFingerprint(wsEndpoint) {
   }
 }
 
+/** Launch a profile, read what the engine presents, and stop it again. */
+async function launchAndProbe(core, profile, label) {
+  let runtime
+  try {
+    runtime = await core.runtime.launch(profile.id)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    fail(
+      'launch',
+      `${label}: profile ${profile.id} did not launch: ${reason}`,
+      2,
+      /EPERM/.test(reason)
+        ? 'the shell is sandboxed and cannot pipe stdio, which the engine requires'
+        : 'check the engine install and the profile fingerprint',
+    )
+  }
+  if (runtime.status !== 'running' || !runtime.wsEndpoint) {
+    fail('launch', `${label}: reported ${runtime.status} without a wsEndpoint`, 2)
+  }
+  log(`  ${label}: pid ${runtime.pid}, wsEndpoint ${runtime.wsEndpoint}`)
+
+  const values = await readFingerprint(runtime.wsEndpoint)
+  const stopped = await core.runtime.stop(profile.id)
+  log(`  ${label}: stopped (${stopped.status})`)
+  return values
+}
+
 /** PIDs of engine processes still holding this run's data directory. `null` if unavailable. */
-function orphanPids(dataDir) {
-  if (process.platform !== 'win32') {
+function orphanPids(dataDir) {  if (process.platform !== 'win32') {
     return null
   }
   const command = [
@@ -228,33 +260,44 @@ try {
   log(`engine: ${kernel.version} at ${kernel.path}`)
 
   const results = []
+  const stability = []
   for (const [index, entry] of PROFILE_INPUTS.entries()) {
     const profile = await core.profiles.create(entry.input)
-    log(`launching ${entry.label} (${profile.id})`)
-
-    let runtime
-    try {
-      runtime = await core.runtime.launch(profile.id)
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
+    log(`profile ${index + 1} ${entry.label} (${profile.id})`)
+    if (!profile.identity) {
       fail(
-        'launch',
-        `${entry.label} did not launch: ${reason}`,
-        2,
-        /EPERM/.test(reason)
-          ? 'the shell is sandboxed and cannot pipe stdio, which the engine requires'
-          : 'check the engine install and the profile fingerprint',
+        'fingerprint',
+        `profile ${profile.id} was created without a device identity`,
+        1,
+        'createCore must generate and store the identity at creation time',
       )
     }
-    if (runtime.status !== 'running' || !runtime.wsEndpoint) {
-      fail('launch', `${entry.label} reported ${runtime.status} without a wsEndpoint`, 2)
-    }
-    log(`  pid ${runtime.pid}, wsEndpoint ${runtime.wsEndpoint}`)
 
-    const values = await readFingerprint(runtime.wsEndpoint)
-    const evidence = { index: index + 1, os: entry.input.fingerprint.os, ...values }
+    const first = await launchAndProbe(core, profile, 'launch')
+    const evidence = { index: index + 1, os: entry.input.fingerprint.os, ...first }
     results.push(evidence)
     emit('VFOX_SMOKE_PROFILE', evidence)
+
+    // The product's central promise: relaunching a profile must present the SAME device. Only the
+    // first profile is relaunched, to keep the CI job short.
+    if (index === 0) {
+      const again = await launchAndProbe(core, profile, 'relaunch')
+      const differing = DIMENSIONS.filter(
+        dimension => dimensionValue(first, dimension) !== dimensionValue(again, dimension),
+      )
+      const stable = differing.length === 0
+      stability.push({ profileId: profile.id, identical: stable, differing })
+      emit('VFOX_SMOKE_RELAUNCH', { profileId: profile.id, identical: stable, differing, values: again })
+      if (!stable) {
+        fail(
+          'fingerprint',
+          `relaunching profile ${profile.id} presented a different device: ${differing.join(', ')} differ`,
+          1,
+          'the stored identity is not being re-injected; a profile must be the same device every launch',
+        )
+      }
+      log(`relaunch stability: identical on all ${DIMENSIONS.length} dimensions`)
+    }
   }
 
   for (const profile of await core.profiles.list()) {
@@ -307,6 +350,7 @@ try {
     distinct,
     distinctCount: distinct.length,
     requiredDistinct: REQUIRED_DISTINCT,
+    stability,
   })
   log('smoke test passed')
 } catch (error) {

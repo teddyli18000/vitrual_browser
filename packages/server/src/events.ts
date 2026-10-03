@@ -61,12 +61,12 @@ export class EventHub {
     if (this.#started) return
     this.#started = true
 
-    this.#unsubscribeRuntime = this.#core.runtime.on('change', (runtime) => {
+    this.#unsubscribeRuntime = this.#core.runtime.on('change', runtime => {
       this.#broadcast(SSE_EVENT_RUNTIME, runtime)
     })
 
     if (this.kernelProgressFromCore) {
-      this.#unsubscribeKernel = this.#core.kernel.on('progress', (progress) => {
+      this.#unsubscribeKernel = this.#core.kernel.on('progress', progress => {
         this.publishKernel(progress)
       })
     } else {

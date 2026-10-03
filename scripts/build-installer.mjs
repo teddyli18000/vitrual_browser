@@ -39,6 +39,7 @@ import {
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { addPortableMarkers } from './portable-zip.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const outDir = path.join(repoRoot, 'release')
@@ -194,6 +195,17 @@ function publish(candidates, preferred, target) {
 
 const installer = publish(installers, /setup|install/i, `VFox-Setup-${version}.exe`)
 const portable = publish(zips, /portable|win/i, `VFox-${version}-portable.zip`)
+
+// The portable zip must be self-contained: the runtime switches to `<exe dir>/data` when it
+// finds a `portable` marker or a `data/` directory next to the executable. electron-builder
+// cannot put them there for the zip alone (its `extraFiles` would also land inside the NSIS
+// install and silently move the *installed* build into portable mode), so the finished
+// archive is amended in place. This happens before the checksums are computed.
+const addedMarkers = addPortableMarkers(path.join(outDir, portable))
+console.error(
+  `[build-installer] portable markers ${addedMarkers.length > 0 ? `added: ${addedMarkers.join(', ')}` : 'already present'}`,
+)
+
 const published = [installer, portable]
 
 // -------------------------------------------------------- 4. checksums + printed inventory

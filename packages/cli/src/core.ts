@@ -43,12 +43,14 @@ export async function resolveProfile(core: Core, idOrName: string): Promise<Prof
 
   const wanted = idOrName.trim().toLowerCase()
   const matches = (await core.profiles.list()).filter(
-    (profile) => profile.name.toLowerCase() === wanted,
+    profile => profile.name.toLowerCase() === wanted,
   )
   const first = matches[0]
   if (matches.length === 1 && first) return first
   if (matches.length > 1) {
-    throw new CliError(`Profile name "${idOrName}" is ambiguous (${matches.length} matches) — use the id`)
+    throw new CliError(
+      `Profile name "${idOrName}" is ambiguous (${matches.length} matches) — use the id`,
+    )
   }
   throw new CliError(`Unknown profile: ${idOrName}`)
 }
@@ -65,8 +67,8 @@ export async function resolveGroup(
   const groups = await core.groups.list()
   const wanted = idOrName.trim().toLowerCase()
   const found =
-    groups.find((group) => group.id === idOrName) ??
-    groups.find((group) => group.name.toLowerCase() === wanted)
+    groups.find(group => group.id === idOrName) ??
+    groups.find(group => group.name.toLowerCase() === wanted)
   if (found) return found
   if (!options.create) throw new CliError(`Unknown group: ${idOrName}`)
   return core.groups.create(idOrName.trim())
@@ -80,7 +82,9 @@ export function parseProxyUrl(raw: string): ProxyConfig {
   try {
     parsed = new URL(raw)
   } catch {
-    throw new UsageError(`--proxy must be a URL, e.g. socks5://user:pass@127.0.0.1:1080 (got "${raw}")`)
+    throw new UsageError(
+      `--proxy must be a URL, e.g. socks5://user:pass@127.0.0.1:1080 (got "${raw}")`,
+    )
   }
 
   const type = parsed.protocol.replace(/:$/, '').toLowerCase()
@@ -104,17 +108,15 @@ export function parseProxyUrl(raw: string): ProxyConfig {
   }
   const result = ProxySchema.safeParse(candidate)
   if (!result.success) {
-    throw new UsageError(`Invalid proxy URL "${raw}": ${result.error.issues[0]?.message ?? 'unknown error'}`)
+    throw new UsageError(
+      `Invalid proxy URL "${raw}": ${result.error.issues[0]?.message ?? 'unknown error'}`,
+    )
   }
   return result.data
 }
 
 /** Waits for a runtime transition without polling: it resolves on the core's `change` event. */
-export function waitForRunning(
-  core: Core,
-  profileId: string,
-  timeoutMs = 60_000,
-): Promise<void> {
+export function waitForRunning(core: Core, profileId: string, timeoutMs = 60_000): Promise<void> {
   return new Promise((resolve, reject) => {
     const finish = (): void => {
       clearTimeout(timer)
@@ -126,7 +128,7 @@ export function waitForRunning(
     }, timeoutMs)
     timer.unref?.()
 
-    const unsubscribe = core.runtime.on('change', (runtime) => {
+    const unsubscribe = core.runtime.on('change', runtime => {
       if (runtime.profileId !== profileId) return
       if (runtime.status === 'running') {
         finish()

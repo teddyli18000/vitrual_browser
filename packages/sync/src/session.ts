@@ -194,6 +194,11 @@ class SyncEngine implements SyncHandle {
         'tiling_unavailable',
       )
     }
+    if (moved < entries.length) {
+      this.#logger.warn(
+        `sync: tiled ${moved} of ${entries.length} windows — the rest have no visible window yet`,
+      )
+    }
     const first = entries[0]
     if (first) {
       await this.#deps.tile.focus(first.pid)

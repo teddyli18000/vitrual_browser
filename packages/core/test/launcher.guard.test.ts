@@ -12,8 +12,9 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { ProfileSchema } from '@vfox/shared'
+import { FingerprintSchema, ProfileSchema } from '@vfox/shared'
 import { describe, expect, it } from 'vitest'
+import { createIdentity } from '../src/identity.js'
 import { KernelManager } from '../src/kernel.js'
 import { toServerOptions } from '../src/launcher.js'
 
@@ -128,4 +129,87 @@ describe('assembled server options', () => {
     expect(env.CAMOU_CONFIG_1).toContain('navigator.hardwareConcurrency')
     expect(options.firefoxUserPrefs).toBeTypeOf('object')
   })
+
+  /**
+   * The product's central promise: a profile is the SAME device every time it is opened. This is
+   * the strongest assertion available without a browser — the engine is handed the stored identity
+   * and must turn it into the same CAMOU_CONFIG bytes on every launch.
+   */
+  it('re-injects the stored identity byte-for-byte on every launch', async ctx => {
+    const kernel = new KernelManager({ logger: noopLogger })
+    if (!(await kernel.info()).installed) {
+      ctx.skip()
+      return
+    }
+
+    const generated = await createIdentity(FingerprintSchema.parse({ os: 'windows', geoip: false }), 'test')
+    const profile = ProfileSchema.parse({
+      id: 'stable',
+      name: 'Stable',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      fingerprint: { geoip: false, config: generated.config },
+      identity: generated.identity,
+    })
+
+    const first = camouConfig(await toServerOptions(profile, 'C:\\profiles\\stable\\userdata', () => {}))
+    const second = camouConfig(
+      await toServerOptions(profile, 'C:\\profiles\\stable\\userdata', () => {}),
+    )
+
+    // Identical bytes, not merely equivalent values: this is what the engine actually reads.
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+    // And it is the identity we stored — with the UA version rewritten to the installed engine's
+    // major version by `fromBrowserforge(fingerprint, ffVersion)`, deterministically.
+    const storedUa = (generated.identity.fingerprint.navigator as { userAgent: string }).userAgent
+    expect(String(first['navigator.userAgent'])).toMatch(/Firefox\/\d+\.0/)
+    expect(String(first['navigator.userAgent']).split('rv:')[1]).toBe(storedUa.split('rv:')[1])
+    // The per-launch keys are pinned, so the canvas, audio and window position cannot drift either.
+    expect(first['canvas:seed']).toBe(generated.config['canvas:seed'])
+    expect(first['audio:seed']).toBe(generated.config['audio:seed'])
+    expect(first['window.history.length']).toBe(generated.config['window.history.length'])
+    expect(first['window.screenY']).toBe(generated.config['window.screenY'])
+    expect(first['webGl:vendor']).toBe(generated.webgl?.vendor)
+    expect(first['webGl:renderer']).toBe(generated.webgl?.renderer)
+  })
+
+  it('would notice a device that changes between launches', async ctx => {
+    const kernel = new KernelManager({ logger: noopLogger })
+    if (!(await kernel.info()).installed) {
+      ctx.skip()
+      return
+    }
+
+    const base = ProfileSchema.parse({
+      id: 'unstable',
+      name: 'Unstable',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      fingerprint: { geoip: false },
+      identity: null,
+    })
+
+    // Without a stored identity the engine rolls a new device, which is exactly the bug this
+    // feature exists to prevent — so the two configs must not be identical.
+    const first = JSON.stringify(
+      camouConfig(await toServerOptions(base, 'C:\\profiles\\unstable\\userdata', () => {})),
+    )
+    const second = JSON.stringify(
+      camouConfig(await toServerOptions(base, 'C:\\profiles\\unstable\\userdata', () => {})),
+    )
+
+    expect(second).not.toBe(first)
+  })
 })
+
+/** Reassemble camoufox-js's chunked CAMOU_CONFIG_<n> environment variables. */
+function camouConfig(options: Record<string, unknown>): Record<string, unknown> {
+  const env = options.env as Record<string, string>
+  const joined = Object.entries(env)
+    .filter(([key]) => key.startsWith('CAMOU_CONFIG_'))
+    .map(([key, value]) => [Number(key.split('_').pop()), value] as const)
+    .sort((a, b) => a[0] - b[0])
+    .map(([, value]) => value)
+    .join('')
+  return JSON.parse(joined) as Record<string, unknown>
+}

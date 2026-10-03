@@ -13,7 +13,8 @@ export const mcpCommand: Command = {
     'stderr. The same seven tools are available over Streamable HTTP at /mcp from `vfox serve`.',
   flags: GLOBAL_FLAGS,
   run: async ({ argv, dataDir }) => {
-    const parsed = parseArgs(argv, GLOBAL_FLAGS)
+    // Parsed for validation only: an unknown flag must fail rather than be ignored.
+    parseArgs(argv, GLOBAL_FLAGS)
     const core = await openCore(dataDir)
     const { serveMcpStdio } = await import('@vfox/server')
     try {

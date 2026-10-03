@@ -10,7 +10,7 @@
 import { main } from './main.js'
 
 main(process.argv.slice(2)).then(
-  (code) => {
+  code => {
     process.exitCode = code
   },
   (error: unknown) => {

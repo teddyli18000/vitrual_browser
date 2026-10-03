@@ -7,26 +7,19 @@
  */
 
 import type { Core, CoreLogger } from '@vfox/core'
-import {
-  API_PREFIX,
-  API_TOKEN_HEADER,
-  ENV,
-  DEFAULT_API_HOST,
-  DEFAULT_API_PORT,
-} from '@vfox/shared'
-import Fastify from 'fastify'
+import { API_PREFIX, API_TOKEN_HEADER, DEFAULT_API_HOST, DEFAULT_API_PORT, ENV } from '@vfox/shared'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-
-import { EventHub } from './events.js'
-import { HttpError, fail, unauthorized } from './errors.js'
+import Fastify from 'fastify'
 import { answerPreflight, applyCors, isAllowedHost } from './cors.js'
+import { fail, HttpError, unauthorized } from './errors.js'
+import { EventHub } from './events.js'
 import { createRotatingLogger, logFilePath } from './file-logger.js'
-import { ZIP_CONTENT_TYPES, assertWriteContentType, pathOf } from './guards.js'
+import { assertWriteContentType, pathOf, ZIP_CONTENT_TYPES } from './guards.js'
 import { createFanoutLogger, silentLogger } from './logger.js'
 import { MCP_PATH, registerMcpRoute } from './mcp.js'
 import { apiTokenPath, resolveDataDir } from './paths.js'
 import { registerRoutes } from './routes/index.js'
-import { tokenMatches, resolveToken } from './token.js'
+import { resolveToken, tokenMatches } from './token.js'
 import type { AppContext, ServerHandle, ServerOptions } from './types.js'
 
 /** Route-level cap for `POST /profiles/import`; the global cap stays at Fastify's 1 MiB default. */
@@ -70,7 +63,7 @@ export async function createApp(options: CreateAppOptions): Promise<AppContext> 
   })
 
   // 3. Token check for everything that is not a preflight.
-  app.addHook('onRequest', async (request) => {
+  app.addHook('onRequest', async request => {
     if (!isProtected(request)) return
     if (!tokenMatches(providedToken(request), token)) throw unauthorized()
   })
@@ -78,7 +71,7 @@ export async function createApp(options: CreateAppOptions): Promise<AppContext> 
   // 4. Body content type. A cross-site HTML form can only send the three CORS-safelisted content
   //    types, so requiring JSON on body-carrying writes makes that whole attack class fail here,
   //    before any handler or the core sees it.
-  app.addHook('onRequest', async (request) => {
+  app.addHook('onRequest', async request => {
     if (!isProtected(request)) return
     assertWriteContentType(request)
   })
@@ -119,9 +112,7 @@ export async function createApp(options: CreateAppOptions): Promise<AppContext> 
         error,
       )
     }
-    reply
-      .code(statusCode)
-      .send(fail({ code: errorCode(statusCode), message: errorMessage(error) }))
+    reply.code(statusCode).send(fail({ code: errorCode(statusCode), message: errorMessage(error) }))
   })
 
   app.setNotFoundHandler((request, reply) => {
@@ -160,7 +151,10 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   const host = options.host ?? process.env[ENV.apiHost] ?? DEFAULT_API_HOST
   // The rotating file log is always on: the desktop app's "copy diagnostics" action reads it. The
   // caller's own logger, if any, is fanned out alongside it.
-  const logger = createFanoutLogger(createRotatingLogger({ dataDir }), options.logger ?? silentLogger)
+  const logger = createFanoutLogger(
+    createRotatingLogger({ dataDir }),
+    options.logger ?? silentLogger,
+  )
   const { token, generated, source } = await resolveToken({ dataDir, token: options.token })
   const core = options.core ?? (await loadCore(dataDir, logger))
 

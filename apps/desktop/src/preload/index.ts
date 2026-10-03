@@ -20,6 +20,7 @@ const FALLBACK: BridgePayload = {
   version: '0.0.0',
   platform: process.platform,
   dataDir: '',
+  dataMode: 'installed',
   serviceError: '主进程未能传递连接信息',
 }
 

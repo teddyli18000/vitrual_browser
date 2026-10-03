@@ -6,17 +6,17 @@
  * telemetry and no update check.
  */
 
-import { UsageError, parseArgs, renderFlags } from './args.js'
+import { parseArgs, renderFlags, UsageError } from './args.js'
 import type { Command } from './command.js'
 import { GLOBAL_FLAGS } from './command.js'
-import { CliError } from './core.js'
-import { packageVersion } from './version.js'
 import { kernelCommand } from './commands/kernel.js'
 import { mcpCommand } from './commands/mcp.js'
 import { cloneCommand, createCommand, listCommand, rmCommand } from './commands/profiles.js'
 import { openCommand, startCommand, stopCommand } from './commands/runtime.js'
 import { serveCommand } from './commands/serve.js'
 import { exportCommand, importCommand } from './commands/transfer.js'
+import { CliError } from './core.js'
+import { packageVersion } from './version.js'
 
 export const COMMANDS: readonly Command[] = [
   serveCommand,
@@ -38,13 +38,13 @@ export const EXIT_FAILURE = 1
 export const EXIT_USAGE = 2
 
 export function renderHelp(): string {
-  const width = Math.max(...COMMANDS.map((command) => command.usage.length))
+  const width = Math.max(...COMMANDS.map(command => command.usage.length))
   return [
     `vfox ${packageVersion()} — anti-detect browser manager (Camoufox engine)`,
     '',
     'Usage: vfox <command> [options]',
     '',
-    ...COMMANDS.map((command) => `  ${command.usage.padEnd(width)}  ${command.summary}`),
+    ...COMMANDS.map(command => `  ${command.usage.padEnd(width)}  ${command.summary}`),
     '',
     'Global options:',
     renderFlags(GLOBAL_FLAGS),
@@ -75,7 +75,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     return EXIT_OK
   }
 
-  const command = COMMANDS.find((candidate) => candidate.name === name)
+  const command = COMMANDS.find(candidate => candidate.name === name)
   if (!command) {
     process.stderr.write(`Unknown command: ${name}\n\n${renderHelp()}\n`)
     return EXIT_USAGE

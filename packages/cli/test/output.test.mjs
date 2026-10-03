@@ -6,7 +6,7 @@ let written
 
 beforeEach(() => {
   written = []
-  vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+  vi.spyOn(process.stdout, 'write').mockImplementation(chunk => {
     written.push(String(chunk))
     return true
   })
@@ -27,8 +27,8 @@ describe('createOutput', () => {
         { id: 'p2', name: 'A much longer name' },
       ],
       [
-        { header: 'ID', value: (row) => row.id },
-        { header: 'NAME', value: (row) => row.name },
+        { header: 'ID', value: row => row.id },
+        { header: 'NAME', value: row => row.name },
       ],
     )
 
@@ -41,16 +41,25 @@ describe('createOutput', () => {
 
   it('renders missing values as a dash and flattens whitespace', () => {
     const output = createOutput(false)
-    output.table([{ id: 'p1', name: null, note: 'two\nlines' }], [
-      { header: 'ID', value: (row) => row.id },
-      { header: 'NAME', value: (row) => row.name },
-      { header: 'NOTE', value: (row) => row.note },
-    ])
-    expect(text()).toContain('p1  -  two lines')
+    output.table(
+      [{ id: 'p1', name: null, note: 'two\nlines' }],
+      [
+        { header: 'ID', value: row => row.id },
+        { header: 'NAME', value: row => row.name },
+        { header: 'NOTE', value: row => row.note },
+      ],
+    )
+    // Cells are padded to the column width, so compare the trimmed cells rather than the raw line.
+    const cells = text()
+      .trimEnd()
+      .split('\n')[2]
+      .trim()
+      .split(/\s{2,}/)
+    expect(cells).toEqual(['p1', '-', 'two lines'])
   })
 
   it('says (none) for an empty table', () => {
-    createOutput(false).table([], [{ header: 'ID', value: (row) => row.id }])
+    createOutput(false).table([], [{ header: 'ID', value: row => row.id }])
     expect(text()).toBe('(none)\n')
   })
 

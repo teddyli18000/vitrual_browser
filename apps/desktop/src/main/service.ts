@@ -11,7 +11,6 @@
 
 import { createConnection } from 'node:net'
 import type { ServerHandle } from '@vfox/server'
-import { createFileLogger, type Logger } from './log-file.js'
 import {
   API_ROUTES,
   API_TOKEN_HEADER,
@@ -21,6 +20,7 @@ import {
   ENV,
   type ProfileRuntime,
 } from '@vfox/shared'
+import { createFileLogger, type Logger } from './log-file.js'
 
 export interface ServiceState {
   /** true when the embedded HTTP API is listening. */

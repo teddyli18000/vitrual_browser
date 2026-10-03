@@ -5,8 +5,8 @@
  * a stderr-only logger here for exactly that reason.
  */
 
-import type { Core } from '@vfox/core'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import type { Core } from '@vfox/core'
 
 import { createMcpServer } from './mcp.js'
 
@@ -16,7 +16,7 @@ export async function serveMcpStdio(core: Core): Promise<void> {
   const transport = new StdioServerTransport()
   await server.connect(transport)
 
-  await new Promise<void>((resolve) => {
+  await new Promise<void>(resolve => {
     const done = (): void => resolve()
     process.stdin.once('end', done)
     process.stdin.once('close', done)

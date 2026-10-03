@@ -43,5 +43,5 @@ export async function createHarness() {
 }
 
 export function tick(ms = 10) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  return new Promise(resolve => setTimeout(resolve, ms))
 }

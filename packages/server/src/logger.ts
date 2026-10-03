@@ -34,7 +34,7 @@ export function consoleLogger(prefix = '[vfox]'): CoreLogger {
 
 /** Fans one message out to several loggers (e.g. the rotating file plus the caller's console). */
 export function createFanoutLogger(...loggers: readonly CoreLogger[]): CoreLogger {
-  const active = loggers.filter((logger) => logger !== silentLogger)
+  const active = loggers.filter(logger => logger !== silentLogger)
   if (active.length === 0) return silentLogger
   if (active.length === 1) return active[0] as CoreLogger
   const each = (method: keyof CoreLogger, message: string, args: unknown[]): void => {

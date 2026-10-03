@@ -151,7 +151,13 @@ describe('Host allowlist (DNS rebinding)', () => {
   })
 
   it('accepts loopback hosts, with and without a port, and the IPv6 form', async () => {
-    for (const host of ['127.0.0.1', '127.0.0.1:9000', 'localhost', 'localhost:9000', '[::1]:9000']) {
+    for (const host of [
+      '127.0.0.1',
+      '127.0.0.1:9000',
+      'localhost',
+      'localhost:9000',
+      '[::1]:9000',
+    ]) {
       const res = await h.app.inject({
         method: 'GET',
         url: API_ROUTES.profiles,

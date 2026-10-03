@@ -11,10 +11,10 @@
  * `app.ts`. A wrong token never reaches this module.
  */
 
-import type { Core, CoreLogger } from '@vfox/core'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import type { Core, CoreLogger } from '@vfox/core'
 import type { Profile } from '@vfox/shared'
 import { OsTargetSchema, ProxySchema } from '@vfox/shared'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -60,7 +60,7 @@ export function createMcpServer(core: Core): McpServer {
     async () =>
       guard(async () => {
         const profiles = await core.profiles.list()
-        return profiles.map((profile) => ({
+        return profiles.map(profile => ({
           profile,
           runtime: core.runtime.get(profile.id),
         }))
@@ -134,7 +134,7 @@ export function createMcpServer(core: Core): McpServer {
     {
       title: 'Get runtime status',
       description:
-        'Read one profile\'s runtime record. `wsEndpoint`, when present, is a Playwright ' +
+        "Read one profile's runtime record. `wsEndpoint`, when present, is a Playwright " +
         '(Juggler) endpoint: attach with `firefox.connect(wsEndpoint)` from playwright-core. The ' +
         'Camoufox engine has no CDP port, so there is no `debuggingPort`.',
       inputSchema: { id: IdSchema },

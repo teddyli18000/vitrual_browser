@@ -49,15 +49,15 @@ export function registerProfileRoutes(app: FastifyInstance, deps: RouteDeps): vo
     return ok(profile)
   })
 
-  app.get(PROFILE_ID, async (request) => ok(await findProfile(core, idOf(request))))
+  app.get(PROFILE_ID, async request => ok(await findProfile(core, idOf(request))))
 
-  app.patch(PROFILE_ID, async (request) => {
+  app.patch(PROFILE_ID, async request => {
     const profile = await findProfile(core, idOf(request))
     const patch = parse(ProfileUpdateSchema, request.body)
     return ok(await core.profiles.update(profile.id, patch))
   })
 
-  app.delete(PROFILE_ID, async (request) => {
+  app.delete(PROFILE_ID, async request => {
     const profile = await findProfile(core, idOf(request))
     const runtime = core.runtime.get(profile.id)
     if (runtime.status === 'running' || runtime.status === 'starting') {
@@ -75,12 +75,12 @@ export function registerProfileRoutes(app: FastifyInstance, deps: RouteDeps): vo
     return ok(clone)
   })
 
-  app.post(`${PROFILE_ID}/launch`, async (request) => {
+  app.post(`${PROFILE_ID}/launch`, async request => {
     const profile = await findProfile(core, idOf(request))
     return ok(await launch(core, profile))
   })
 
-  app.post(`${PROFILE_ID}/stop`, async (request) => {
+  app.post(`${PROFILE_ID}/stop`, async request => {
     const profile = await findProfile(core, idOf(request))
     const current = core.runtime.get(profile.id)
     // Stopping an already stopped profile is a no-op, not an error.
@@ -118,9 +118,7 @@ export function registerProfileRoutes(app: FastifyInstance, deps: RouteDeps): vo
   app.post(API_ROUTES.importProfile, { bodyLimit: MAX_IMPORT_BYTES }, async (request, reply) => {
     const body = request.body
     if (!Buffer.isBuffer(body) || body.byteLength === 0) {
-      throw badRequest(
-        'Expected raw zip bytes in the request body (Content-Type: application/zip)',
-      )
+      throw badRequest('Expected raw zip bytes in the request body (Content-Type: application/zip)')
     }
     const { name } = request.query as { name?: string }
     const file = await stagingPath(core, 'import', '.zip')

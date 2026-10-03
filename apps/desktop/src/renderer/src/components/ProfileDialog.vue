@@ -406,6 +406,11 @@ function close(): void {
   color: var(--vfox-muted);
 }
 
+/* Used for fields the engine cannot honour at all, so they read as a warning, not a hint. */
+.hint.warn {
+  color: #b45309;
+}
+
 .quad {
   display: grid;
   grid-template-columns: 1fr 1fr;

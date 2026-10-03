@@ -244,6 +244,12 @@ export const en: Messages = {
   'settings.dataDir': 'Data directory',
   'settings.dataDirHint':
     'Every profile, its config and its browser data live here. Back it up or move it freely.',
+  'settings.dataMode': 'Storage mode',
+  'settings.mode.portable': 'Portable (data inside the program folder)',
+  'settings.mode.installed': 'Installed (data in %APPDATA%\\VFox)',
+  'settings.mode.custom': 'Custom (set by the VFOX_DATA_DIR environment variable)',
+  'settings.dataDirPortableHint':
+    'The whole folder can be copied to another machine or drive: profiles, fingerprints and the engine all travel with it.',
   'settings.open': 'Open directory',
   'settings.api': 'API service',
   'settings.apiHint':
@@ -284,6 +290,8 @@ export const en: Messages = {
     'Playwright (playwright-core) — browser automation protocol client (Apache-2.0)',
   'about.noTelemetry':
     'This software has no telemetry of any kind: no usage reporting, no crash reports, no update checks.',
+  'about.portable':
+    'The portable build can be moved wholesale: copy the whole folder to another machine or drive and the profiles, fingerprints and engine come with it.',
   'about.freeForever':
     'Fully open source and fully free: no paid tier, no Pro subscription, no account, no licence key, no online activation check. Every feature ships to everyone, permanently.',
   'about.outbound':

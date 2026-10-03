@@ -12,6 +12,21 @@ const kernel = useKernelStore()
 
 const showToken = ref(false)
 
+const DATA_MODE_LABEL = {
+  portable: 'settings.mode.portable',
+  installed: 'settings.mode.installed',
+  custom: 'settings.mode.custom',
+} as const
+
+const dataModeLabel = computed(() => t(DATA_MODE_LABEL[connection.dataMode]))
+const dataModeTagType = computed(() =>
+  connection.dataMode === 'portable'
+    ? 'success'
+    : connection.dataMode === 'custom'
+      ? 'warning'
+      : 'info',
+)
+
 const port = computed(() => {
   try {
     return new URL(connection.base).port || '—'
@@ -87,7 +102,16 @@ onMounted(() => {
         </div>
         <ElButton @click="openDataDir">{{ t('settings.open') }}</ElButton>
       </div>
+      <div class="kv">
+        <span class="k">{{ t('settings.dataMode') }}</span>
+        <span class="v">
+          <ElTag :type="dataModeTagType" size="small" effect="plain">{{ dataModeLabel }}</ElTag>
+        </span>
+      </div>
       <div class="mono vfox-mono">{{ connection.dataDir || '—' }}</div>
+      <div v-if="connection.dataMode === 'portable'" class="hint">
+        {{ t('settings.dataDirPortableHint') }}
+      </div>
     </div>
 
     <div class="card">

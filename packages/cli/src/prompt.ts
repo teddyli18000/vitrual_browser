@@ -11,7 +11,9 @@ import { CliError } from './core.js'
  */
 export async function confirm(question: string): Promise<boolean> {
   if (process.stdin.isTTY !== true) {
-    throw new CliError('Refusing to continue without confirmation: stdin is not a terminal. Re-run with --yes.')
+    throw new CliError(
+      'Refusing to continue without confirmation: stdin is not a terminal. Re-run with --yes.',
+    )
   }
   const rl = createInterface({ input: process.stdin, output: process.stderr })
   try {

@@ -19,11 +19,11 @@ function parseFrames(raw) {
   for (const block of raw.split('\n\n')) {
     const event = block
       .split('\n')
-      .find((line) => line.startsWith('event: '))
+      .find(line => line.startsWith('event: '))
       ?.slice('event: '.length)
     const data = block
       .split('\n')
-      .find((line) => line.startsWith('data: '))
+      .find(line => line.startsWith('data: '))
       ?.slice('data: '.length)
     if (event && data !== undefined) frames.push({ event, data: JSON.parse(data) })
   }
@@ -41,7 +41,7 @@ async function openStream() {
   })
   const chunks = []
   const stream = res.stream()
-  stream.on('data', (chunk) => chunks.push(chunk.toString('utf8')))
+  stream.on('data', chunk => chunks.push(chunk.toString('utf8')))
   const text = () => chunks.join('')
   return {
     statusCode: res.statusCode,
@@ -102,7 +102,7 @@ describe('GET /api/v1/events', () => {
     })
     await tick()
 
-    const frames = stream.frames().filter((frame) => frame.event === SSE_EVENT_RUNTIME)
+    const frames = stream.frames().filter(frame => frame.event === SSE_EVENT_RUNTIME)
     expect(frames).toHaveLength(2)
     expect(frames[1].data).toMatchObject({
       profileId: profile.id,
@@ -128,8 +128,8 @@ describe('GET /api/v1/events', () => {
     expect(res.statusCode).toBe(202)
     await tick()
 
-    const kernel = stream.frames().filter((frame) => frame.event === SSE_EVENT_KERNEL)
-    expect(kernel.map((frame) => frame.data.phase)).toEqual(['checking', 'downloading'])
+    const kernel = stream.frames().filter(frame => frame.event === SSE_EVENT_KERNEL)
+    expect(kernel.map(frame => frame.data.phase)).toEqual(['checking', 'downloading'])
     expect(kernel[1].data).toMatchObject({ percent: 42, totalBytes: 100 })
     stream.close()
   })
@@ -143,7 +143,7 @@ describe('GET /api/v1/events', () => {
 
     const stream = await openStream()
     await tick()
-    const kernel = stream.frames().filter((frame) => frame.event === SSE_EVENT_KERNEL)
+    const kernel = stream.frames().filter(frame => frame.event === SSE_EVENT_KERNEL)
     expect(kernel).toHaveLength(1)
     expect(kernel[0].data).toMatchObject({ phase: 'extracting' })
     stream.close()
@@ -159,7 +159,7 @@ describe('GET /api/v1/events', () => {
     await tick()
 
     for (const stream of [first, second]) {
-      const frames = stream.frames().filter((frame) => frame.event === SSE_EVENT_RUNTIME)
+      const frames = stream.frames().filter(frame => frame.event === SSE_EVENT_RUNTIME)
       expect(frames.at(-1).data).toMatchObject({ status: 'starting' })
       stream.close()
     }
@@ -179,6 +179,6 @@ describe('GET /api/v1/events', () => {
 
     h.core.setRuntime(profile.id, { status: 'running' })
     await tick()
-    expect(stream.frames().filter((frame) => frame.event === SSE_EVENT_RUNTIME)).toHaveLength(1)
+    expect(stream.frames().filter(frame => frame.event === SSE_EVENT_RUNTIME)).toHaveLength(1)
   })
 })

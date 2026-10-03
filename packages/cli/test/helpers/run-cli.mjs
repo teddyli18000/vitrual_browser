@@ -13,11 +13,11 @@ export async function runCli(argv) {
   const originalOut = process.stdout.write
   const originalErr = process.stderr.write
 
-  process.stdout.write = (chunk) => {
+  process.stdout.write = chunk => {
     out.push(String(chunk))
     return true
   }
-  process.stderr.write = (chunk) => {
+  process.stderr.write = chunk => {
     err.push(String(chunk))
     return true
   }

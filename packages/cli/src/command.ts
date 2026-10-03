@@ -1,5 +1,5 @@
-import { HELP_FLAG } from './args.js'
 import type { FlagDef } from './args.js'
+import { HELP_FLAG } from './args.js'
 
 /** Flags every command accepts. */
 export const GLOBAL_FLAGS: readonly FlagDef[] = [
@@ -8,7 +8,7 @@ export const GLOBAL_FLAGS: readonly FlagDef[] = [
   {
     name: 'data-dir',
     kind: 'string',
-    description: 'Profile store root (default: VFOX_DATA_DIR or %APPDATA%/vfox)',
+    description: 'Profile store root (default: VFOX_DATA_DIR, portable data/, or %APPDATA%/vfox)',
   },
 ]
 

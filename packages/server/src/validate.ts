@@ -12,7 +12,7 @@ export function parse<T>(schema: ZodType<T>, value: unknown, what = 'body'): T {
   const result = schema.safeParse(value)
   if (!result.success) {
     throw validationError(`Invalid ${what}`, {
-      issues: result.error.issues.map((issue) => ({
+      issues: result.error.issues.map(issue => ({
         path: issue.path.join('.'),
         message: issue.message,
       })),

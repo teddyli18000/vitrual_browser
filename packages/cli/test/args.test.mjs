@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { UsageError, parseArgs, renderFlags, requirePositional } from '../dist/args.js'
+import { parseArgs, renderFlags, requirePositional, UsageError } from '../dist/args.js'
 
 const FLAGS = [
   { name: 'json', kind: 'boolean', description: 'json output' },

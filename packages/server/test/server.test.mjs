@@ -4,7 +4,7 @@
  * that actually answers.
  */
 
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -101,7 +101,7 @@ describe('startServer', () => {
 
   it(`falls back to an ephemeral port when ${DEFAULT_API_PORT} is taken`, async () => {
     const blocker = createServer()
-    const blocked = await new Promise((resolve) => {
+    const blocked = await new Promise(resolve => {
       blocker.once('error', () => resolve(false))
       blocker.listen(DEFAULT_API_PORT, DEFAULT_API_HOST, () => resolve(true))
     })
@@ -118,7 +118,7 @@ describe('startServer', () => {
       })
       expect(res.status).toBe(200)
     } finally {
-      await new Promise((resolve) => {
+      await new Promise(resolve => {
         blocker.close(() => resolve())
       })
     }
@@ -138,7 +138,9 @@ describe('startServer', () => {
   })
 
   it('requires a dataDir', async () => {
-    await expect(startServer({ dataDir: '', logger: silentLogger, core })).rejects.toThrow(/dataDir/)
+    await expect(startServer({ dataDir: '', logger: silentLogger, core })).rejects.toThrow(
+      /dataDir/,
+    )
   })
 
   it('writes a diagnostics log without ever recording the token value', async () => {

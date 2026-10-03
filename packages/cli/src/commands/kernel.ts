@@ -1,6 +1,6 @@
 import type { KernelProgress } from '@vfox/shared'
 
-import { requirePositional, parseArgs } from '../args.js'
+import { parseArgs, requirePositional } from '../args.js'
 import type { Command } from '../command.js'
 import { GLOBAL_FLAGS } from '../command.js'
 import { CliError, openCore } from '../core.js'
@@ -39,7 +39,13 @@ export const kernelCommand: Command = {
       const unsubscribe = core.kernel.on('progress', render)
       try {
         const info = await core.kernel.install()
-        render({ phase: 'done', percent: 100, receivedBytes: null, totalBytes: null, message: null })
+        render({
+          phase: 'done',
+          percent: 100,
+          receivedBytes: null,
+          totalBytes: null,
+          message: null,
+        })
         output.result(info, () => {
           output.line(`Kernel ${info.version ?? ''} installed at ${info.path ?? 'unknown'}`.trim())
         })
@@ -62,7 +68,7 @@ function progressRenderer(output: ReturnType<typeof createOutput>): (p: KernelPr
   let lastPhase = ''
   let lastLine = ''
 
-  return (progress) => {
+  return progress => {
     const percent = progress.percent === null ? '' : ` ${progress.percent.toFixed(0)}%`
     const message = progress.message ? ` ${progress.message}` : ''
     const line = `[kernel] ${progress.phase}${percent}${message}`

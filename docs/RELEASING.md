@@ -84,7 +84,8 @@ The release fails unless every one of these holds:
    `EnableEmbeddedAsarIntegrityValidation` **enabled**, and
    `GrantFileProtocolExtraPrivileges` **enabled** (the packaged renderer loads from `file://`,
    so disabling that fuse ships a white screen) on the packaged executable.
-5. No entry inside the portable zip uses an absolute path, a drive letter or `..`.
+5. No entry inside the portable zip uses an absolute path, a drive letter or `..`, and the
+   zip carries both portable markers (`portable` and `data/`) — see *Installed vs portable*.
 6. `camoufox-js` (with `dist/data-files`), `playwright-core` and impit's `.node` binary are
    present as real files in the packaged resources, `apps/desktop/out/main/index.js` is under
    2 MB and does not contain an inlined copy of camoufox-js.
@@ -113,13 +114,45 @@ Nothing else is created or modified:
 - no machine-wide (`HKLM`) registry writes, no Program Files, no PATH changes.
 
 Uninstalling removes exactly the four items above. The user's browser profiles live in
-`%APPDATA%\vfox` and are **left intact** — `nsis.deleteAppDataOnUninstall` is `false` and the
+`%APPDATA%\VFox` and are **left intact** — `nsis.deleteAppDataOnUninstall` is `false` and the
 release gate enforces it, so uninstalling can never destroy profile data.
 
 On first launch VFox downloads the Camoufox engine (~493 MB browser + ~64 MB GeoIP database)
 from the official [Camoufox releases](https://github.com/daijro/camoufox/releases) into the
 local cache. That one-time download is the only network traffic VFox itself initiates: there
 is no activation server, no licence key, no analytics and no update check.
+
+## Installed vs portable
+
+The two downloads store their data in different places, on purpose.
+
+| | `VFox-Setup-<version>.exe` (installed) | `VFox-<version>-portable.zip` |
+| --- | --- | --- |
+| Data location | `%APPDATA%\VFox` | `<unzipped folder>\data` |
+| Movable | no (a normal per-user install) | **yes** — move the whole folder anywhere |
+| Uninstaller | yes | none (delete the folder) |
+
+VFox resolves its data directory in this order:
+
+1. `VFOX_DATA_DIR`, if the environment variable is set — it always wins;
+2. otherwise, if a file named `portable` **or** a directory named `data` sits next to
+   `VFox.exe`, the data directory is `<exe dir>\data` (portable mode);
+3. otherwise `%APPDATA%\VFox`.
+
+The portable zip ships both markers, so it is self-contained with no configuration at all:
+`portable` (the switch, with an explanatory note) and `data/` containing a `README.txt`. The
+`README.txt` is deliberate — zip tools are not required to preserve empty directories, and a
+directory that does not survive extraction would silently drop the build back to `%APPDATA%`.
+`scripts/verify-release.mjs` fails the release if either marker is missing from the zip, so a
+"portable" build can never quietly become non-portable.
+
+Moving the portable folder **together with its `data/` directory** carries the profiles, the
+settings and the downloaded Camoufox engine with it. Nothing in a portable build may persist
+an absolute path that would break after the move.
+
+The markers are added by `scripts/portable-zip.mjs` after electron-builder has produced the
+archive. They cannot come from electron-builder's `extraFiles`: that would also place them
+inside the NSIS payload and would silently put the *installed* build into portable mode.
 
 ## Building the same artifacts locally
 

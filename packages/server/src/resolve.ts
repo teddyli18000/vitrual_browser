@@ -33,7 +33,7 @@ export async function findProfile(core: Core, idOrName: string): Promise<Profile
 
   const lowered = wanted.toLowerCase()
   const matches = (await core.profiles.list()).filter(
-    (profile) => profile.name.toLowerCase() === lowered,
+    profile => profile.name.toLowerCase() === lowered,
   )
 
   const first = matches[0]

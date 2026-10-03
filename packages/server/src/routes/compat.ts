@@ -43,19 +43,18 @@ function toCompat(profileId: string, runtime: ProfileRuntime): CompatBrowser {
 export function registerCompatRoutes(app: FastifyInstance, deps: RouteDeps): void {
   const { core } = deps
 
-  app.post(API_ROUTES.launchBrowser, async (request) => {
+  app.post(API_ROUTES.launchBrowser, async request => {
     const { id } = parse(CompatIdSchema, request.body)
     const profile = await findProfile(core, id)
     const runtime = await launch(core, profile)
     return ok(toCompat(profile.id, runtime))
   })
 
-  app.post(API_ROUTES.closeBrowser, async (request) => {
+  app.post(API_ROUTES.closeBrowser, async request => {
     const { id } = parse(CompatIdSchema, request.body)
     const profile = await findProfile(core, id)
     const current = core.runtime.get(profile.id)
-    const runtime =
-      current.status === 'stopped' ? current : await core.runtime.stop(profile.id)
+    const runtime = current.status === 'stopped' ? current : await core.runtime.stop(profile.id)
     return ok(toCompat(profile.id, runtime))
   })
 
@@ -66,7 +65,7 @@ export function registerCompatRoutes(app: FastifyInstance, deps: RouteDeps): voi
    */
   const listBrowsers = async () => {
     const profiles = await core.profiles.list()
-    const entries: CompatBrowserEntry[] = profiles.map((profile) => {
+    const entries: CompatBrowserEntry[] = profiles.map(profile => {
       const runtime = core.runtime.get(profile.id)
       return { ...toCompat(profile.id, runtime), status: runtime.status, pid: runtime.pid }
     })

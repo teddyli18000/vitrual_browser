@@ -402,6 +402,21 @@ if (existsSync(portablePath)) {
       bad.length === 0,
       `${entries.length} entries, offending: ${bad.slice(0, 5)}`,
     )
+
+    // Without these the extracted folder is not portable at all: VFox would silently keep
+    // its profiles in %APPDATA% and the folder could not be moved to another machine.
+    const names = new Set(entries.map(entry => entry.name))
+    check(
+      'portable-zip',
+      names.has('portable'),
+      'the zip ships the `portable` marker file next to VFox.exe',
+    )
+    check(
+      'portable-zip',
+      names.has('data/') || [...names].some(name => name.startsWith('data/')),
+      `the zip ships a data/ directory (found ${JSON.stringify([...names].filter(n => n.startsWith('data')))})`,
+    )
+
     unpackedFiles = entries.length
     unpackedBytes = entries.reduce((total, entry) => total + entry.size, 0)
     note(

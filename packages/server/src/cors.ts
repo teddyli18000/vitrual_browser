@@ -27,7 +27,9 @@ const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1'])
 /** `file://` renderers send the literal string `null`; dev servers are loopback with any port. */
 const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i
 
-export function parseHostHeader(header: string | undefined): { name: string; port?: string } | undefined {
+export function parseHostHeader(
+  header: string | undefined,
+): { name: string; port?: string } | undefined {
   if (typeof header !== 'string') return undefined
   const value = header.trim()
   if (value.length === 0) return undefined
@@ -37,7 +39,10 @@ export function parseHostHeader(header: string | undefined): { name: string; por
     const end = value.indexOf(']')
     if (end === -1) return undefined
     const rest = value.slice(end + 1)
-    return { name: value.slice(1, end).toLowerCase(), ...(rest.startsWith(':') ? { port: rest.slice(1) } : {}) }
+    return {
+      name: value.slice(1, end).toLowerCase(),
+      ...(rest.startsWith(':') ? { port: rest.slice(1) } : {}),
+    }
   }
 
   const colon = value.lastIndexOf(':')

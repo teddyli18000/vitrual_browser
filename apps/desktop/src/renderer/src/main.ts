@@ -1,5 +1,5 @@
-import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+import { createApp } from 'vue'
 import App from './App.vue'
 // Element Plus (and its CSS) first, then our stylesheet, so `global.css` wins where they overlap.
 import { installElementPlus } from './plugins/element-plus'

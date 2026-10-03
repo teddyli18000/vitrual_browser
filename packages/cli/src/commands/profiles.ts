@@ -1,7 +1,7 @@
 import type { Profile, ProfileRuntime } from '@vfox/shared'
 import { OsTargetSchema } from '@vfox/shared'
 
-import { UsageError, parseArgs, requirePositional } from '../args.js'
+import { parseArgs, requirePositional, UsageError } from '../args.js'
 import type { Command } from '../command.js'
 import { GLOBAL_FLAGS } from '../command.js'
 import { CliError, openCore, parseProxyUrl, resolveGroup, resolveProfile } from '../core.js'
@@ -19,7 +19,11 @@ const COLUMNS = [
   { header: 'NAME', value: (row: Row) => row.profile.name },
   { header: 'GROUP', value: (row: Row) => row.group },
   { header: 'OS', value: (row: Row) => row.profile.fingerprint.os },
-  { header: 'PROXY', value: (row: Row) => (row.profile.proxy ? `${row.profile.proxy.host}:${row.profile.proxy.port}` : '') },
+  {
+    header: 'PROXY',
+    value: (row: Row) =>
+      row.profile.proxy ? `${row.profile.proxy.host}:${row.profile.proxy.port}` : '',
+  },
   { header: 'STATUS', value: (row: Row) => row.runtime.status },
   { header: 'PID', value: (row: Row) => (row.runtime.pid === null ? '' : String(row.runtime.pid)) },
   { header: 'WS ENDPOINT', value: (row: Row) => row.runtime.wsEndpoint ?? '' },
@@ -36,15 +40,15 @@ export const listCommand: Command = {
     const core = await openCore(dataDir)
     try {
       const groups = await core.groups.list()
-      const groupsById = new Map(groups.map((group) => [group.id, group.name]))
-      const rows: Row[] = (await core.profiles.list()).map((profile) => ({
+      const groupsById = new Map(groups.map(group => [group.id, group.name]))
+      const rows: Row[] = (await core.profiles.list()).map(profile => ({
         profile,
         runtime: core.runtime.get(profile.id),
         group: profile.groupId ? (groupsById.get(profile.groupId) ?? profile.groupId) : '',
       }))
 
       output.result(
-        rows.map((row) => ({ ...row.profile, runtime: row.runtime, groupName: row.group })),
+        rows.map(row => ({ ...row.profile, runtime: row.runtime, groupName: row.group })),
         () => output.table(rows, COLUMNS),
       )
       return 0
@@ -86,7 +90,8 @@ export const createCommand: Command = {
 
     const core = await openCore(dataDir)
     try {
-      const group = groupRaw === undefined ? undefined : await resolveGroup(core, groupRaw, { create: true })
+      const group =
+        groupRaw === undefined ? undefined : await resolveGroup(core, groupRaw, { create: true })
       const profile = await core.profiles.create({
         name,
         fingerprint: { os: os.data },
@@ -109,8 +114,12 @@ export const rmCommand: Command = {
   name: 'rm',
   summary: 'Delete a profile and its userdata directory',
   usage: 'vfox rm <id|name> [--yes]',
-  details: 'Destructive: without --yes it asks for confirmation, and refuses when stdin is not a terminal.',
-  flags: [...GLOBAL_FLAGS, { name: 'yes', kind: 'boolean', description: 'Skip the confirmation prompt' }],
+  details:
+    'Destructive: without --yes it asks for confirmation, and refuses when stdin is not a terminal.',
+  flags: [
+    ...GLOBAL_FLAGS,
+    { name: 'yes', kind: 'boolean', description: 'Skip the confirmation prompt' },
+  ],
   run: async ({ argv, dataDir }) => {
     const parsed = parseArgs(argv, rmCommand.flags)
     const output = createOutput(parsed.has('json'))
@@ -125,7 +134,9 @@ export const rmCommand: Command = {
       }
 
       if (!parsed.has('yes')) {
-        const ok = await confirm(`Delete profile "${profile.name}" (${profile.id}) and its browser data? [y/N] `)
+        const ok = await confirm(
+          `Delete profile "${profile.name}" (${profile.id}) and its browser data? [y/N] `,
+        )
         if (!ok) {
           output.note('aborted')
           return 1

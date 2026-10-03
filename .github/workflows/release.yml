@@ -162,6 +162,20 @@ jobs:
           cache. If you are offline or behind a restricted network, pre-seed that directory once
           and VFox will use it as-is.
 
+          ### Installed or portable — your choice
+
+          | | `VFox-Setup-__VERSION__.exe` | `VFox-__VERSION__-portable.zip` |
+          | --- | --- | --- |
+          | Data location | `%APPDATA%\VFox` | `<unzipped folder>\data` |
+          | Movable | no, it is a normal per-user install | **yes**, move the whole folder anywhere |
+          | Uninstaller | yes | none, just delete the folder |
+
+          The portable zip is **self-contained**: it ships a `portable` marker and a `data/`
+          directory beside `VFox.exe`, so your profiles, settings and the downloaded engine all
+          stay inside the folder with no configuration at all. Moving that folder — **with** its
+          `data/` directory — to another machine or drive keeps everything working. Set
+          `VFOX_DATA_DIR` to use a data directory of your own instead; it always wins.
+
           ### No activation, no licence key, no phone-home
 
           VFox has **no activation server, no licence key, no account, no usage analytics and no

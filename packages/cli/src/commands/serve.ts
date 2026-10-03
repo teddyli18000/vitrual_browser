@@ -1,4 +1,4 @@
-import { UsageError, parseArgs } from '../args.js'
+import { parseArgs, UsageError } from '../args.js'
 import type { Command } from '../command.js'
 import { GLOBAL_FLAGS } from '../command.js'
 import { resolveDataDir } from '../core.js'
@@ -48,7 +48,7 @@ export const serveCommand: Command = {
       },
     )
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>(resolve => {
       const stop = (): void => resolve()
       process.once('SIGINT', stop)
       process.once('SIGTERM', stop)

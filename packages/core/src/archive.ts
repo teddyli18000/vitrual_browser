@@ -42,7 +42,9 @@ export async function writeProfileZip(
   profile: Profile,
   userDataDir: string,
   destFile: string,
+  options: { maxBytes?: number } = {},
 ): Promise<void> {
+  const maxBytes = options.maxBytes ?? MAX_EXPORT_BYTES
   const zip = new AdmZip()
   const envelope = { format: ARCHIVE_FORMAT, version: ARCHIVE_VERSION, profile }
   zip.addFile(PROFILE_ENTRY, Buffer.from(`${JSON.stringify(envelope, null, 2)}\n`, 'utf8'))
@@ -56,10 +58,10 @@ export async function writeProfileZip(
   for (const relative of await listFiles(userDataDir)) {
     const data = await fs.readFile(path.join(userDataDir, relative))
     total += data.length
-    if (total > MAX_EXPORT_BYTES) {
+    if (total > maxBytes) {
       throw new Error(
         `Profile ${profile.name} is too large to export: the data directory exceeds ` +
-          `${formatGigabytes(MAX_EXPORT_BYTES)} (archives are built in memory). ` +
+          `${formatGigabytes(maxBytes)} (archives are built in memory). ` +
           'Delete the profile cache directory and try again.',
       )
     }

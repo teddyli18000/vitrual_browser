@@ -19,7 +19,7 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { firefox } from 'playwright-core'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -58,7 +58,7 @@ async function loadModules() {
     missing.push(`@vfox/core (${error.message})`)
   }
   try {
-    sync = await import(path.join(packageRoot, 'dist', 'index.js'))
+    sync = await import(pathToFileURL(path.join(packageRoot, 'dist', 'index.js')).href)
   } catch (error) {
     missing.push(`@vfox/sync dist (${error.message}) — run pnpm --filter @vfox/sync build`)
   }

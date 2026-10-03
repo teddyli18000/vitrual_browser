@@ -150,6 +150,19 @@ describe('export/import round trip', () => {
     expect((await fs.stat(zipFile)).isFile()).toBe(true)
     await expect(fs.access(`${zipFile}.part`)).rejects.toThrow()
   })
+
+  it('refuses an oversized export with an actionable error instead of exhausting memory', async () => {
+    const source = await store.createProfile({ name: 'Huge' })
+    await fs.mkdir(store.userDataDir(source.id), { recursive: true })
+    await fs.writeFile(path.join(store.userDataDir(source.id), 'cache.bin'), Buffer.alloc(4096))
+
+    await expect(
+      writeProfileZip(source, store.userDataDir(source.id), path.join(workDir, 'huge.zip'), {
+        maxBytes: 1024,
+      }),
+    ).rejects.toThrow(/too large to export/)
+    await expect(fs.access(path.join(workDir, 'huge.zip'))).rejects.toThrow()
+  })
 })
 
 describe('rejection', () => {

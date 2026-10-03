@@ -65,7 +65,10 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     }
     const created = await createIdentity(profile.fingerprint, engine)
     logger.info(`profile ${id}: generated a device identity (engine ${engine ?? 'unknown'})`)
-    return store.applyIdentity(id, created.identity, created.config)
+    return store.applyIdentity(id, created.identity, {
+      config: created.config,
+      webgl: created.webgl,
+    })
   }
 
   const profiles: ProfilesApi = {
@@ -76,7 +79,10 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
       const engine = (await kernelManager.info()).version
       const created = await createIdentity(profile.fingerprint, engine)
       logger.info(`profile ${profile.id}: created with a generated device identity`)
-      return store.applyIdentity(profile.id, created.identity, created.config)
+      return store.applyIdentity(profile.id, created.identity, {
+        config: created.config,
+        webgl: created.webgl,
+      })
     },
     async update(id, patch) {
       const before = store.requireProfile(id)

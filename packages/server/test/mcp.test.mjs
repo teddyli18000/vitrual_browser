@@ -49,7 +49,7 @@ async function createProfile(name = 'Mcp') {
   return res.json().data
 }
 
-const textOf = (response) => JSON.parse(response.result?.content?.[0]?.text ?? 'null')
+const textOf = response => JSON.parse(response.result?.content?.[0]?.text ?? 'null')
 
 describe('MCP over Streamable HTTP', () => {
   it('rejects a request without a token', async () => {
@@ -96,7 +96,7 @@ describe('MCP over Streamable HTTP', () => {
       params: {},
     })
     expect(statusCode).toBe(200)
-    const names = body.result.tools.map((tool) => tool.name).sort()
+    const names = body.result.tools.map(tool => tool.name).sort()
     expect(names).toEqual(TOOL_NAMES)
     for (const tool of body.result.tools) {
       expect(tool.description).toBeTruthy()

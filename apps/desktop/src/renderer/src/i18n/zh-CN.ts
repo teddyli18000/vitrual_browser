@@ -236,6 +236,12 @@ export const zhCN = {
   'settings.title': '设置',
   'settings.dataDir': '数据目录',
   'settings.dataDirHint': '所有环境、配置与浏览器数据都保存在这里，可直接备份或迁移。',
+  'settings.dataMode': '存储模式',
+  'settings.mode.portable': '便携模式（数据在程序目录内）',
+  'settings.mode.installed': '安装模式（数据在 %APPDATA%\\VFox）',
+  'settings.mode.custom': '自定义（由 VFOX_DATA_DIR 环境变量指定）',
+  'settings.dataDirPortableHint':
+    '整个文件夹可以直接复制到另一台电脑或另一个磁盘，环境、指纹和内核都会跟着走。',
   'settings.open': '打开目录',
   'settings.api': 'API 服务',
   'settings.apiHint': '本机 HTTP / SSE 接口，供界面、CLI 与自动化脚本共用。',
@@ -273,6 +279,8 @@ export const zhCN = {
   'about.comp.camoufoxJs': 'camoufox-js — 内核启动与配置库（MPL-2.0）',
   'about.comp.playwright': 'Playwright (playwright-core) — 浏览器自动化协议客户端（Apache-2.0）',
   'about.noTelemetry': '本软件无任何遥测：不上报使用数据、不发送崩溃报告、不检查更新。',
+  'about.portable':
+    '便携版可整体搬走：把整个文件夹复制到另一台电脑或另一个磁盘，环境、指纹与内核都在文件夹内，换机器即插即用。',
   'about.freeForever':
     '完全开源、完全免费：没有付费版，没有 Pro 订阅，没有账号，没有激活码，没有联网授权校验。所有功能对所有人开放，永久如此。',
   'about.outbound':

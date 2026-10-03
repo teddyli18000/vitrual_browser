@@ -55,6 +55,7 @@ async function openHomepage(): Promise<void> {
       <div class="card-title">{{ PRODUCT_NAME }} · {{ t('about.noTelemetry') }}</div>
       <div class="hint">{{ t('about.outbound') }}</div>
       <div class="hint">{{ t('about.freeForever') }}</div>
+      <div class="hint">{{ t('about.portable') }}</div>
     </div>
   </section>
 </template>

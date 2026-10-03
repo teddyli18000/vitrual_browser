@@ -33,6 +33,14 @@ export interface ProfileUsage {
 }
 
 /**
+ * Where the data directory came from, so 设置 can tell the user which mode is active.
+ *  - `portable`  — next to the executable (a `portable` marker or a `data` directory)
+ *  - `installed` — `%APPDATA%\VFox`
+ *  - `custom`    — an explicit `VFOX_DATA_DIR` (dev, CI, advanced users)
+ */
+export type DataMode = 'portable' | 'installed' | 'custom'
+
+/**
  * `window.vfox` — named functions only. No `ipcRenderer`, no `require`, no `process`, no generic
  * `invoke(channel, ...args)`, no filesystem primitive.
  */
@@ -45,6 +53,7 @@ export interface VfoxBridge {
   platform: string
   /** Root of the profile store, so 设置 can show and open it. */
   dataDir: string
+  dataMode: DataMode
   /** Reason the embedded API is unavailable, or null when it is healthy. */
   serviceError: string | null
   openPath(path: string): Promise<string>
@@ -69,5 +78,6 @@ export interface BridgePayload {
   version: string
   platform: string
   dataDir: string
+  dataMode: DataMode
   serviceError: string | null
 }

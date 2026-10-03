@@ -29,7 +29,7 @@ export interface Parsed {
 }
 
 export function parseArgs(argv: readonly string[], defs: readonly FlagDef[]): Parsed {
-  const known = new Map(defs.map((def) => [def.name, def]))
+  const known = new Map(defs.map(def => [def.name, def]))
   const values = new Map<string, string | true>()
   const positionals: string[] = []
   let onlyPositionals = false
@@ -83,8 +83,8 @@ export function parseArgs(argv: readonly string[], defs: readonly FlagDef[]): Pa
 
   return {
     positionals,
-    has: (name) => values.has(name),
-    get: (name) => {
+    has: name => values.has(name),
+    get: name => {
       const value = values.get(name)
       return typeof value === 'string' ? value : undefined
     },
@@ -99,7 +99,7 @@ export function requirePositional(parsed: Parsed, index: number, what: string): 
 
 export function renderFlags(defs: readonly FlagDef[]): string {
   return defs
-    .map((def) => {
+    .map(def => {
       const label = `  --${def.name}${def.kind === 'string' ? ' <value>' : ''}`
       return `${label.padEnd(26)}${def.description}`
     })

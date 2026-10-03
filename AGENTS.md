@@ -154,6 +154,45 @@ Verified on this machine: Node 24.14, pnpm 10.33, `camoufox-js` 0.12.0,
   installer by default; it is fetched on first run (or pre-seeded in CI via the Actions cache).
 - Electron's `app.getPath('userData')` is the default `dataDir`; the CLI and server default to
   `%APPDATA%/vfox` so all three share one profile store.
+- **The Electron main process must be built as CJS.** With `"type": "module"` electron-vite emits the
+  main process as ESM, and Electron's `electron` module is CommonJS with dynamically defined exports,
+  so `import { BrowserWindow } from 'electron'` dies at startup with
+  `SyntaxError: The requested module 'electron' does not provide an export named 'BrowserWindow'`.
+  The build succeeds and every typecheck passes — only running the app reveals it. Keep main (and
+  preload) on CJS output.
+- **`noDefaultViewport: true`, never `viewport: null`.** `launchServer` validates against the
+  *server-side* `BrowserTypeLaunchPersistentContextParams` scheme, whose only viewport field is
+  `noDefaultViewport` (`coreBundle.js:20993`); the client-side `launchPersistentContext` is what
+  accepts `viewport: null` and translates it (`coreBundle.js:57151`). Passing `viewport: null` throws
+  `ValidationError: viewport: expected object, got null`.
+- **A profile's identity must be generated once and re-injected.** Camoufox's generator is not
+  reproducible across launches (upstream ROADMAP, issues #442/#765), and `camoufox-js` additionally
+  re-rolls six config keys on *every* launch — `canvas:seed`, `audio:seed`, `fonts:spacing_seed`,
+  `canvas:aaOffset`, `canvas:aaCapOffset`, `window.history.length` (`dist/utils.js:424-433`, `:531-534`).
+  Pinning only `identity.fingerprint` is therefore not enough; those six are pinned through the raw
+  `config` escape hatch, which wins over the engine's randoms. Without both, a profile is a different
+  device every time it opens.
+- **`adm-zip` 0.5.x silently exports an empty directory tree on Windows.** `addLocalFolderAsync2`
+  runs the path through `fixPath`, a *zip-internal* normaliser, so an absolute Windows path no longer
+  exists; the ENOENT branch resolves the promise with nothing added. Walk the directory with
+  `fs.readdir(root, { recursive: true, withFileTypes: true })` and add files individually — that also
+  pins the in-archive layout to forward slashes. Note `packages/core/node_modules/adm-zip` (0.5.x) and
+  the hoisted root copy can differ, which makes this look fine in isolation.
+- **No Vitest run is possible in the development sandbox** (three independent walls: tinypool's
+  `forks` pool needs a piped `fork()`; `--pool=threads` then trips Vite's `windowsSafeRealPathSync`
+  → `exec("net use")`; and any `vitest.config.*` fails earlier because Vite bundles it with esbuild).
+  The sandbox blocks creating **any** child stdio slot set to `'pipe'`, and the ban is inherited by
+  grandchildren. Locally use `tsc` + `biome`, and run assertions against compiled `dist` with a
+  throwaway Node harness. `node --test --test-isolation=none` also works. CI is unaffected.
+- **`koffi` ships prebuilt binaries for every platform** (`build/koffi/win32_x64/koffi.node`), so it
+  needs no build step — and adding it to `pnpm.onlyBuiltDependencies` makes its postinstall run and
+  fail with `EPERM` in the sandbox for no benefit. Verified: `require('koffi').load('user32.dll')`.
+- The smoke script imports `packages/core/dist`, so `pnpm --filter @vfox/core build` must run before
+  it; it exits 2 with a `build-missing` stage rather than an ENOENT.
+- **Portable mode.** Data resolution order: `VFOX_DATA_DIR` env → `portable` marker file or `data/`
+  directory next to `process.execPath` → `app.getPath('userData')`. The portable zip ships the marker
+  and an empty `data/`, and nothing may persist an absolute path that would break after the folder is
+  moved.
 
 ## License
 
