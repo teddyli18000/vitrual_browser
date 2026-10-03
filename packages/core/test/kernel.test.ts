@@ -6,15 +6,24 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { applyKernelDir, type EngineInstaller, KernelManager } from '../src/kernel.js'
 
 let installDir: string
+let originalKernelDir: string | undefined
 
 beforeAll(async () => {
   installDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-kernel-'))
-  // camoufox-js resolves its install directory at module load, so this must be set before the
-  // first `info()` call, which is what imports it.
+  originalKernelDir = process.env.CAMOUFOX_INSTALL_DIR
+  // `KernelManager` reads this on every call, so pointing it at a temp directory is enough to
+  // exercise the missing/unusable cases without touching the real engine.
   process.env.CAMOUFOX_INSTALL_DIR = installDir
 })
 
 afterAll(async () => {
+  // Leave the environment exactly as it was found: the suite shares one worker, so a leaked value
+  // would silently change what the other files see.
+  if (originalKernelDir === undefined) {
+    delete process.env.CAMOUFOX_INSTALL_DIR
+  } else {
+    process.env.CAMOUFOX_INSTALL_DIR = originalKernelDir
+  }
   await fs.rm(installDir, { recursive: true, force: true })
 })
 

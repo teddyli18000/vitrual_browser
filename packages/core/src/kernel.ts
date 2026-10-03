@@ -258,6 +258,13 @@ async function contentLength(url: string): Promise<number | null> {
 }
 
 async function installDir(): Promise<string> {
+  // `CAMOUFOX_INSTALL_DIR` is the documented switch (see `applyKernelDir`) and is read on every
+  // call rather than once: camoufox-js freezes its own copy at import time, and a caller that
+  // redirects the engine directory after that import must still be honoured.
+  const configured = process.env.CAMOUFOX_INSTALL_DIR
+  if (configured) {
+    return path.resolve(configured)
+  }
   const { INSTALL_DIR } = await import('camoufox-js/dist/pkgman.js')
   return INSTALL_DIR.toString()
 }

@@ -9,7 +9,7 @@ import type { Core, CoreOptions, GroupsApi, KernelApi, ProfilesApi, RuntimeApi }
 import { applyKernelDir, KernelManager } from './kernel.js'
 import { launchCamoufox } from './launcher.js'
 import { combineLoggers, createFileLogger } from './log.js'
-import { reconcileOrphans } from './orphans.js'
+import { acquireDataDirLock, reconcileOrphans } from './orphans.js'
 import { RuntimeRegistry } from './runtime.js'
 import { Store } from './store.js'
 
@@ -26,11 +26,15 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
   await store.load()
 
   // Engine processes from a previous run still hold their profile's parent.lock, which would make
-  // the next launch of that profile fail with "profile in use".
-  try {
-    await reconcileOrphans({ dataDir: store.dataDir, logger })
-  } catch (error) {
-    logger.warn(`orphan reconciliation failed: ${message(error)}`)
+  // the next launch of that profile fail with "profile in use". Only the instance that owns the
+  // data directory may do that: a second instance must never kill the first one's running profiles.
+  const dataDirLock = await acquireDataDirLock(store.dataDir, logger)
+  if (dataDirLock.acquired) {
+    try {
+      await reconcileOrphans({ dataDir: store.dataDir, logger })
+    } catch (error) {
+      logger.warn(`orphan reconciliation failed: ${message(error)}`)
+    }
   }
 
   const registry = new RuntimeRegistry({
@@ -139,6 +143,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     kernel,
     async close() {
       await registry.closeAll()
+      await dataDirLock.release()
     },
   }
 }

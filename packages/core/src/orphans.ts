@@ -44,6 +44,73 @@ export interface ReconcileResult {
 
 const ENGINE_IMAGE = 'camoufox.exe'
 const LOCK_FILE = 'parent.lock'
+const DATA_DIR_LOCK = 'core.lock'
+
+export interface DataDirLock {
+  /** `false` when another live VFox instance already owns this data directory. */
+  readonly acquired: boolean
+  release(): Promise<void>
+}
+
+/**
+ * Claim the data directory for this process.
+ *
+ * Reconciliation kills every engine process that references our profiles, which is only correct
+ * when *we* are the instance that owns them. The desktop app, the CLI and the server all default to
+ * the same data directory, so without this a `vfox` command run while the GUI has profiles open
+ * would kill the user's running browsers. The lock is a file holding our pid: a live pid means
+ * another instance is running and reconciliation is skipped entirely; a dead pid (or no file) means
+ * the previous instance is gone and its engines are genuine orphans.
+ */
+export async function acquireDataDirLock(
+  dataDir: string,
+  logger: CoreLogger,
+): Promise<DataDirLock> {
+  const file = path.join(dataDir, DATA_DIR_LOCK)
+  const owner = await readLockPid(file)
+  if (owner !== null && owner !== process.pid && isProcessAlive(owner)) {
+    logger.warn(
+      `another VFox instance (pid ${owner}) owns ${dataDir}; ` +
+        'skipping orphan reconciliation so its profiles keep running',
+    )
+    return { acquired: false, release: async () => {} }
+  }
+
+  await fs.mkdir(dataDir, { recursive: true })
+  await fs.writeFile(
+    file,
+    `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`,
+    'utf8',
+  )
+  return {
+    acquired: true,
+    async release() {
+      // Only ever remove our own lock: another instance may have taken over meanwhile.
+      if ((await readLockPid(file)) === process.pid) {
+        await fs.rm(file, { force: true })
+      }
+    },
+  }
+}
+
+async function readLockPid(file: string): Promise<number | null> {
+  try {
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { pid?: unknown }
+    return typeof raw.pid === 'number' && Number.isInteger(raw.pid) && raw.pid > 0 ? raw.pid : null
+  } catch {
+    return null
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM means the process exists but we are not allowed to signal it.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
 
 export async function reconcileOrphans(options: ReconcileOptions): Promise<ReconcileResult> {
   const { dataDir, logger } = options

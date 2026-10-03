@@ -17,7 +17,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.test.json --pretty false",
-    "test": "vitest run --passWithNoTests",
+    "test": "tsc -b && tsc -p tsconfig.test.json --noEmit false --outDir .test-build && node test/run-vitest.mjs run --passWithNoTests --root .test-build",
     "lint": "biome check src"
   },
   "dependencies": {

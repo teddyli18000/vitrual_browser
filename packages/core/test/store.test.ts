@@ -168,7 +168,7 @@ describe('persistence', () => {
     const good = await fs.readFile(store.profilesFile, 'utf8')
 
     await fs.writeFile(store.profilesFile, '{"not":"an array"}', 'utf8')
-    await expect(openStore()).rejects.toThrow(/must contain a JSON array/)
+    await expect(openStore()).rejects.toThrow(/expected a JSON array of profile objects/)
 
     await fs.writeFile(store.profilesFile, '[{"id":"x"}]', 'utf8')
     await expect(openStore()).rejects.toThrow(/profile at index 0 is invalid/)

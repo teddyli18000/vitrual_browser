@@ -18,10 +18,32 @@ import { createIdentity } from '../src/identity.js'
 import { KernelManager } from '../src/kernel.js'
 import { toServerOptions } from '../src/launcher.js'
 
-const packageRoot = path.resolve(import.meta.dirname, '..')
+// Locate the package and the repository by walking up rather than by counting `..`: the tests also
+// run from their compiled copy under `.cache/core-tests/`, where the depth is the same but the
+// package.json is not next to the test file.
+const packageRoot = findPackageRoot(import.meta.dirname)
 const repoRoot = path.resolve(packageRoot, '..', '..')
 const coreBundle = path.join(repoRoot, 'node_modules/playwright-core/lib/coreBundle.js')
 const camoufoxUtils = path.join(repoRoot, 'node_modules/camoufox-js/dist/utils.js')
+
+function findPackageRoot(from: string): string {
+  let dir = from
+  for (let depth = 0; depth < 8; depth += 1) {
+    const candidate = path.join(dir, 'package.json')
+    if (fs.existsSync(candidate)) {
+      const pkg = JSON.parse(fs.readFileSync(candidate, 'utf8')) as { name?: string }
+      if (pkg.name === '@vfox/core') {
+        return dir
+      }
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) {
+      break
+    }
+    dir = parent
+  }
+  throw new Error(`could not find the @vfox/core package.json above ${from}`)
+}
 
 const noopLogger = { debug() {}, info() {}, warn() {}, error() {} }
 
@@ -109,6 +131,7 @@ describe('assembled server options', () => {
       proxy: { type: 'socks5', host: '127.0.0.1', port: 1080, username: 'u', password: 'p' },
       // No network in unit tests: geoip would look the egress IP up through the proxy.
       fingerprint: { geoip: false, hardwareConcurrency: 8 },
+      launch: {},
     })
 
     const options = await toServerOptions(profile, 'C:\\profiles\\guard\\userdata', () => {})
@@ -151,7 +174,8 @@ describe('assembled server options', () => {
       name: 'Stable',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
-      fingerprint: { geoip: false, config: generated.config },
+      fingerprint: { geoip: false, config: generated.config, webgl: generated.webgl },
+      launch: {},
       identity: generated.identity,
     })
 
@@ -192,6 +216,7 @@ describe('assembled server options', () => {
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
       fingerprint: { geoip: false },
+      launch: {},
       identity: null,
     })
 

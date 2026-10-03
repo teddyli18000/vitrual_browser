@@ -129,11 +129,15 @@ export class Store {
         ...(draft.notes === undefined ? {} : { notes: draft.notes }),
         ...(draft.color === undefined ? {} : { color: draft.color }),
         ...(draft.proxy === undefined ? {} : { proxy: draft.proxy }),
-        // `fingerprint`/`launch` patches are partial merges, not replacements.
-        ...(draft.fingerprint === undefined
+        // `fingerprint`/`launch` patches are partial merges, and they merge the keys the caller
+        // actually sent — not the parsed value. `FingerprintSchema.partial()` still applies the
+        // inner `.default()`s, so the parsed object cannot tell "field omitted" from "field set to
+        // its default", and merging it would silently reset os/screen/window on an unrelated edit.
+        // The `ProfileSchema.parse` below validates whatever the caller sent either way.
+        ...(patch.fingerprint === undefined
           ? {}
-          : { fingerprint: { ...current.fingerprint, ...draft.fingerprint } }),
-        ...(draft.launch === undefined ? {} : { launch: { ...current.launch, ...draft.launch } }),
+          : { fingerprint: { ...current.fingerprint, ...patch.fingerprint } }),
+        ...(patch.launch === undefined ? {} : { launch: { ...current.launch, ...patch.launch } }),
         updatedAt: new Date().toISOString(),
       })
       this.#profiles = this.#profiles.map(item => (item.id === id ? updated : item))
@@ -368,8 +372,17 @@ function requireName(name: string, what: string): string {
   return trimmed
 }
 
+/** True when the path exists. A directory counts, so this must never read the file. */
 async function exists(target: string): Promise<boolean> {
-  return (await readFileOrNull(target)) !== null
+  try {
+    await fs.stat(target)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false
+    }
+    throw error
+  }
 }
 
 async function readFileOrNull(target: string): Promise<string | null> {

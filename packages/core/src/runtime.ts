@@ -54,7 +54,11 @@ export class RuntimeRegistry {
       existing &&
       (existing.runtime.status === 'starting' || existing.runtime.status === 'running')
     ) {
-      return clone(existing.runtime)
+      // A second launch of the same profile joins the first instead of starting another browser,
+      // and it resolves with the settled result — a caller that double-clicks "start" must not be
+      // told the profile is stuck on `starting`.
+      await existing.starting
+      return clone(this.#entries.get(id)?.runtime ?? existing.runtime)
     }
 
     // The entry exists before the profile lookup so that a `stop()` arriving in between is

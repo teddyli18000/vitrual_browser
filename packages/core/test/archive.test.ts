@@ -174,7 +174,8 @@ describe('rejection', () => {
       /unexpected entry "hello.txt"/,
     )
     expect(store.listProfiles()).toEqual([])
-    expect(await fs.readdir(path.join(dataDir, 'profiles'))).toEqual([])
+    // Nothing was created at all — not even the profiles directory.
+    await expect(fs.access(path.join(dataDir, 'profiles'))).rejects.toThrow()
   })
 
   it('rejects a zip without profile.json', async () => {

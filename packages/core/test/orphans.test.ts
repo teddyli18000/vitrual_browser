@@ -1,8 +1,9 @@
+import { type ChildProcess, spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { type EngineProcess, reconcileOrphans } from '../src/orphans.js'
+import { acquireDataDirLock, type EngineProcess, reconcileOrphans } from '../src/orphans.js'
 
 let dataDir: string
 
@@ -33,6 +34,86 @@ function engineProcess(pid: number, profileId: string): EngineProcess {
     commandLine: `C:\\engine\\camoufox.exe -no-remote -profile ${path.join(dataDir, 'profiles', profileId, 'userdata')} -juggler-pipe`,
   }
 }
+
+describe('data directory lock', () => {
+  let child: ChildProcess | null = null
+
+  afterEach(() => {
+    child?.kill()
+    child = null
+  })
+
+  /** A real second process, so liveness detection is exercised against the OS, not a mock. */
+  async function livePid(): Promise<number> {
+    const spawned = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+      stdio: 'ignore',
+    })
+    await new Promise(resolve => spawned.once('spawn', resolve))
+    child = spawned
+    return spawned.pid as number
+  }
+
+  it('is acquired when there is no lock file', async () => {
+    const log = logger()
+    const lock = await acquireDataDirLock(dataDir, log)
+
+    expect(lock.acquired).toBe(true)
+    const written = JSON.parse(await fs.readFile(path.join(dataDir, 'core.lock'), 'utf8')) as {
+      pid: number
+    }
+    expect(written.pid).toBe(process.pid)
+
+    await lock.release()
+    await expect(fs.access(path.join(dataDir, 'core.lock'))).rejects.toThrow()
+  })
+
+  it('is refused while another live instance owns the data directory', async () => {
+    const pid = await livePid()
+    await fs.writeFile(path.join(dataDir, 'core.lock'), JSON.stringify({ pid }), 'utf8')
+    const log = logger()
+
+    const lock = await acquireDataDirLock(dataDir, log)
+
+    expect(lock.acquired).toBe(false)
+    expect(log.warn).toHaveBeenCalledOnce()
+    // The other instance's lock is untouched, and releasing ours must not remove it.
+    await lock.release()
+    expect(JSON.parse(await fs.readFile(path.join(dataDir, 'core.lock'), 'utf8'))).toEqual({ pid })
+  })
+
+  it('takes over a lock whose owner is gone', async () => {
+    await fs.writeFile(
+      path.join(dataDir, 'core.lock'),
+      JSON.stringify({ pid: 2_147_483_646 }),
+      'utf8',
+    )
+
+    const lock = await acquireDataDirLock(dataDir, logger())
+
+    expect(lock.acquired).toBe(true)
+    expect(
+      (JSON.parse(await fs.readFile(path.join(dataDir, 'core.lock'), 'utf8')) as { pid: number })
+        .pid,
+    ).toBe(process.pid)
+    await lock.release()
+  })
+
+  it('treats its own stale lock file as its own', async () => {
+    await fs.writeFile(
+      path.join(dataDir, 'core.lock'),
+      JSON.stringify({ pid: process.pid }),
+      'utf8',
+    )
+
+    expect((await acquireDataDirLock(dataDir, logger())).acquired).toBe(true)
+  })
+
+  it('ignores an unreadable lock file instead of refusing to start', async () => {
+    await fs.writeFile(path.join(dataDir, 'core.lock'), 'not json', 'utf8')
+
+    expect((await acquireDataDirLock(dataDir, logger())).acquired).toBe(true)
+  })
+})
 
 describe('reconcileOrphans', () => {
   it('does nothing at all when no profile holds a lock', async () => {
@@ -70,18 +151,19 @@ describe('reconcileOrphans', () => {
     expect(log.warn).toHaveBeenCalled()
   })
 
-  it('keeps a lock while a live engine process still owns the profile', async () => {
+  it('keeps a lock while a process that survived the kill still owns the profile', async () => {
     await makeProfile('a', true)
     const killTree = vi.fn()
 
     const result = await reconcileOrphans({
       dataDir,
       logger: logger(),
+      // The engine refuses to die: it is still listed after the kill, so its lock must stay.
       listProcesses: async () => [engineProcess(100, 'a')],
       killTree,
     })
 
-    expect(killTree).not.toHaveBeenCalled()
+    expect(killTree).toHaveBeenCalledWith(100)
     expect(result.locksRemoved).toEqual([])
     expect(await fs.readFile(path.join(dataDir, 'profiles', 'a', 'parent.lock'), 'utf8')).toBe('')
   })

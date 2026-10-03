@@ -25,10 +25,10 @@ async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 5000): Pro
   }
 }
 
-async function readLog(dataDir: string): Promise<string> {
+async function readLog(dataDir: string, expected = '\n'): Promise<string> {
   await waitFor(async () => {
     try {
-      return (await fs.readFile(logFilePath(dataDir), 'utf8')).includes('\n')
+      return (await fs.readFile(logFilePath(dataDir), 'utf8')).includes(expected)
     } catch {
       return false
     }
@@ -43,7 +43,7 @@ describe('createFileLogger', () => {
     logger.info('profile created', { id: 'p1' })
     logger.error('launch failed', new Error('spawn EPERM'))
 
-    const contents = await readLog(dataDir)
+    const contents = await readLog(dataDir, 'spawn EPERM')
     expect(contents).toMatch(/INFO {2}profile created \{"id":"p1"\}/)
     expect(contents).toMatch(/ERROR launch failed Error: spawn EPERM/)
     expect(contents.split('\n')[0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z /)

@@ -1,0 +1,3 @@
+# Compiled copy of src + test used to run the vitest suite on machines where Vite cannot transpile
+# TypeScript (see test/run-vitest.mjs). Build output only — never commit it.
+.test-build/
