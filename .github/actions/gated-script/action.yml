@@ -1,0 +1,42 @@
+name: Gated script run
+description: >-
+  Run a repository smoke script with stdout and stderr captured separately, always print both
+  so a failure is debuggable from the log alone, and fail the step when the script exits
+  non-zero. For scripts whose contract is their exit code rather than a machine-readable marker.
+
+inputs:
+  label:
+    description: Short name used for the capture files and the log banner.
+    required: true
+  script:
+    description: Repository-relative path of the script, run with the current node.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Require ${{ inputs.script }}
+      shell: pwsh
+      run: |
+        if (-not (Test-Path '${{ inputs.script }}')) {
+          throw "${{ inputs.script }} is missing: this behaviour cannot be verified, so the job must not pass."
+        }
+
+    - name: Run ${{ inputs.label }}
+      shell: pwsh
+      run: |
+        # A non-zero exit from `node` is the normal failure signal, so it must not become a
+        # terminating error before we have printed the script's own output.
+        $PSNativeCommandUseErrorActionPreference = $false
+        $out = Join-Path $env:RUNNER_TEMP '${{ inputs.label }}.stdout.txt'
+        $err = Join-Path $env:RUNNER_TEMP '${{ inputs.label }}.stderr.txt'
+        node '${{ inputs.script }}' > $out 2> $err
+        $code = $LASTEXITCODE
+        Write-Host "===== ${{ inputs.label }} stdout ====="
+        Get-Content $out -ErrorAction SilentlyContinue
+        Write-Host "===== ${{ inputs.label }} stderr ====="
+        Get-Content $err -ErrorAction SilentlyContinue
+        Write-Host "======================================"
+        if ($code -ne 0) {
+          throw "'${{ inputs.script }}' exited with code $code"
+        }

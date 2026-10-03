@@ -51,13 +51,35 @@ jobs:
       - name: Validate the workflows
         run: node scripts/validate-workflows.mjs
 
-      - name: Test
-        run: pnpm test
+      # Instant, static, and needs no build: it catches a broken Element Plus component
+      # registration before any of the slow steps run.
+      - name: Check the UI component registration
+        uses: ./.github/actions/gated-script
+        with:
+          label: check-ui
+          script: apps/desktop/scripts/check-ui-registration.mjs
 
-      # Builds packages/* and the desktop renderer. The installer is deliberately NOT built
-      # here: it is a release-only concern and would add minutes to every push.
+      # Builds packages/* and the desktop renderer BEFORE the tests. Several packages' `test`
+      # scripts run `tsc -b` first, so without this a compile error in @vfox/core would be
+      # reported as "@vfox/server's tests failed" — the wrong file, and a real misattribution
+      # risk. The installer is deliberately NOT built here: it is release-only work.
       - name: Build packages and the desktop renderer
         run: pnpm build
+
+      # The only thing that proves the GUI can actually talk to the API — it found the CORS
+      # bug that would have shipped as a permanent "核心服务未连接" banner. Browser-free by
+      # design: `--launch` opens a real browser and is deliberately not passed here.
+      - name: Smoke the HTTP API end to end
+        uses: ./.github/actions/gated-script
+        with:
+          label: smoke-api
+          script: apps/desktop/scripts/smoke-api.mjs
+
+      # `pnpm -r run test` stops at the first failing package, which hides whether every other
+      # package even ran; `--no-bail` would instead exit 0 even when a suite fails. test-all.mjs
+      # runs every suite, names each result, and still fails.
+      - name: Test every workspace package
+        run: node scripts/test-all.mjs
 
   e2e-engine:
     name: engine launch and fingerprint smoke test
@@ -105,12 +127,25 @@ jobs:
         run: node scripts/fetch-kernel.mjs
 
       - name: Build the workspace
-        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build
+        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build && pnpm --filter @vfox/sync build
 
       - name: Launch the engine and verify fingerprint spoofing
         uses: ./.github/actions/engine-smoke
         with:
           headless: '1'
+
+      # packages/sync was the only shipped feature with no end-to-end evidence: unit tests
+      # against a fake Playwright layer plus a smoke script that had never executed anywhere.
+      # It launches two real profiles and drives a real session, so it runs here where the
+      # engine is already fetched — a sibling job would restore the same ~1 GB cache for
+      # nothing. Its contract is its exit code, so it uses the generic gated runner.
+      - name: Verify the window synchroniser with two real browsers
+        uses: ./.github/actions/gated-script
+        env:
+          VFOX_SMOKE_HEADLESS: '1'
+        with:
+          label: sync
+          script: packages/sync/scripts/smoke-sync.mjs
 
   # Electron itself cannot run on the developer machine (the sandbox blocks the child stdio
   # it needs, and the DSH harness injects ELECTRON_RUN_AS_NODE=1 into every shell), so the UI

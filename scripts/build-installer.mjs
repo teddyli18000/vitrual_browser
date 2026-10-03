@@ -24,7 +24,6 @@
  * Usage:
  *   node scripts/build-installer.mjs
  */
-import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   copyFileSync,
@@ -40,6 +39,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { addPortableMarkers } from './portable-zip.mjs'
+import { run as runCommand } from './run-command.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const outDir = path.join(repoRoot, 'release')
@@ -55,25 +55,17 @@ function fail(message) {
   process.exit(1)
 }
 
-/** cmd.exe has no argv, so on Windows every argument has to be re-quoted for it. */
-function quoteForCmd(arg) {
-  return /[\s"&|<>^]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg
-}
-
-/** @param {string} command @param {string[]} args @param {string} cwd */
+/**
+ * Run a build step, failing this script with a named reason when it does not succeed.
+ * The child-process details (inherited stdio, the Windows `.cmd` shim) live in run-command.mjs
+ * because `scripts/test-all.mjs` needs exactly the same behaviour.
+ *
+ * @param {string} command @param {string[]} args @param {string} cwd
+ */
 function run(command, args, cwd) {
-  console.error(`\n[build-installer] $ ${[command, ...args].join(' ')}`)
-  const result =
-    process.platform === 'win32'
-      ? spawnSync(
-          process.env.ComSpec ?? 'cmd.exe',
-          ['/d', '/s', '/c', [command, ...args.map(quoteForCmd)].join(' ')],
-          { cwd, stdio: 'inherit', env: process.env },
-        )
-      : spawnSync(command, args, { cwd, stdio: 'inherit', env: process.env })
-
-  if (result.error) fail(`could not start \`${command}\`: ${result.error.message}`)
-  if (result.status !== 0) fail(`\`${command} ${args.join(' ')}\` exited with ${result.status}`)
+  console.error('')
+  const status = runCommand(command, args, cwd)
+  if (status !== 0) fail(`\`${command} ${args.join(' ')}\` exited with ${status}`)
 }
 
 /** @param {string} file */

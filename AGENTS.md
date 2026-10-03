@@ -179,13 +179,6 @@ Verified on this machine: Node 24.14, pnpm 10.33, `camoufox-js` 0.12.0,
   `noDefaultViewport` (`coreBundle.js:20993`); the client-side `launchPersistentContext` is what
   accepts `viewport: null` and translates it (`coreBundle.js:57151`). Passing `viewport: null` throws
   `ValidationError: viewport: expected object, got null`.
-- **A profile's identity must be generated once and re-injected.** Camoufox's generator is not
-  reproducible across launches (upstream ROADMAP, issues #442/#765), and `camoufox-js` additionally
-  re-rolls six config keys on *every* launch — `canvas:seed`, `audio:seed`, `fonts:spacing_seed`,
-  `canvas:aaOffset`, `canvas:aaCapOffset`, `window.history.length` (`dist/utils.js:424-433`, `:531-534`).
-  Pinning only `identity.fingerprint` is therefore not enough; those six are pinned through the raw
-  `config` escape hatch, which wins over the engine's randoms. Without both, a profile is a different
-  device every time it opens.
 - **`adm-zip` 0.5.x silently exports an empty directory tree on Windows.** `addLocalFolderAsync2`
   runs the path through `fixPath`, a *zip-internal* normaliser, so an absolute Windows path no longer
   exists; the ENOENT branch resolves the promise with nothing added. Walk the directory with
