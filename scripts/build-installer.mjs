@@ -35,6 +35,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -43,6 +44,7 @@ import { run as runCommand } from './run-command.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const outDir = path.join(repoRoot, 'release')
+const require = createRequire(import.meta.url)
 
 // Keep electron-builder's ~200 MB of Electron/NSIS downloads inside the checkout, exactly
 // like scripts/dev-env.ps1 does locally and like the actions/cache steps expect in CI.
@@ -108,6 +110,52 @@ if (version !== desktopVersion) {
 }
 console.error(`[build-installer] version ${version}`)
 
+/**
+ * The exact Electron version to package against, resolved before anything expensive runs.
+ *
+ * `apps/desktop/package.json` declares a range (`^38.2.2`) and electron-builder refuses to build
+ * from one: it has to fetch platform binaries for a single release. It looks for
+ * `electron/package.json` **next to the app's own package.json**, which pnpm's hoisted layout
+ * never populates (`apps/desktop/node_modules/electron` does not exist), so it cannot resolve the
+ * range itself — its own error message says to pass the version explicitly. Without this the
+ * release died in the packaging step on the first tagged run.
+ *
+ * Resolved locally and deterministically, never from the network: the installed package first,
+ * then the version pnpm recorded for the range in the lockfile.
+ *
+ * @returns {Promise<string | undefined>}
+ */
+async function resolveElectronVersion() {
+  try {
+    const manifest = require.resolve('electron/package.json', {
+      paths: [repoRoot, path.join(repoRoot, 'apps', 'desktop')],
+    })
+    return JSON.parse(readFileSync(manifest, 'utf8')).version
+  } catch {
+    // Not installed anywhere resolvable; the lockfile still knows the exact version.
+  }
+  try {
+    const yaml = await import('js-yaml')
+    const load = yaml.load ?? yaml.default?.load
+    const lockfile = load(readFileSync(path.join(repoRoot, 'pnpm-lock.yaml'), 'utf8'))
+    const locked = lockfile?.importers?.['apps/desktop']?.devDependencies?.electron?.version
+    if (typeof locked === 'string') return locked
+  } catch {
+    // Reported below as one clear failure instead of two.
+  }
+  return undefined
+}
+
+const electronVersion = await resolveElectronVersion()
+if (!electronVersion) {
+  fail(
+    'cannot determine the exact Electron version: neither node_modules/electron nor the\n' +
+      '  apps/desktop entry in pnpm-lock.yaml resolved one, and electron-builder cannot build\n' +
+      '  from a range alone.',
+  )
+}
+console.error(`[build-installer] electron ${electronVersion}`)
+
 // The four workspace libraries are built one `pnpm --filter` at a time instead of with
 // `pnpm -r --filter "./packages/**" build`. The result is identical, but pnpm's recursive
 // runner pipes each child's output through itself, and a piped child process is not
@@ -147,6 +195,7 @@ run(
     '--publish',
     'never',
     '-c.npmRebuild=false',
+    `-c.electronVersion=${electronVersion}`,
     `-c.directories.output=${outDir.replaceAll('\\', '/')}`,
   ],
   repoRoot,

@@ -83,3 +83,18 @@ node packages/core/scripts/smoke-launch.mjs   # real engine smoke test — CI on
 - **The smoke test cannot run in the development sandbox** (it cannot create a child process with
   piped stdio, which the engine requires). It is a CI gate; run it in CI or any unconfined shell, and
   remember it imports `dist`, so build first.
+- **A local `pnpm test` run of this package is best-effort; CI is authoritative.** The suite needs
+  Vitest's default `forks` pool (one process per file). Inside the sandbox that pool is impossible —
+  a `fork()` over piped stdio is denied — so `test/run-vitest.mjs` falls back to `threads`. That
+  fallback works, but `camoufox-js/dist/utils.js` imports `./ip.js`, which loads the native `impit`
+  addon at module load and keeps clients in a module-level Map, and a worker thread does not always
+  survive its teardown. Measured: importing `impit` alone and doing nothing else crashed 4 of 6 runs
+  with `0xC0000005`, and a full suite run dies that way roughly half the time **after every test has
+  passed**. CI runs the forks pool and is unaffected.
+- **`ProfileUpdateSchema` cannot express a partial `fingerprint`/`launch` patch.** `zod`'s
+  `.partial()` keeps the inner `.default()`s, so `{ fingerprint: { hardwareConcurrency: 4 } }` parses
+  into a *complete* fingerprint with `os: 'windows'`. `Store.updateProfile` therefore merges the raw
+  keys the caller sent rather than the parsed value — but a caller that validates a request body with
+  `ProfileUpdateSchema` first (the server does) has already lost that distinction, so editing one
+  field through the API can reset the rest of the fingerprint. Fixing it properly is a
+  `packages/shared` change.

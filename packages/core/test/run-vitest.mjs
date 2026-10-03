@@ -9,12 +9,21 @@
  *
  * The pool is chosen by probing the environment rather than by assuming one:
  *
- *   - in CI or any unconfined shell the sandbox probe fails, `./sandbox-preload.mjs` changes
- *     nothing, and Vitest runs with its default `forks` pool — a real process per file, fully
- *     isolated, which is the configuration this suite is meant to run under;
- *   - inside the sandbox the probe succeeds, the preload answers Vite's `net use` bootstrap and
- *     redirects the native `impit` addon to a stub, and the pool becomes `threads` (a `fork()` over
- *     piped stdio is denied here). `--no-isolate` keeps all files in one worker.
+ *   - in CI or any unconfined shell the probe finds that piped child stdio works, and Vitest runs
+ *     with its default `forks` pool — a real process per file, fully isolated. **That is the
+ *     authoritative configuration** and the one this suite is meant to run under;
+ *   - inside the sandbox the probe fails, `./sandbox-preload.mjs` answers Vite's `net use`
+ *     bootstrap, and the pool becomes `threads` (`--no-isolate` keeps all files in one worker),
+ *     because a `fork()` over piped stdio is denied here.
+ *
+ * The sandboxed configuration is best-effort, not authoritative, and the reason is measured rather
+ * than assumed: `camoufox-js/dist/utils.js` imports `./ip.js`, which does
+ * `import { Impit } from 'impit'` — a native napi addon — at module load and keeps constructed
+ * clients in a module-level Map. Importing `impit` and doing nothing else crashed a Vitest worker
+ * thread at teardown with `0xC0000005` in 4 of 6 measured runs. Anything that calls `launchOptions`
+ * (so `test/launcher.guard.test.ts`) therefore passes all of its assertions and then *may* kill the
+ * process while the worker is being torn down. CI is unaffected: a forked process has no worker
+ * thread to tear down.
  *
  * Loading the vitest CLI in-process keeps the command identical from the repo root or this
  * directory, and keeps the `NODE_OPTIONS` workaround out of the repository's shared configuration.
@@ -24,16 +33,8 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { sandboxed } from './sandbox-preload.mjs'
 
-if (sandboxed) {
-  if (!process.argv.includes('--pool=threads')) {
-    process.argv.push('--pool=threads', '--no-isolate')
-  }
-  // The test files run in worker threads, which do not execute this file — they need the preload
-  // (and therefore the `impit` stub hook) too, and `NODE_OPTIONS` is inherited by workers.
-  const preload = pathToFileURL(new URL('./sandbox-preload.mjs', import.meta.url).pathname).href
-  process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, `--import ${preload}`]
-    .filter(Boolean)
-    .join(' ')
+if (sandboxed && !process.argv.includes('--pool=threads')) {
+  process.argv.push('--pool=threads', '--no-isolate')
 }
 
 const require = createRequire(import.meta.url)

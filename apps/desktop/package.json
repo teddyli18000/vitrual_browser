@@ -4,6 +4,7 @@
   "private": true,
   "description": "VFox desktop application",
   "productName": "VFox",
+  "author": "VFox contributors",
   "type": "module",
   "main": "./out/main/index.cjs",
   "scripts": {
@@ -28,7 +29,7 @@
     "@vfox/server": "workspace:*",
     "@vfox/shared": "workspace:*",
     "@vitejs/plugin-vue": "^6.0.1",
-    "electron": "^38.2.2",
+    "electron": "38.2.2",
     "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.1",
     "element-plus": "^2.11.5",
