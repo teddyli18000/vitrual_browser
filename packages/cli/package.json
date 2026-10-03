@@ -1,0 +1,29 @@
+{
+  "name": "@vfox/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "vfox": "./dist/bin.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run --passWithNoTests",
+    "lint": "biome check src"
+  },
+  "dependencies": {
+    "@vfox/core": "workspace:*",
+    "@vfox/server": "workspace:*",
+    "@vfox/shared": "workspace:*",
+    "adm-zip": "^0.5.16"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
