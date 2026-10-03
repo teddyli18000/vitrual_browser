@@ -78,9 +78,7 @@ export async function reconcileOrphans(options: ReconcileOptions): Promise<Recon
   }
 
   const profilesRoot = path.resolve(profilesDir).toLowerCase()
-  const ours = processes.filter(process =>
-    process.commandLine.toLowerCase().includes(profilesRoot),
-  )
+  const ours = processes.filter(process => process.commandLine.toLowerCase().includes(profilesRoot))
 
   const kill = options.killTree ?? killProcessTree
   for (const process of ours) {

@@ -14,7 +14,7 @@ import type {
   ProfilesApi,
   RuntimeApi,
 } from './index.js'
-import { KernelManager, applyKernelDir } from './kernel.js'
+import { applyKernelDir, KernelManager } from './kernel.js'
 import { launchCamoufox } from './launcher.js'
 import { combineLoggers, createFileLogger } from './log.js'
 import { reconcileOrphans } from './orphans.js'

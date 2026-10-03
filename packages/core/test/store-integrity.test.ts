@@ -18,7 +18,9 @@ function logger() {
   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }
 
-async function openStore(log = logger()): Promise<{ store: Store; log: ReturnType<typeof logger> }> {
+async function openStore(
+  log = logger(),
+): Promise<{ store: Store; log: ReturnType<typeof logger> }> {
   const store = new Store(dataDir, log)
   await store.load()
   return { store, log }

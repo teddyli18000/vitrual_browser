@@ -61,15 +61,17 @@ export function createFileLogger(
 /** Send every record to both loggers; either may be missing. */
 export function combineLoggers(...loggers: (CoreLogger | undefined)[]): CoreLogger {
   const targets = loggers.filter((logger): logger is CoreLogger => logger !== undefined)
-  const forward = (method: keyof CoreLogger) => (message: string, ...args: unknown[]) => {
-    for (const target of targets) {
-      try {
-        target[method](message, ...args)
-      } catch {
-        // A broken consumer logger must not break the caller either.
+  const forward =
+    (method: keyof CoreLogger) =>
+    (message: string, ...args: unknown[]) => {
+      for (const target of targets) {
+        try {
+          target[method](message, ...args)
+        } catch {
+          // A broken consumer logger must not break the caller either.
+        }
       }
     }
-  }
   return {
     debug: forward('debug'),
     info: forward('info'),

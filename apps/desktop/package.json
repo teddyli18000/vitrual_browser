@@ -14,6 +14,7 @@
     "dist": "electron-vite build && electron-builder --win --x64 --publish never",
     "icons": "node scripts/generate-icons.mjs",
     "smoke:api": "node scripts/smoke-api.mjs",
+    "shots": "node scripts/screenshot-ui.mjs",
     "lint": "biome check src"
   },
   "dependencies": {
@@ -31,6 +32,7 @@
     "electron-vite": "^4.0.1",
     "element-plus": "^2.11.5",
     "pinia": "^3.0.3",
+    "playwright": "1.60.0",
     "typescript": "^5.9.3",
     "vite": "^7.1.9",
     "vue": "^3.5.22",

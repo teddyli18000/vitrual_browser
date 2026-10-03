@@ -323,6 +323,11 @@ if (skipFuses) {
 } else if (!existsSync(packagedExe)) {
   check('fuses', false, `packaged app ${packagedExe} not found`)
 } else {
+  // `RunAsNode` is asserted DISABLED for correctness as much as for hardening: it is what
+  // makes `ELECTRON_RUN_AS_NODE` inert. With the fuse left at its default, any user (or any
+  // launcher) that has `ELECTRON_RUN_AS_NODE=1` set globally turns our installed `VFox.exe`
+  // into a plain Node interpreter, and `require('electron')` resolves to the npm package
+  // instead of Electron's built-in module — the app misbehaves with no code defect present.
   // `GrantFileProtocolExtraPrivileges` is asserted ENABLED on purpose: it defaults to
   // enabled, and disabling it is only safe for apps that never load from `file://`. The
   // packaged renderer does exactly that, so "hardening" this fuse off ships a white screen.

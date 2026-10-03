@@ -210,6 +210,33 @@ try {
       `slave viewport ${slaveViewport.width}x${slaveViewport.height}`,
   )
 
+  // --- WebGL availability: informational evidence, never a failure --------------------------------
+  // Whether a GL context exists decides whether the engine's WebGL spoofing can be validated at
+  // all, and it is the one thing about the fingerprint that needs a real browser to measure.
+  const webgl = await masterPage.evaluate(() => {
+    const gl = document.createElement('canvas').getContext('webgl')
+    if (!gl) {
+      return { available: false, webgl2: false }
+    }
+    const debug = gl.getExtension('WEBGL_debug_renderer_info')
+    return {
+      available: true,
+      webgl2: Boolean(document.createElement('canvas').getContext('webgl2')),
+      unmasked: Boolean(debug),
+      vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+      renderer: debug
+        ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)
+        : gl.getParameter(gl.RENDERER),
+    }
+  })
+  step(`webgl probe (headless=${headless}): ${JSON.stringify(webgl)}`)
+  if (!webgl.available) {
+    log(
+      'warn',
+      'this browser exposed no WebGL context — WebGL spoofing cannot be measured in this run',
+    )
+  }
+
   const clickX = 120
   const clickY = 140
   step(`clicking once in the master at (${clickX}, ${clickY})`)

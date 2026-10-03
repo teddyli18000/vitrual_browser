@@ -102,6 +102,10 @@ export const zhCN = {
 
   'detail.title': '环境详情',
   'detail.dataDir': '数据目录',
+  'detail.identity': '设备身份',
+  'detail.identityFixed': '已固定',
+  'detail.identityHint': '每次启动都会重新注入同一套硬件特征（内核 {engine}）',
+  'detail.identityMissing': '未生成 —— 每次启动都会变成另一台设备',
   'detail.usage': '占用空间',
   'detail.usageLoading': '统计中…',
   'detail.files': '{n} 个文件',

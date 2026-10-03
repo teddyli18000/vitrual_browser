@@ -142,7 +142,10 @@ describe('assembled server options', () => {
       return
     }
 
-    const generated = await createIdentity(FingerprintSchema.parse({ os: 'windows', geoip: false }), 'test')
+    const generated = await createIdentity(
+      FingerprintSchema.parse({ os: 'windows', geoip: false }),
+      'test',
+    )
     const profile = ProfileSchema.parse({
       id: 'stable',
       name: 'Stable',
@@ -152,18 +155,21 @@ describe('assembled server options', () => {
       identity: generated.identity,
     })
 
-    const first = camouConfig(await toServerOptions(profile, 'C:\\profiles\\stable\\userdata', () => {}))
+    const first = camouConfig(
+      await toServerOptions(profile, 'C:\\profiles\\stable\\userdata', () => {}),
+    )
     const second = camouConfig(
       await toServerOptions(profile, 'C:\\profiles\\stable\\userdata', () => {}),
     )
 
     // Identical bytes, not merely equivalent values: this is what the engine actually reads.
     expect(JSON.stringify(second)).toBe(JSON.stringify(first))
-    // And it is the identity we stored — with the UA version rewritten to the installed engine's
-    // major version by `fromBrowserforge(fingerprint, ffVersion)`, deterministically.
+    // And it is the identity we stored — with its version numbers rewritten to the installed
+    // engine's by `fromBrowserforge(fingerprint, ffVersion)`, deterministically.
     const storedUa = (generated.identity.fingerprint.navigator as { userAgent: string }).userAgent
+    const shape = (ua: string) => ua.replace(/\d+/g, '#')
     expect(String(first['navigator.userAgent'])).toMatch(/Firefox\/\d+\.0/)
-    expect(String(first['navigator.userAgent']).split('rv:')[1]).toBe(storedUa.split('rv:')[1])
+    expect(shape(String(first['navigator.userAgent']))).toBe(shape(storedUa))
     // The per-launch keys are pinned, so the canvas, audio and window position cannot drift either.
     expect(first['canvas:seed']).toBe(generated.config['canvas:seed'])
     expect(first['audio:seed']).toBe(generated.config['audio:seed'])

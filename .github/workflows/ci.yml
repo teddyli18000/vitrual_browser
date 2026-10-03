@@ -111,3 +111,58 @@ jobs:
         uses: ./.github/actions/engine-smoke
         with:
           headless: '1'
+
+  # Electron itself cannot run on the developer machine (the sandbox blocks the child stdio
+  # it needs, and the DSH harness injects ELECTRON_RUN_AS_NODE=1 into every shell), so the UI
+  # is screenshotted here: the built renderer is driven by headless Chromium against the real
+  # @vfox/server, with the preload bridge injected.
+  ui-screenshots:
+    name: UI screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Node.js and pnpm
+        uses: ./.github/actions/setup
+
+      - name: Build the workspace the renderer talks to
+        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build
+
+      # Keyed on the pinned Playwright version rather than the lockfile hash: the ~130 MB
+      # Chromium download then survives every unrelated dependency change.
+      - name: Resolve the Playwright version
+        id: playwright
+        shell: bash
+        run: |
+          version=$(node -e "const p=require('./apps/desktop/package.json');console.log((p.devDependencies&&p.devDependencies.playwright)||(p.dependencies&&p.dependencies.playwright)||'unpinned')")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Playwright version: $version"
+
+      - name: Restore the Playwright browser cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      - name: Install the Chromium the screenshot script drives
+        run: pnpm --filter @vfox/desktop exec playwright install --with-deps chromium
+
+      - name: Build the renderer
+        run: pnpm --filter @vfox/desktop build
+
+      - name: Capture the UI screenshots
+        run: node apps/desktop/scripts/screenshot-ui.mjs
+
+      # `if: always()` so the screenshots of a failing run are still retrievable — they are the
+      # evidence used to diagnose it. `error` (not `warn`) because "no PNGs" is itself a failure:
+      # a run that produces nothing to look at has not verified the UI.
+      - name: Upload the screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-screenshots
+          path: apps/desktop/.cache/shots/*.png
+          if-no-files-found: error
+          retention-days: 30

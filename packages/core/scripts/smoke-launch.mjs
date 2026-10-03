@@ -179,7 +179,8 @@ async function launchAndProbe(core, profile, label) {
 }
 
 /** PIDs of engine processes still holding this run's data directory. `null` if unavailable. */
-function orphanPids(dataDir) {  if (process.platform !== 'win32') {
+function orphanPids(dataDir) {
+  if (process.platform !== 'win32') {
     return null
   }
   const command = [
@@ -287,7 +288,12 @@ try {
       )
       const stable = differing.length === 0
       stability.push({ profileId: profile.id, identical: stable, differing })
-      emit('VFOX_SMOKE_RELAUNCH', { profileId: profile.id, identical: stable, differing, values: again })
+      emit('VFOX_SMOKE_RELAUNCH', {
+        profileId: profile.id,
+        identical: stable,
+        differing,
+        values: again,
+      })
       if (!stable) {
         fail(
           'fingerprint',
@@ -323,7 +329,22 @@ try {
   }
 
   const [first, second] = results
-  const distinct = DIMENSIONS.filter(
+  // WebGL is only a real dimension when both profiles actually reported a renderer. A null on
+  // either side means "no evidence in this environment": comparing it would either prove nothing or
+  // count a missing value as a difference.
+  const webglEvidence = first.webglVendor !== null && second.webglVendor !== null
+  if (!webglEvidence) {
+    emit(
+      'VFOX_SMOKE_WARN',
+      {
+        stage: 'webgl',
+        reason: 'no WebGL vendor was reported in this environment; the webgl dimension is excluded',
+      },
+      process.stderr,
+    )
+  }
+  const compared = webglEvidence ? DIMENSIONS : DIMENSIONS.filter(name => name !== 'webgl')
+  const distinct = compared.filter(
     dimension => dimensionValue(first, dimension) !== dimensionValue(second, dimension),
   )
 
@@ -332,12 +353,12 @@ try {
       `  ${dimension}: ${dimensionValue(first, dimension)} | ${dimensionValue(second, dimension)}`,
     )
   }
-  log(`compared ${DIMENSIONS.length} dimensions, ${distinct.length} differ: ${distinct.join(', ')}`)
+  log(`compared ${compared.length} dimensions, ${distinct.length} differ: ${distinct.join(', ')}`)
 
   if (distinct.length < REQUIRED_DISTINCT) {
     fail(
       'fingerprint',
-      `only ${distinct.length}/${DIMENSIONS.length} fingerprint dimensions differ between two profiles (need ${REQUIRED_DISTINCT})`,
+      `only ${distinct.length}/${compared.length} fingerprint dimensions differ between two profiles (need ${REQUIRED_DISTINCT})`,
       1,
       "the engine is not spoofing per profile — this is the product's core promise",
     )
@@ -346,7 +367,7 @@ try {
   emit('VFOX_SMOKE_OK', {
     headless,
     profiles: results,
-    compared: DIMENSIONS,
+    compared,
     distinct,
     distinctCount: distinct.length,
     requiredDistinct: REQUIRED_DISTINCT,

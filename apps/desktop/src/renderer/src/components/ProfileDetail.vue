@@ -61,6 +61,15 @@ async function copyEndpoint(): Promise<void> {
     </div>
 
     <div class="cell">
+      <div class="k">{{ t('detail.identity') }}</div>
+      <div v-if="profile.identity" class="v">
+        <ElTag type="success" size="small" effect="plain">{{ t('detail.identityFixed') }}</ElTag>
+        <div class="hint">{{ t('detail.identityHint', { engine: profile.identity.engine ?? '—' }) }}</div>
+      </div>
+      <div v-else class="v err">{{ t('detail.identityMissing') }}</div>
+    </div>
+
+    <div class="cell">
       <div class="k">{{ t('detail.usage') }}</div>
       <div class="v">
         <template v-if="measuring">{{ t('detail.usageLoading') }}</template>

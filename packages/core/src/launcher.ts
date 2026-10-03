@@ -41,8 +41,8 @@
 
 import { spawnSync } from 'node:child_process'
 import type { Profile } from '@vfox/shared'
-import { firefox } from 'playwright-core'
 import type { LaunchOptions } from 'camoufox-js'
+import { firefox } from 'playwright-core'
 import { type FingerprintWarning, toEngineOptions } from './fingerprint.js'
 
 export interface BrowserExit {

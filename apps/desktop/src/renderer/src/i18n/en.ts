@@ -103,6 +103,12 @@ export const en: Messages = {
 
   'detail.title': 'Profile detail',
   'detail.dataDir': 'Data directory',
+  'detail.identity': 'Device identity',
+  'detail.identityFixed': 'Pinned',
+  'detail.identityHint':
+    'The same hardware traits are re-injected on every launch (engine {engine})',
+  'detail.identityMissing':
+    'Not generated — this profile becomes a different device on every launch',
   'detail.usage': 'Disk usage',
   'detail.usageLoading': 'Measuring…',
   'detail.files': '{n} file(s)',

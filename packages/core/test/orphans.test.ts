@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { reconcileOrphans, type EngineProcess } from '../src/orphans.js'
+import { type EngineProcess, reconcileOrphans } from '../src/orphans.js'
 
 let dataDir: string
 

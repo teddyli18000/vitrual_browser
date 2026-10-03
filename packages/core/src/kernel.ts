@@ -193,7 +193,8 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
 }
 
 /** Stream the engine archive into `staging` and return its path, reporting real byte counts. */
-async function downloadEngine(  fetcher: CamoufoxFetcher,
+async function downloadEngine(
+  fetcher: CamoufoxFetcher,
   staging: string,
   emit: ProgressReporter,
 ): Promise<string> {

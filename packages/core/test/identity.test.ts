@@ -1,5 +1,5 @@
+import { FingerprintSchema, type Profile, ProfileSchema } from '@vfox/shared'
 import { describe, expect, it } from 'vitest'
-import { FingerprintSchema, ProfileSchema, type Profile } from '@vfox/shared'
 import { createIdentity, identityInputs, identityIsCurrent } from '../src/identity.js'
 
 function profile(overrides: Record<string, unknown> = {}): Profile {
@@ -94,7 +94,11 @@ describe('identityInputs', () => {
     const base = FingerprintSchema.parse({})
     expect(identityInputs(FingerprintSchema.parse({ os: 'macos' }))).not.toBe(identityInputs(base))
     expect(
-      identityInputs(FingerprintSchema.parse({ screen: { minWidth: 1000, maxWidth: 1000, minHeight: 700, maxHeight: 700 } })),
+      identityInputs(
+        FingerprintSchema.parse({
+          screen: { minWidth: 1000, maxWidth: 1000, minHeight: 700, maxHeight: 700 },
+        }),
+      ),
     ).not.toBe(identityInputs(base))
     expect(
       identityInputs(FingerprintSchema.parse({ window: { width: 800, height: 600 } })),
@@ -129,8 +133,8 @@ describe('identityIsCurrent', () => {
 
   it('keeps an identity when the engine version is unknown', () => {
     expect(identityIsCurrent(profile({ identity }), null)).toBe(true)
-    expect(
-      identityIsCurrent(profile({ identity: { ...identity, engine: null } }), '152.0.4'),
-    ).toBe(true)
+    expect(identityIsCurrent(profile({ identity: { ...identity, engine: null } }), '152.0.4')).toBe(
+      true,
+    )
   })
 })

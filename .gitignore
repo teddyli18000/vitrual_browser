@@ -4,6 +4,10 @@ dist/
 out/
 release/
 .cache/
+# Per-package local scaffolding (sandbox test harnesses etc.) — never shipped.
+.local/
+**/.local/
+*.tsbuildinfo
 *.log
 .DS_Store
 Thumbs.db

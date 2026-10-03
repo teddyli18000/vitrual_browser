@@ -21,12 +21,7 @@
  *     chosen pair is pinned in `fingerprint.webgl`.
  */
 
-import type {
-  FingerprintConfig,
-  FingerprintIdentity,
-  Profile,
-  WebglPair,
-} from '@vfox/shared'
+import type { FingerprintConfig, FingerprintIdentity, Profile, WebglPair } from '@vfox/shared'
 
 /** CAMOU_CONFIG keys the engine would otherwise randomise per launch. */
 const PER_LAUNCH_RANDOM_KEYS = [
@@ -68,9 +63,7 @@ export async function createIdentity(
   fingerprint: FingerprintConfig,
   engine: string | null,
 ): Promise<CreatedIdentity> {
-  const { fromBrowserforge, generateFingerprint } = await import(
-    'camoufox-js/dist/fingerprints.js'
-  )
+  const { fromBrowserforge, generateFingerprint } = await import('camoufox-js/dist/fingerprints.js')
 
   // Mirrors what `launchOptions()` does when it is not given a fingerprint (dist/utils.js:400-406):
   // same generator, same inputs, so a stored identity is exactly what a fresh launch would produce.
