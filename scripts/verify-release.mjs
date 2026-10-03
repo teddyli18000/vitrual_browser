@@ -466,16 +466,23 @@ if (!existsSync(resourcesDir)) {
     `impit native binary present as a file (found ${JSON.stringify(nativeModules.slice(0, 3))})`,
   )
 
-  const mainBundle = path.join(repoRoot, 'apps', 'desktop', 'out', 'main', 'index.js')
-  if (!existsSync(mainBundle)) {
-    check('packaged-app', false, `${mainBundle} not found`)
+  // The main process is built as CommonJS (`.cjs`) on purpose: electron-vite emits ESM when the
+  // app package is `"type": "module"`, and Electron's own `electron` module is CJS with dynamically
+  // defined exports, so an ESM main process cannot import it. Accept either extension so a future
+  // build-format change surfaces as a real assertion failure rather than "file not found".
+  const mainDir = path.join(repoRoot, 'apps', 'desktop', 'out', 'main')
+  const mainBundle = ['index.cjs', 'index.js', 'index.mjs']
+    .map(name => path.join(mainDir, name))
+    .find(candidate => existsSync(candidate))
+  if (!mainBundle) {
+    check('packaged-app', false, `no main bundle found in ${mainDir}`)
   } else {
     const source = readFileSync(mainBundle, 'utf8')
     const size = statSync(mainBundle).size
     check(
       'packaged-app',
       size < 2 * 1024 * 1024,
-      `apps/desktop/out/main/index.js is ${(size / 1024).toFixed(1)} KB`,
+      `${path.relative(repoRoot, mainBundle)} is ${(size / 1024).toFixed(1)} KB`,
     )
     check(
       'packaged-app',
