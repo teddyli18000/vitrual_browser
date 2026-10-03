@@ -5,43 +5,29 @@
  * machine's sandbox), so every test drives these objects instead: they record exactly which
  * Playwright calls the synchroniser made, and let a test pretend a window is slow, has no page,
  * or disconnects.
+ *
+ * Plain `.mjs` on purpose: Vite transpiles TypeScript with esbuild, whose service process needs a
+ * piped stdio slot this sandbox refuses, so a `.ts` test could never run locally. The tests import
+ * the built `dist/` output, exactly like `packages/server` does.
  */
 
-import type { CoreLogger } from '@vfox/core'
-import type {
-  BindingSourceLike,
-  BrowserConnector,
-  BrowserLike,
-  ContextLike,
-  Disposable,
-  KeyboardLike,
-  MouseLike,
-  PageLike,
-  ViewportSize,
-} from '../../src/browser.js'
-
-export interface ReplayCall {
-  method: 'move' | 'down' | 'up' | 'click' | 'wheel' | 'key-down' | 'key-up'
-  args: unknown[]
-}
-
-export class FakePage implements PageLike {
-  readonly calls: ReplayCall[] = []
-  readonly evaluated: string[] = []
-  readonly mouse: MouseLike
-  readonly keyboard: KeyboardLike
+export class FakePage {
+  calls = []
+  evaluated = []
+  mouse
+  keyboard
 
   /** While set, every replay call waits on it — a slow slave. */
-  gate: Promise<void> | null = null
+  gate = null
   /** Makes the next `evaluate()` reject, like a page that is navigating away. */
-  failEvaluate: string | null = null
+  failEvaluate = null
 
-  #fixedViewport: ViewportSize | null = null
-  #measured: ViewportSize = { width: 1280, height: 800 }
+  #fixedViewport = null
+  #measured = { width: 1280, height: 800 }
   #closed = false
-  readonly #closeListeners = new Set<() => void>()
+  #closeListeners = new Set()
 
-  constructor(options: { fixedViewport?: ViewportSize; measured?: ViewportSize } = {}) {
+  constructor(options = {}) {
     if (options.fixedViewport) {
       this.#fixedViewport = options.fixedViewport
     }
@@ -82,15 +68,15 @@ export class FakePage implements PageLike {
     }
   }
 
-  setMeasuredViewport(size: ViewportSize): void {
+  setMeasuredViewport(size) {
     this.#measured = size
   }
 
-  viewportSize(): ViewportSize | null {
+  viewportSize() {
     return this.#fixedViewport
   }
 
-  async evaluate<T>(expression: string): Promise<T> {
+  async evaluate(expression) {
     this.evaluated.push(expression)
     if (this.failEvaluate) {
       const failure = this.failEvaluate
@@ -98,63 +84,57 @@ export class FakePage implements PageLike {
       throw new Error(failure)
     }
     if (expression.includes('innerWidth')) {
-      return { width: this.#measured.width, height: this.#measured.height } as T
+      return { width: this.#measured.width, height: this.#measured.height }
     }
-    return undefined as T
+    return undefined
   }
 
-  isClosed(): boolean {
+  isClosed() {
     return this.#closed
   }
 
-  on(_event: 'close', listener: () => void): this {
+  on(_event, listener) {
     this.#closeListeners.add(listener)
     return this
   }
 
-  off(_event: 'close', listener: () => void): this {
+  off(_event, listener) {
     this.#closeListeners.delete(listener)
     return this
   }
 
   /** Test helper: the user closed this window. */
-  closeWindow(): void {
+  closeWindow() {
     this.#closed = true
     for (const listener of [...this.#closeListeners]) {
       listener()
     }
   }
 
-  async #waitForGate(): Promise<void> {
+  async #waitForGate() {
     if (this.gate) {
       await this.gate
     }
   }
 }
 
-export class FakeContext implements ContextLike {
-  readonly pageList: FakePage[] = []
-  readonly initScripts: string[] = []
-  binding: {
-    name: string
-    callback: (source: BindingSourceLike, payload: unknown) => unknown
-  } | null = null
+export class FakeContext {
+  pageList = []
+  initScripts = []
+  binding = null
   bindingDisposed = false
 
-  readonly #pageListeners = new Set<(page: FakePage) => void>()
+  #pageListeners = new Set()
 
-  pages(): FakePage[] {
+  pages() {
     return [...this.pageList]
   }
 
-  get pageListenerCount(): number {
+  get pageListenerCount() {
     return this.#pageListeners.size
   }
 
-  async exposeBinding(
-    name: string,
-    callback: (source: BindingSourceLike, payload: unknown) => unknown,
-  ): Promise<Disposable> {
+  async exposeBinding(name, callback) {
     if (this.binding) {
       throw new Error(`Function "${name}" has been already registered`)
     }
@@ -167,7 +147,7 @@ export class FakeContext implements ContextLike {
     }
   }
 
-  async addInitScript(script: string): Promise<Disposable> {
+  async addInitScript(script) {
     this.initScripts.push(script)
     return {
       dispose: async () => {
@@ -179,18 +159,18 @@ export class FakeContext implements ContextLike {
     }
   }
 
-  on(_event: 'page', listener: (page: FakePage) => void): this {
+  on(_event, listener) {
     this.#pageListeners.add(listener)
     return this
   }
 
-  off(_event: 'page', listener: (page: FakePage) => void): this {
+  off(_event, listener) {
     this.#pageListeners.delete(listener)
     return this
   }
 
   /** Test helper: a window (or tab) appears in this context. */
-  openPage(page: FakePage = new FakePage()): FakePage {
+  openPage(page = new FakePage()) {
     this.pageList.push(page)
     for (const listener of [...this.#pageListeners]) {
       listener(page)
@@ -199,7 +179,7 @@ export class FakeContext implements ContextLike {
   }
 
   /** Test helper: the master page reports one input event through the binding. */
-  report(payload: unknown): unknown {
+  report(payload) {
     const binding = this.binding
     if (!binding) {
       throw new Error('this context has no sync binding installed')
@@ -212,59 +192,50 @@ export class FakeContext implements ContextLike {
   }
 }
 
-export class FakeBrowser implements BrowserLike {
-  readonly contexts_: FakeContext[] = []
+export class FakeBrowser {
+  contexts_ = []
   /** `close()` on a connected browser closes the connection, never the user's window. */
   connectionClosed = false
 
-  readonly #disconnected = new Set<() => void>()
+  #disconnected = new Set()
 
-  contexts(): FakeContext[] {
+  contexts() {
     return [...this.contexts_]
   }
 
-  get disconnectListenerCount(): number {
+  get disconnectListenerCount() {
     return this.#disconnected.size
   }
 
-  async close(): Promise<void> {
+  async close() {
     this.connectionClosed = true
   }
 
-  on(_event: 'disconnected', listener: () => void): this {
+  on(_event, listener) {
     this.#disconnected.add(listener)
     return this
   }
 
-  off(_event: 'disconnected', listener: () => void): this {
+  off(_event, listener) {
     this.#disconnected.delete(listener)
     return this
   }
 
   /** Test helper: the browser process went away (window closed, crash, engine stop). */
-  disconnect(): void {
+  disconnect() {
     for (const listener of [...this.#disconnected]) {
       listener()
     }
   }
 }
 
-export interface FakeProfile {
-  id: string
-  name: string
-  browser: FakeBrowser
-  context: FakeContext
-  page: FakePage
-  target: { wsEndpoint: string | null; pid: number | null; name: string }
-}
-
 /** A set of fake profiles plus the connector the session attaches through. */
 export class FakeWorld {
-  readonly connectCalls: string[] = []
-  readonly profiles = new Map<string, FakeProfile>()
-  readonly #dead = new Set<string>()
+  connectCalls = []
+  profiles = new Map()
+  #dead = new Set()
 
-  readonly connect: BrowserConnector = async wsEndpoint => {
+  connect = async wsEndpoint => {
     this.connectCalls.push(wsEndpoint)
     if (this.#dead.has(wsEndpoint)) {
       throw new Error(`fake: nothing is listening on ${wsEndpoint}`)
@@ -278,20 +249,16 @@ export class FakeWorld {
   }
 
   /** Test helper: the profile still advertises this endpoint, but nothing answers on it. */
-  kill(wsEndpoint: string): () => void {
+  kill(wsEndpoint) {
     this.#dead.add(wsEndpoint)
     return () => {
       this.#dead.delete(wsEndpoint)
     }
   }
 
-  readonly resolve = (profileId: string): FakeProfile['target'] | undefined =>
-    this.profiles.get(profileId)?.target
+  resolve = profileId => this.profiles.get(profileId)?.target
 
-  add(
-    id: string,
-    options: { pid?: number; page?: FakePage; withPage?: boolean; name?: string } = {},
-  ): FakeProfile {
+  add(id, options = {}) {
     const context = new FakeContext()
     const page = options.page ?? new FakePage()
     if (options.withPage !== false) {
@@ -299,7 +266,7 @@ export class FakeWorld {
     }
     const browser = new FakeBrowser()
     browser.contexts_.push(context)
-    const profile: FakeProfile = {
+    const profile = {
       id,
       name: options.name ?? id,
       browser,
@@ -317,25 +284,16 @@ export class FakeWorld {
 }
 
 /** A master input report, shaped exactly like the injected listener's payload. */
-export function mousePayload(
-  kind: 'mousedown' | 'mouseup' | 'click' | 'mousemove' | 'wheel',
-  x: number,
-  y: number,
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
+export function mousePayload(kind, x, y, extra = {}) {
   return { kind, x, y, button: 0, vw: 1280, vh: 800, ...extra }
 }
 
-export function keyPayload(
-  kind: 'keydown' | 'keyup',
-  key: string,
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
+export function keyPayload(kind, key, extra = {}) {
   return { kind, key, vw: 1280, vh: 800, ...extra }
 }
 
 /** Resolves when `check()` is true, or throws after `timeoutMs`. */
-export async function waitFor(check: () => boolean, timeoutMs = 2000): Promise<void> {
+export async function waitFor(check, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs
   while (!check()) {
     if (Date.now() > deadline) {
@@ -346,24 +304,18 @@ export async function waitFor(check: () => boolean, timeoutMs = 2000): Promise<v
 }
 
 /** A `CoreLogger` that keeps what it was told, so tests can assert on warnings. */
-export interface TestLogger {
-  logger: CoreLogger
-  warnings: string[]
-  debug: string[]
-}
-
-export function testLogger(): TestLogger {
-  const warnings: string[] = []
-  const debug: string[] = []
+export function testLogger() {
+  const warnings = []
+  const debug = []
   return {
     warnings,
     debug,
     logger: {
-      debug: (message: string) => {
+      debug: message => {
         debug.push(message)
       },
       info() {},
-      warn: (message: string) => {
+      warn: message => {
         warnings.push(message)
       },
       error() {},

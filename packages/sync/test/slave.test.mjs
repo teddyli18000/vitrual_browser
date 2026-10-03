@@ -1,22 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { ViewportTracker } from '../src/mapping.js'
-import { type MirrorEvent, normalizeMirrorEvent } from '../src/mirror.js'
-import { SlaveMirror, type SlaveOptions } from '../src/slave.js'
-import {
-  FakePage,
-  FakeWorld,
-  mousePayload,
-  type TestLogger,
-  testLogger,
-  waitFor,
-} from './helpers/fake-browser.js'
+import { ViewportTracker } from '../dist/mapping.js'
+import { normalizeMirrorEvent } from '../dist/mirror.js'
+import { SlaveMirror } from '../dist/slave.js'
+import { FakePage, FakeWorld, mousePayload, testLogger, waitFor } from './helpers/fake-browser.mjs'
 
-function event(
-  kind: 'mousedown' | 'mouseup' | 'click' | 'mousemove' | 'wheel',
-  x: number,
-  y: number,
-  extra: Record<string, unknown> = {},
-): MirrorEvent {
+function event(kind, x, y, extra = {}) {
   const normalized = normalizeMirrorEvent(mousePayload(kind, x, y, extra))
   if (!normalized) {
     throw new Error('the test payload was not normalised')
@@ -24,7 +12,7 @@ function event(
   return normalized
 }
 
-function keyEvent(kind: 'keydown' | 'keyup', key: string): MirrorEvent {
+function keyEvent(kind, key) {
   const normalized = normalizeMirrorEvent({ kind, key, vw: 1280, vh: 800 })
   if (!normalized) {
     throw new Error('the test payload was not normalised')
@@ -32,18 +20,7 @@ function keyEvent(kind: 'keydown' | 'keyup', key: string): MirrorEvent {
   return normalized
 }
 
-interface Harness {
-  world: FakeWorld
-  slave: SlaveMirror
-  page: FakePage
-  logger: TestLogger
-}
-
-async function attach(
-  world: FakeWorld,
-  profileId: string,
-  overrides: Partial<SlaveOptions> = {},
-): Promise<Harness> {
+async function attach(world, profileId, overrides = {}) {
   const profile = world.profiles.get(profileId)
   if (!profile) {
     throw new Error(`unknown fake profile ${profileId}`)
@@ -62,7 +39,7 @@ async function attach(
   return { world, slave, page: profile.page, logger }
 }
 
-function methods(page: FakePage): string[] {
+function methods(page) {
   return page.calls.map(call => call.method)
 }
 
@@ -99,8 +76,8 @@ describe('SlaveMirror', () => {
     world.add('slave')
     const { slave, page } = await attach(world, 'slave')
 
-    let release = (): void => {}
-    page.gate = new Promise<void>(resolve => {
+    let release = () => {}
+    page.gate = new Promise(resolve => {
       release = resolve
     })
 
@@ -126,8 +103,8 @@ describe('SlaveMirror', () => {
     world.add('slave')
     const { slave, page } = await attach(world, 'slave', { limits: { moves: 100, queue: 1 } })
 
-    let release = (): void => {}
-    page.gate = new Promise<void>(resolve => {
+    let release = () => {}
+    page.gate = new Promise(resolve => {
       release = resolve
     })
 
@@ -148,8 +125,8 @@ describe('SlaveMirror', () => {
     world.add('slave')
     const { slave, page, logger } = await attach(world, 'slave', { limits: { queue: 1 } })
 
-    let release = (): void => {}
-    page.gate = new Promise<void>(resolve => {
+    let release = () => {}
+    page.gate = new Promise(resolve => {
       release = resolve
     })
 
@@ -241,7 +218,7 @@ describe('SlaveMirror', () => {
   it('reports a disconnected browser to the session', async () => {
     const world = new FakeWorld()
     const profile = world.add('slave')
-    const gone: string[] = []
+    const gone = []
     const { slave } = await attach(world, 'slave', { onGone: id => gone.push(id) })
 
     profile.browser.disconnect()

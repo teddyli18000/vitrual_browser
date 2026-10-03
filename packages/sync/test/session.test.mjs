@@ -1,30 +1,17 @@
-import type { SyncSession } from '@vfox/shared'
 import { describe, expect, it, vi } from 'vitest'
-import { SyncError } from '../src/errors.js'
-import { SYNC_LISTENER_SOURCE, SYNC_TEARDOWN_SOURCE } from '../src/mirror.js'
-import { createSyncWith } from '../src/session.js'
+import { SyncError } from '../dist/errors.js'
+import { SYNC_LISTENER_SOURCE, SYNC_TEARDOWN_SOURCE } from '../dist/mirror.js'
+import { createSyncWith } from '../dist/session.js'
 import {
-  type FakeProfile,
   FakeWorld,
   keyPayload,
   mousePayload,
-  type TestLogger,
   testLogger,
   waitFor,
-} from './helpers/fake-browser.js'
-import { FakeTileBackend } from './helpers/fake-tile.js'
+} from './helpers/fake-browser.mjs'
+import { FakeTileBackend } from './helpers/fake-tile.mjs'
 
-interface Harness {
-  world: FakeWorld
-  master: FakeProfile
-  slaveA: FakeProfile
-  slaveB: FakeProfile
-  logger: TestLogger
-  tile: FakeTileBackend
-  sync: ReturnType<typeof createSyncWith>
-}
-
-function harness(): Harness {
+function harness() {
   const world = new FakeWorld()
   const master = world.add('master', { pid: 1111 })
   const slaveA = world.add('slave-a', { pid: 2222 })
@@ -48,23 +35,18 @@ const startInput = {
   slaveProfileIds: ['slave-a', 'slave-b'],
 }
 
-async function expectSyncError(
-  promise: Promise<unknown>,
-  code: string,
-  messagePart: string,
-): Promise<void> {
+async function expectSyncError(promise, code, messagePart) {
   await expect(promise).rejects.toBeInstanceOf(SyncError)
   try {
     await promise
     throw new Error('expected the promise to reject')
   } catch (error) {
-    const failure = error as SyncError
-    expect(failure.code).toBe(code)
-    expect(failure.message).toContain(messagePart)
+    expect(error.code).toBe(code)
+    expect(error.message).toContain(messagePart)
   }
 }
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 describe('start validation', () => {
   it('rejects an unknown master profile by name', async () => {
@@ -219,7 +201,7 @@ describe('start', () => {
 
   it('emits the new session to every change listener', async () => {
     const { sync } = harness()
-    const seen: (SyncSession | null)[] = []
+    const seen = []
     sync.on('change', session => seen.push(session))
 
     await sync.start(startInput)
@@ -298,7 +280,7 @@ describe('mirroring', () => {
     vi.useFakeTimers()
     try {
       const { sync, master } = harness()
-      const seen: (SyncSession | null)[] = []
+      const seen = []
       sync.on('change', session => seen.push(session))
       await sync.start(startInput)
 
@@ -319,7 +301,7 @@ describe('mirroring', () => {
 
   it('keeps one failing change listener from breaking the others', async () => {
     const { sync, logger } = harness()
-    const seen: (SyncSession | null)[] = []
+    const seen = []
     sync.on('change', () => {
       throw new Error('listener exploded')
     })
@@ -334,7 +316,7 @@ describe('mirroring', () => {
 
   it('stops delivering after unsubscribe', async () => {
     const { sync } = harness()
-    const seen: (SyncSession | null)[] = []
+    const seen = []
     const unsubscribe = sync.on('change', session => seen.push(session))
     unsubscribe()
 
@@ -348,7 +330,7 @@ describe('mirroring', () => {
 describe('stop', () => {
   it('detaches cleanly and reports a null session', async () => {
     const { sync, master, slaveA, slaveB, world } = harness()
-    const seen: (SyncSession | null)[] = []
+    const seen = []
     await sync.start(startInput)
     sync.on('change', session => seen.push(session))
 
@@ -379,7 +361,7 @@ describe('stop', () => {
 
   it('closes the synchroniser and releases its listeners', async () => {
     const { sync } = harness()
-    const seen: (SyncSession | null)[] = []
+    const seen = []
     sync.on('change', session => seen.push(session))
 
     await sync.close()
@@ -393,7 +375,7 @@ describe('stop', () => {
 describe('browser disconnects', () => {
   it('stops the session when the master window goes away', async () => {
     const { sync, master } = harness()
-    const seen: (SyncSession | null)[] = []
+    const seen = []
     await sync.start(startInput)
     sync.on('change', session => seen.push(session))
 
@@ -406,7 +388,7 @@ describe('browser disconnects', () => {
 
   it('drops a slave that goes away and stops when none is left', async () => {
     const { sync, slaveA, slaveB } = harness()
-    const seen: (SyncSession | null)[] = []
+    const seen = []
     await sync.start(startInput)
     sync.on('change', session => seen.push(session))
 

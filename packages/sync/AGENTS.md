@@ -46,12 +46,21 @@ CI runs the real thing: `pnpm --filter @vfox/sync test`, and
 `node packages/sync/scripts/smoke-sync.mjs` after a build (two profiles through `@vfox/core`, a
 click in the master, the slave must report it, then both windows must survive the detach).
 
-Locally, **no browser can be spawned or connected to** (the sandbox denies piped stdio →
-`spawn EPERM`), and **vitest cannot run at all** in the sandbox (esbuild's service, then Vite's
-`net use`). To execute the unit tests locally anyway: compile `src` + `test` with `tsc` into a
-throwaway directory that keeps the relative layout, and run vitest over the emitted JavaScript with
-`--configLoader native --root <that dir>` and `resolve.preserveSymlinks: true`. Delete the directory
-afterwards; never commit it.
+The unit suite runs locally too, through the same launcher as `packages/server` and `packages/cli`:
+
+```powershell
+pnpm --filter @vfox/sync test    # tsc -b && node test/run-vitest.mjs run --passWithNoTests --pool=threads
+```
+
+Three sandbox walls had to be worked around, and the shape of the test files is a consequence:
+Vite bundles any `vitest.config.*` with esbuild (whose service needs a pipe), its Windows path
+handling calls `exec("net use")`, and it transpiles TypeScript with that same esbuild. So there is
+**no config file** — every option is a command-line flag — `test/sandbox-preload.mjs` answers the
+`net use` probe, `--pool=threads` avoids the piped `fork()`, and the tests are plain `.mjs` that
+import the built `dist/`, which is exactly what ships. `src/` stays strict TypeScript.
+
+A real browser still cannot be spawned here (the same pipe ban hits Playwright), so mirroring is
+proven by the fake Playwright layer locally and by the smoke script in CI.
 
 `scripts/probe-tiling.mjs` verifies the FFI layer without a browser:
 

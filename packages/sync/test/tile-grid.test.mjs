@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { computeTileGrid, gridShape, type Rect, TILE_GAP } from '../src/tile-grid.js'
+import { computeTileGrid, gridShape, TILE_GAP } from '../dist/tile-grid.js'
 
-const workArea: Rect = { x: 0, y: 0, width: 1920, height: 1040 }
+const workArea = { x: 0, y: 0, width: 1920, height: 1040 }
 
-function overlaps(a: Rect, b: Rect): boolean {
+function overlaps(a, b) {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
-function right(rect: Rect): number {
+function right(rect) {
   return rect.x + rect.width
 }
 
-function bottom(rect: Rect): number {
+function bottom(rect) {
   return rect.y + rect.height
 }
 
@@ -48,9 +48,9 @@ describe('computeTileGrid', () => {
   })
 
   it('keeps every window inside the work area, taskbar included', () => {
-    const area: Rect = { x: 0, y: 0, width: 1920, height: 1040 }
+    const area = { x: 0, y: 0, width: 1920, height: 1040 }
     for (const count of [1, 2, 3, 4, 5, 6, 7, 8, 12]) {
-      for (const layout of ['grid', 'rows', 'columns'] as const) {
+      for (const layout of ['grid', 'rows', 'columns']) {
         for (const rect of computeTileGrid(count, layout, area)) {
           expect(rect.x).toBeGreaterThanOrEqual(area.x)
           expect(rect.y).toBeGreaterThanOrEqual(area.y)
@@ -66,21 +66,17 @@ describe('computeTileGrid', () => {
   it('offsets the whole grid when the work area starts elsewhere', () => {
     const rects = computeTileGrid(2, 'grid', { x: 1920, y: -200, width: 800, height: 600 })
 
-    expect(rects[0]?.x).toBe(1920)
-    expect(rects[0]?.y).toBe(-200)
-    expect(rects[1]?.x).toBe(1920 + 399 + TILE_GAP)
-    expect(rects[1]?.y).toBe(-200)
+    expect(rects[0].x).toBe(1920)
+    expect(rects[0].y).toBe(-200)
+    expect(rects[1].x).toBe(1920 + 399 + TILE_GAP)
+    expect(rects[1].y).toBe(-200)
   })
 
   it('never overlaps two windows', () => {
     const rects = computeTileGrid(6, 'grid', workArea)
     for (let a = 0; a < rects.length; a += 1) {
       for (let b = a + 1; b < rects.length; b += 1) {
-        const first = rects[a]
-        const second = rects[b]
-        if (first && second) {
-          expect(overlaps(first, second)).toBe(false)
-        }
+        expect(overlaps(rects[a], rects[b])).toBe(false)
       }
     }
   })
@@ -89,19 +85,19 @@ describe('computeTileGrid', () => {
     const rects = computeTileGrid(5, 'grid', workArea)
 
     expect(rects).toHaveLength(5)
-    expect(rects[3]?.x).toBe(0)
-    expect(rects[4]?.x).toBe(rects[1]?.x)
-    expect(rects[4]?.y).toBe(rects[3]?.y)
+    expect(rects[3].x).toBe(0)
+    expect(rects[4].x).toBe(rects[1].x)
+    expect(rects[4].y).toBe(rects[3].y)
   })
 
   it('stacks rows and columns as asked', () => {
     const rows = computeTileGrid(3, 'rows', workArea)
     expect(rows.map(rect => rect.x)).toEqual([0, 0, 0])
-    expect(rows[0]?.width).toBe(workArea.width)
+    expect(rows[0].width).toBe(workArea.width)
 
     const columns = computeTileGrid(3, 'columns', workArea)
     expect(columns.map(rect => rect.y)).toEqual([0, 0, 0])
-    expect(columns[0]?.height).toBe(workArea.height)
+    expect(columns[0].height).toBe(workArea.height)
   })
 
   it('degrades to one pixel instead of producing a negative size on a tiny screen', () => {

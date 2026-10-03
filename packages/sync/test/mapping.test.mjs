@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { clampPoint, mapPoint, normalizeViewport, ViewportTracker } from '../src/mapping.js'
-import { FakePage } from './helpers/fake-browser.js'
+import { clampPoint, mapPoint, normalizeViewport, ViewportTracker } from '../dist/mapping.js'
+import { FakePage } from './helpers/fake-browser.mjs'
 
 describe('mapPoint', () => {
   it('is the identity when master and slave have the same viewport', () => {

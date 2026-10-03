@@ -17,8 +17,8 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run --passWithNoTests",
-    "lint": "biome check src",
+    "test": "tsc -b && node test/run-vitest.mjs run --passWithNoTests --pool=threads",
+    "lint": "biome check src test",
     "smoke": "node scripts/smoke-sync.mjs"
   },
   "dependencies": {

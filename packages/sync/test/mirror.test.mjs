@@ -6,31 +6,15 @@ import {
   SYNC_LISTENER_SOURCE,
   SYNC_TEARDOWN_SOURCE,
   WHEEL_LINE_HEIGHT_PX,
-} from '../src/mirror.js'
-import { FakePage, keyPayload, mousePayload } from './helpers/fake-browser.js'
+} from '../dist/mirror.js'
+import { FakePage, keyPayload, mousePayload } from './helpers/fake-browser.mjs'
 
 /* ---------------------------------------------------------------- injected page listener */
 
-interface FakeWindow {
-  innerWidth: number
-  innerHeight: number
-  top: unknown
-  __vfoxSyncInstalled?: boolean
-  __vfoxSyncTeardown?: () => void
-  __vfoxSyncReport?: (payload: unknown) => void
-  addEventListener(type: string, handler: (event: unknown) => void, capture?: boolean): void
-  removeEventListener(type: string, handler: (event: unknown) => void, capture?: boolean): void
-  dispatch(type: string, event: Record<string, unknown>): void
-  listenerCount(): number
-}
-
-function createWindow(report?: (payload: unknown) => void): {
-  win: FakeWindow
-  reported: unknown[]
-} {
-  const reported: unknown[] = []
-  const listeners = new Map<string, Set<(event: unknown) => void>>()
-  const win: FakeWindow = {
+function createWindow(report) {
+  const reported = []
+  const listeners = new Map()
+  const win = {
     innerWidth: 1280,
     innerHeight: 800,
     top: undefined,
@@ -63,17 +47,17 @@ function createWindow(report?: (payload: unknown) => void): {
   return { win, reported }
 }
 
-function install(win: FakeWindow): void {
+function install(win) {
   // The source is a string because it runs inside the page; running it against a fake window is
   // the only way to test it without a browser.
   new Function('window', SYNC_LISTENER_SOURCE)(win)
 }
 
-function teardown(win: FakeWindow): void {
+function teardown(win) {
   new Function('window', SYNC_TEARDOWN_SOURCE)(win)
 }
 
-const trusted = (extra: Record<string, unknown>): Record<string, unknown> => ({
+const trusted = extra => ({
   isTrusted: true,
   clientX: 10,
   clientY: 20,
@@ -155,10 +139,7 @@ describe('the injected master listener', () => {
     win.dispatch('mousemove', trusted({ clientX: 3 }))
     win.dispatch('mousedown', trusted({ clientX: 4 }))
 
-    expect(reported.map(payload => (payload as { kind: string }).kind)).toEqual([
-      'mousemove',
-      'mousedown',
-    ])
+    expect(reported.map(payload => payload.kind)).toEqual(['mousemove', 'mousedown'])
   })
 
   it('installs once, even when the init script runs again after a navigation', () => {
@@ -232,7 +213,7 @@ describe('normalizeMirrorEvent', () => {
 
 /* --------------------------------------------------------------------------------- replay */
 
-function methods(page: FakePage): string[] {
+function methods(page) {
   return page.calls.map(call => call.method)
 }
 
