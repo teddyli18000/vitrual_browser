@@ -119,8 +119,12 @@ export const ProfileRuntimeSchema = z.object({
   status: RuntimeStatusSchema,
   pid: z.number().int().nullable().default(null),
   /**
-   * Playwright (Juggler) server endpoint for this profile. External automation attaches with
-   * `firefox.connect(wsEndpoint)` from playwright-core — the Firefox engine has no CDP port.
+   * Reserved. Always null in v0.1: the engine is launched as a *persistent* context
+   * (`launchPersistentContext`) so every profile keeps its own isolated, durable profile
+   * directory, and playwright-core refuses to expose a websocket server for persistent
+   * launches (it also throws if `-profile` is passed through `args`). External Playwright
+   * attach therefore has no endpoint yet; the field exists so adding one is not a breaking
+   * contract change.
    */
   wsEndpoint: z.string().nullable().default(null),
   startedAt: z.string().nullable().default(null),
@@ -137,6 +141,26 @@ export const KernelInfoSchema = z.object({
   source: z.enum(['cache', 'bundled', 'missing']),
 })
 export type KernelInfo = z.infer<typeof KernelInfoSchema>
+
+export const KernelPhaseSchema = z.enum([
+  'idle',
+  'checking',
+  'downloading',
+  'extracting',
+  'done',
+  'error',
+])
+export type KernelPhase = z.infer<typeof KernelPhaseSchema>
+
+/** Pushed on the `kernel` SSE event while the engine is being installed. */
+export const KernelProgressSchema = z.object({
+  phase: KernelPhaseSchema,
+  percent: z.number().min(0).max(100).nullable().default(null),
+  receivedBytes: z.number().int().nonnegative().nullable().default(null),
+  totalBytes: z.number().int().nonnegative().nullable().default(null),
+  message: z.string().nullable().default(null),
+})
+export type KernelProgress = z.infer<typeof KernelProgressSchema>
 
 /* ------------------------------------------------------------------ api envelope */
 

@@ -20,12 +20,26 @@ export const API_ROUTES = {
   profile: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}`,
   launchProfile: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/launch`,
   stopProfile: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/stop`,
+  /** POST { name? } -> Profile. Copies config + the whole isolated userdata directory. */
+  cloneProfile: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/clone`,
+  /** GET -> application/zip (config + userdata). The VM-style "export the machine" action. */
+  exportProfile: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/export`,
+  /** POST body = raw zip bytes (Content-Type: application/zip) -> Profile. */
+  importProfile: `${API_PREFIX}/profiles/import`,
 
   runtime: `${API_PREFIX}/runtime`,
   runtimeFor: (id: string) => `${API_PREFIX}/runtime/${encodeURIComponent(id)}`,
 
   groups: `${API_PREFIX}/groups`,
   group: (id: string) => `${API_PREFIX}/groups/${encodeURIComponent(id)}`,
+
+  /** Engine status: GET -> KernelInfo. */
+  kernel: `${API_PREFIX}/kernel`,
+  /**
+   * POST -> `{ started: true }` immediately (409 when already installing); progress is pushed on
+   * the `kernel` SSE event. A 550 MB download must never block an HTTP response.
+   */
+  kernelInstall: `${API_PREFIX}/kernel/install`,
 
   /** Server-sent events: runtime status transitions. */
   events: `${API_PREFIX}/events`,

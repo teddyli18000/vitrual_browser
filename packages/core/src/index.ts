@@ -8,6 +8,7 @@
 import type {
   Group,
   KernelInfo,
+  KernelProgress,
   Profile,
   ProfileCreate,
   ProfileRuntime,
@@ -38,6 +39,10 @@ export interface ProfilesApi {
   clone(id: string, name?: string): Promise<Profile>
   /** Absolute path of the profile's isolated browser data directory. */
   userDataDir(id: string): string
+  /** Write a portable zip (config + userdata) of the profile to `destFile`. */
+  exportZip(id: string, destFile: string): Promise<void>
+  /** Create a new profile from a zip produced by {@link exportZip}. */
+  importZip(zipFile: string, name?: string): Promise<Profile>
 }
 
 export interface GroupsApi {
@@ -59,6 +64,11 @@ export interface RuntimeApi {
 export interface KernelApi {
   info(): Promise<KernelInfo>
   install(): Promise<KernelInfo>
+  /**
+   * Subscribe to install progress. Returns an unsubscribe function.
+   * Mirrors `RuntimeApi.on('change')`; the HTTP layer forwards these to the `kernel` SSE event.
+   */
+  on(event: 'progress', cb: (progress: KernelProgress) => void): () => void
 }
 
 export interface Core {

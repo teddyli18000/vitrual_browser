@@ -78,6 +78,26 @@ Core.kernel:   info install
 Core.close()
 ```
 
+Public `@vfox/server` surface (frozen; the desktop main process calls this in-process):
+
+```ts
+startServer(opts: {
+  dataDir: string
+  port?: number      // default DEFAULT_API_PORT (9000)
+  host?: string      // default 127.0.0.1
+  token?: string     // auto-generated and persisted at <dataDir>/api-token when omitted
+  logger?: CoreLogger
+}): Promise<ServerHandle>
+
+interface ServerHandle {
+  host: string
+  port: number
+  token: string
+  url: string        // `http://<host>:<port>`
+  close(): Promise<void>
+}
+```
+
 ## Development
 
 The local machine runs under a workspace-write file sandbox, so every package/browser cache must stay
@@ -110,6 +130,14 @@ Verified on this machine: Node 24.14, pnpm 10.33, `camoufox-js` 0.12.0,
   `firefox.connect(wsEndpoint)` from `playwright-core`, not `chromium.connectOverCDP`.
   The VirtualBrowser-compatible `/api/v1/launchBrowser` alias therefore returns `wsEndpoint` and
   leaves `debuggingPort` null rather than inventing a port.
+- **Persistent profile and wsEndpoint are mutually exclusive in playwright-core 1.60.**
+  `firefox.defaultArgs` (`coreBundle.js:44188`) throws `_createUserDataDirArgMisuseError` if
+  `-profile` appears in `args`, and `launchServer()` is always non-persistent (throwaway temp
+  profile). `launchPersistentContext()` — which is what gives every VFox profile its own durable,
+  isolated directory — has no server variant. v0.1 therefore launches **persistent contexts only**
+  and `ProfileRuntime.wsEndpoint` is always `null`. Do not "fix" this by passing `-profile`; it
+  throws. Revisit via WebDriver BiDi (`--remote-debugging-port`, which does accept `--profile`) if
+  server-mode automation is ever needed.
 - `better-sqlite3` appears in `camoufox-js`'s dependency list but is **never imported by its build
   output**. Ignore the pnpm "ignored build scripts" warning; do not add native build steps for it.
 - The Camoufox kernel is ~493 MB and is deliberately *not* committed and *not* bundled into the

@@ -20,10 +20,12 @@
   },
   "dependencies": {
     "@vfox/shared": "workspace:*",
+    "adm-zip": "^0.5.16",
     "camoufox-js": "^0.12.0",
     "playwright-core": "1.60.0"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }

@@ -30,6 +30,8 @@ $env:npm_config_tmp                = $dirs['tmp']
 $env:npm_config_registry           = 'https://registry.npmmirror.com'
 $env:ELECTRON_CACHE                = $dirs['electron']
 $env:electron_config_cache         = $dirs['electron']
+# China mirror: the default GitHub release download is frequently throttled here.
+if (-not $env:ELECTRON_MIRROR) { $env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/' }
 $env:PLAYWRIGHT_BROWSERS_PATH      = $dirs['playwright']
 $env:CAMOUFOX_INSTALL_DIR          = $dirs['camoufox']
 $env:TMP                           = $dirs['tmp']
