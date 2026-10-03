@@ -279,6 +279,119 @@ describe('client-supplied paths', () => {
   })
 })
 
+describe('state-changing requests from a foreign origin', () => {
+  // Omitting the CORS headers only stops a browser *reading* the response — the write would already
+  // have happened. Writes are therefore refused outright; reads stay served.
+  const EVIL = 'https://evil.example'
+
+  async function listProfiles() {
+    const res = await h.app.inject({ method: 'GET', url: API_ROUTES.profiles, headers: h.auth })
+    return res.json().data
+  }
+
+  it('refuses POST /profiles and creates nothing', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: API_ROUTES.profiles,
+      headers: { ...h.auth, origin: EVIL, ...json },
+      payload: { name: 'Evil' },
+    })
+    expect(res.statusCode).toBe(403)
+    expect(res.json().error.code).toBe('forbidden_origin')
+    expect(await listProfiles()).toHaveLength(0)
+  })
+
+  it('refuses PATCH and leaves the profile untouched', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: API_ROUTES.profiles,
+      headers: { ...h.auth, ...json },
+      payload: { name: 'Original' },
+    })
+    const id = created.json().data.id
+
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: API_ROUTES.profile(id),
+      headers: { ...h.auth, origin: EVIL, ...json },
+      payload: { name: 'Hijacked' },
+    })
+    expect(res.statusCode).toBe(403)
+
+    const after = await h.app.inject({
+      method: 'GET',
+      url: API_ROUTES.profile(id),
+      headers: h.auth,
+    })
+    expect(after.json().data.name).toBe('Original')
+  })
+
+  it('refuses DELETE and leaves the profile in place', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: API_ROUTES.profiles,
+      headers: { ...h.auth, ...json },
+      payload: { name: 'Survivor' },
+    })
+    const id = created.json().data.id
+
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: API_ROUTES.profile(id),
+      headers: { ...h.auth, origin: EVIL },
+    })
+    expect(res.statusCode).toBe(403)
+    expect(await listProfiles()).toHaveLength(1)
+  })
+
+  it('refuses a bodiless write such as launch', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: API_ROUTES.profiles,
+      headers: { ...h.auth, ...json },
+      payload: { name: 'Unlaunchable' },
+    })
+    const res = await h.app.inject({
+      method: 'POST',
+      url: API_ROUTES.launchProfile(created.json().data.id),
+      headers: { ...h.auth, origin: EVIL },
+    })
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('allows the two origins the renderer actually sends', async () => {
+    for (const origin of ['null', 'http://localhost:5173', 'http://127.0.0.1:5173']) {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: API_ROUTES.profiles,
+        headers: { ...h.auth, origin, ...json },
+        payload: { name: `From ${origin}` },
+      })
+      expect(res.statusCode, origin).toBe(201)
+    }
+  })
+
+  it('leaves origin-less callers alone (curl, the CLI, MCP clients)', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: API_ROUTES.profiles,
+      headers: { ...h.auth, ...json },
+      payload: { name: 'NoOrigin' },
+    })
+    expect(res.statusCode).toBe(201)
+  })
+
+  it('still serves reads from a foreign origin, just without CORS headers', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: API_ROUTES.profiles,
+      headers: { ...h.auth, origin: EVIL },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['access-control-allow-origin']).toBeUndefined()
+  })
+})
+
 describe('auth header', () => {
   it('still rejects a wrong token with the standard envelope', async () => {
     const res = await h.app.inject({

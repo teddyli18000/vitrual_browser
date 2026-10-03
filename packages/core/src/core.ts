@@ -5,15 +5,7 @@
 import type { Profile } from '@vfox/shared'
 import { importProfileZip, writeProfileZip } from './archive.js'
 import { createIdentity, identityInputs, identityIsCurrent } from './identity.js'
-import type {
-  Core,
-  CoreLogger,
-  CoreOptions,
-  GroupsApi,
-  KernelApi,
-  ProfilesApi,
-  RuntimeApi,
-} from './index.js'
+import type { Core, CoreOptions, GroupsApi, KernelApi, ProfilesApi, RuntimeApi } from './index.js'
 import { applyKernelDir, KernelManager } from './kernel.js'
 import { launchCamoufox } from './launcher.js'
 import { combineLoggers, createFileLogger } from './log.js'

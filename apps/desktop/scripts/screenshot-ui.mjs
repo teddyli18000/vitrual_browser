@@ -19,7 +19,7 @@
  */
 
 import { existsSync } from 'node:fs'
-import { rm, stat } from 'node:fs/promises'
+import { mkdir, rm, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startServer } from '@vfox/server'
@@ -35,6 +35,8 @@ const dataDir = join(appRoot, '.cache', 'tmp', `ui-shots-${process.pid}`)
 const VIEWPORT = { width: 1440, height: 900 }
 const MIN_SCREENSHOT_BYTES = 4096
 const EXPECTED_ROWS = 8
+/** Written in this order; also the exact set removed before a run, so nothing else is touched. */
+const SHOT_NAMES = ['1-profiles-table', '2-new-profile-dialog', '3-settings', '4-no-core']
 
 if (!existsSync(join(rendererDir, 'index.html'))) {
   console.error(`No built renderer at ${rendererDir}. Run: pnpm --filter @vfox/desktop build`)
@@ -101,7 +103,9 @@ async function capture(page, name) {
 }
 
 await rm(dataDir, { recursive: true, force: true })
-await rm(shotDir, { recursive: true, force: true })
+await mkdir(shotDir, { recursive: true })
+// Remove only the four files this run owns: `.cache/shots` may hold someone else's capture.
+for (const name of SHOT_NAMES) await rm(join(shotDir, `${name}.png`), { force: true })
 console.log(`seeding  ${dataDir}`)
 const seeded = await seedDemoData(dataDir, () => {})
 console.log(`seeded   ${seeded.profiles.length} profile(s), ${seeded.groups.length} group(s)`)

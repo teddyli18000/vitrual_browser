@@ -20,11 +20,9 @@
   "dependencies": {
     "@vfox/core": "workspace:*",
     "@vfox/server": "workspace:*",
-    "@vfox/shared": "workspace:*",
-    "adm-zip": "^0.5.16"
+    "@vfox/shared": "workspace:*"
   },
   "devDependencies": {
-    "@types/adm-zip": "^0.5.7",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }

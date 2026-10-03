@@ -148,8 +148,22 @@ Verified on this machine: Node 24.14, pnpm 10.33, `camoufox-js` 0.12.0,
   Because both options are undocumented, `playwright-core` is pinned to an exact version and
   `packages/core` carries a guard test asserting the hook still exists — a silent Playwright bump must
   fail CI, not quietly degrade every profile to a temp directory.
-- `better-sqlite3` appears in `camoufox-js`'s dependency list but is **never imported by its build
-  output**. Ignore the pnpm "ignored build scripts" warning; do not add native build steps for it.
+- **`better-sqlite3` IS a real runtime dependency, and must be built.** `camoufox-js/dist/webgl/sample.js`
+  imports it and that WebGL sampler runs on **every launch**, so removing it from
+  `pnpm.onlyBuiltDependencies` in the root `package.json` breaks every profile launch. An earlier note
+  here claimed it was never imported — that was wrong, and the mistake is instructive: it came from
+  grepping the package's top-level `dist/*.js` for a static import and missing a nested one. Verify by
+  loading the module (`node -e "require('better-sqlite3')"`), not by grepping.
+- **No Vitest run is possible in the development sandbox *by default* — but a working recipe exists.**
+  The four walls are: (1) tinypool's `forks` pool needs a piped `fork()`; (2) Vite's
+  `windowsSafeRealPathSync` calls `exec("net use")`; (3) any `vitest.config.*` is bundled with esbuild,
+  whose service spawn needs a pipe; (4) Vite transpiles `.ts` with esbuild, so TypeScript test files can
+  never run locally. All four are beatable, and `packages/server`, `packages/cli` and `packages/sync`
+  do it: a ~12-line preload that answers the `net use` probe locally, `--pool=threads` on the command
+  line (no config file), and tests written as plain `.mjs` that import the built `dist/` while `src/`
+  stays strict TypeScript. See `packages/server/test/{run-vitest.mjs,sandbox-preload.mjs}`. Otherwise
+  fall back to `tsc` + `biome` + a throwaway harness over `dist`, or `node --test --test-isolation=none`.
+  CI is unaffected either way.
 - The Camoufox kernel is ~493 MB and is deliberately *not* committed and *not* bundled into the
   installer by default; it is fetched on first run (or pre-seeded in CI via the Actions cache).
 - Electron's `app.getPath('userData')` is the default `dataDir`; the CLI and server default to
@@ -178,12 +192,23 @@ Verified on this machine: Node 24.14, pnpm 10.33, `camoufox-js` 0.12.0,
   `fs.readdir(root, { recursive: true, withFileTypes: true })` and add files individually — that also
   pins the in-archive layout to forward slashes. Note `packages/core/node_modules/adm-zip` (0.5.x) and
   the hoisted root copy can differ, which makes this look fine in isolation.
-- **No Vitest run is possible in the development sandbox** (three independent walls: tinypool's
-  `forks` pool needs a piped `fork()`; `--pool=threads` then trips Vite's `windowsSafeRealPathSync`
-  → `exec("net use")`; and any `vitest.config.*` fails earlier because Vite bundles it with esbuild).
+- **`No Vitest run` was corrected above — ignore the older claim if you find it quoted elsewhere.**
   The sandbox blocks creating **any** child stdio slot set to `'pipe'`, and the ban is inherited by
-  grandchildren. Locally use `tsc` + `biome`, and run assertions against compiled `dist` with a
-  throwaway Node harness. `node --test --test-isolation=none` also works. CI is unaffected.
+  grandchildren, which is what breaks esbuild, Electron, Playwright and Chromium's own subprocess
+  sandbox. Local UI screenshots are therefore impossible; the UI is verified in CI by
+  `apps/desktop/scripts/screenshot-ui.mjs` (Playwright against the built renderer and the real server).
+- **Reading a fingerprint value can be harder than spoofing it.** The engine smoke test reported
+  `webglVendor: null` for both profiles until `engine` found the cause: a canvas element can only ever
+  have **one** context type, and the probe asked the *same* element for `webgl` after creating a `2d`
+  context. Use a separate element per context. After the fix the same runner reports
+  `"Google Inc. (NVIDIA)"` / `"Intel Inc."` and `distinctCount` rose from 5 to 6. Before concluding a
+  dimension is unspoofed, prove the probe can read it at all.
+- **The engine re-rolls eight things on every launch**, so pinning only `identity.fingerprint` is not
+  enough: seven `CAMOU_CONFIG` keys (`canvas:seed`, `audio:seed`, `fonts:spacing_seed`,
+  `canvas:aaOffset`, `canvas:aaCapOffset`, `window.history.length`, `window.screenY` via
+  `fingerprints.js:31-54`) **plus a fresh WebGL vendor/renderer sample** (`webgl/sample.js:62-75`).
+  `packages/core` pins all eight — the WebGL pair through `fingerprint.webgl` → `webgl_config`, the rest
+  through the raw `config` escape hatch.
 - **`koffi` ships prebuilt binaries for every platform** (`build/koffi/win32_x64/koffi.node`), so it
   needs no build step — and adding it to `pnpm.onlyBuiltDependencies` makes its postinstall run and
   fail with `EPERM` in the sandbox for no benefit. Verified: `require('koffi').load('user32.dll')`.

@@ -10,7 +10,7 @@ import type { Core, CoreLogger } from '@vfox/core'
 import { API_PREFIX, API_TOKEN_HEADER, DEFAULT_API_HOST, DEFAULT_API_PORT, ENV } from '@vfox/shared'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import Fastify from 'fastify'
-import { answerPreflight, applyCors, isAllowedHost } from './cors.js'
+import { answerPreflight, applyCors, assertOriginAllowed, isAllowedHost } from './cors.js'
 import { fail, HttpError, unauthorized } from './errors.js'
 import { EventHub } from './events.js'
 import { createRotatingLogger, logFilePath } from './file-logger.js'
@@ -54,7 +54,10 @@ export async function createApp(options: CreateAppOptions): Promise<AppContext> 
         `Refusing a request whose Host is "${request.headers.host ?? ''}" — the VFox API answers loopback host names only`,
       )
     }
-    // 2. CORS preflight, answered before the token check. A browser never attaches the token to a
+    // 2. State-changing requests from a disallowed origin are refused outright. Omitting the CORS
+    //    headers only stops a browser *reading* the answer; the write would already have happened.
+    assertOriginAllowed(request)
+    // 3. CORS preflight, answered before the token check. A browser never attaches the token to a
     //    preflight, so requiring it here would reject every cross-origin call from the renderer.
     if (isApiPath(request) && request.method === 'OPTIONS') {
       return answerPreflight(reply, request)
@@ -62,13 +65,13 @@ export async function createApp(options: CreateAppOptions): Promise<AppContext> 
     return undefined
   })
 
-  // 3. Token check for everything that is not a preflight.
+  // 4. Token check for everything that is not a preflight.
   app.addHook('onRequest', async request => {
     if (!isProtected(request)) return
     if (!tokenMatches(providedToken(request), token)) throw unauthorized()
   })
 
-  // 4. Body content type. A cross-site HTML form can only send the three CORS-safelisted content
+  // 5. Body content type. A cross-site HTML form can only send the three CORS-safelisted content
   //    types, so requiring JSON on body-carrying writes makes that whole attack class fail here,
   //    before any handler or the core sees it.
   app.addHook('onRequest', async request => {
@@ -76,7 +79,7 @@ export async function createApp(options: CreateAppOptions): Promise<AppContext> 
     assertWriteContentType(request)
   })
 
-  // 5. CORS on real responses, including errors: a 401 without the header shows up in the renderer
+  // 6. CORS on real responses, including errors: a 401 without the header shows up in the renderer
   //    as an opaque network failure instead of a readable message.
   app.addHook('onSend', async (request, reply, payload) => {
     if (isApiPath(request)) applyCors(reply, request)

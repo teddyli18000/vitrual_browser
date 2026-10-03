@@ -17,6 +17,9 @@
 
 import type { FastifyReply, FastifyRequest } from 'fastify'
 
+import { HttpError } from './errors.js'
+import { isWriteMethod } from './guards.js'
+
 export const CORS_ALLOW_HEADERS = 'content-type, x-vfox-token, authorization'
 export const CORS_ALLOW_METHODS = 'GET, POST, PATCH, PUT, DELETE, OPTIONS'
 export const CORS_MAX_AGE_SECONDS = '600'
@@ -92,4 +95,31 @@ export function answerPreflight(reply: FastifyReply, request: FastifyRequest): F
     .header('access-control-allow-methods', CORS_ALLOW_METHODS)
     .header('access-control-max-age', CORS_MAX_AGE_SECONDS)
   return reply.code(204).send()
+}
+
+/**
+ * Refuses a **state-changing** request that carries a disallowed `Origin`.
+ *
+ * Omitting the CORS headers is enough to stop a browser *reading* a response, but the mutation has
+ * already happened by then. For reads that is the right trade (rejecting them would only add noise);
+ * for writes the server should refuse outright rather than rely on the browser to discard the
+ * answer. So: `POST`/`PATCH`/`PUT`/`DELETE` with an `Origin` that is neither `null` nor loopback is
+ * rejected with 403.
+ *
+ * A request with no `Origin` at all is untouched — curl, the CLI, MCP clients and existing
+ * VirtualBrowser scripts send none, and `Origin` is not a security control for a non-browser
+ * caller anyway (the token is).
+ */
+export function assertOriginAllowed(request: FastifyRequest): void {
+  if (!isWriteMethod(request.method)) return
+
+  const origin = request.headers.origin
+  if (typeof origin !== 'string' || origin.trim().length === 0) return
+  if (allowedOrigin(request) !== undefined) return
+
+  throw new HttpError(
+    403,
+    'forbidden_origin',
+    `Refusing ${request.method} from origin "${origin.trim()}" — the VFox API accepts the desktop renderer only (null or loopback origins)`,
+  )
 }

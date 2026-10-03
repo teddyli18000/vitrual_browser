@@ -111,20 +111,51 @@ if (typeof distinctCount !== 'number' || typeof requiredDistinct !== 'number') {
       `(got ${JSON.stringify(result)}).`,
   )
 }
+
+// The script drops `webgl` from `compared` when neither profile reported a vendor, so the
+// denominator is 7 or 8 depending on the evidence. Asserting it cannot fall below the
+// requirement stops a silently shrinking comparison from passing on a technicality.
+const compared = Array.isArray(result.compared) ? result.compared : undefined
+if (compared && compared.length < requiredDistinct) {
+  fail(
+    `only ${compared.length} fingerprint dimensions were compared, but ${requiredDistinct} ` +
+      `distinct ones are required: ${JSON.stringify(compared)}`,
+  )
+}
+
 if (distinctCount < requiredDistinct) {
   fail(
-    `only ${distinctCount} of the 8 fingerprint dimensions differ between the two profiles; ` +
-      `${requiredDistinct} are required. Distinct: ${JSON.stringify(result.distinct ?? [])}`,
+    `only ${distinctCount} of ${compared?.length ?? '?'} fingerprint dimensions differ between ` +
+      `the two profiles; ${requiredDistinct} are required. Distinct: ${JSON.stringify(result.distinct ?? [])}`,
   )
+}
+
+// Stable identity across relaunches is the strongest claim in the job. The script already
+// fails on it; re-checking here means weakening that check cannot silently ship.
+for (const entry of result.stability ?? []) {
+  if (entry?.identical !== true) {
+    fail(
+      `profile ${entry?.profileId} changed between launches: ${JSON.stringify(entry?.differing ?? entry)}`,
+    )
+  }
 }
 
 const engine = stdout.match(/^VFOX_SMOKE_ENGINE (.*)$/m)
 if (engine) console.log(`[check-smoke] engine: ${engine[1]}`)
-// Per-profile evidence lines. The stream split is frozen: stdout carries only these markers.
-for (const profile of stdout.match(/^VFOX_SMOKE_PROFILE .*$/gm) ?? []) {
-  console.log(`[check-smoke] ${profile}`)
+// Evidence lines. The stream split is frozen: stdout carries only these markers, stderr the rest.
+for (const marker of ['VFOX_SMOKE_PROFILE', 'VFOX_SMOKE_RELAUNCH']) {
+  for (const line of stdout.match(new RegExp(`^${marker} .*$`, 'gm')) ?? []) {
+    console.log(`[check-smoke] ${line}`)
+  }
 }
+// Warnings never fail the run, but they are how a dimension quietly drops out of the
+// comparison (for example WebGL with no vendor evidence) — surface them in the CI log.
+for (const line of stderr.match(/^VFOX_SMOKE_WARN .*$/gm) ?? []) {
+  console.log(`[check-smoke] ${line}`)
+}
+
 console.log(
-  `[check-smoke] OK: ${distinctCount}/8 fingerprint dimensions differ ` +
-    `(required ${requiredDistinct}); profiles: ${Array.isArray(result.profiles) ? result.profiles.length : '?'}`,
+  `[check-smoke] OK: ${distinctCount}/${compared?.length ?? 8} fingerprint dimensions differ ` +
+    `(required ${requiredDistinct}); profiles: ${Array.isArray(result.profiles) ? result.profiles.length : '?'}` +
+    (result.stability?.length ? `; relaunch stability: identical` : ''),
 )

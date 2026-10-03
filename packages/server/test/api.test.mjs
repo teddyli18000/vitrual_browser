@@ -252,6 +252,22 @@ describe('profiles CRUD', () => {
     expect(res.json().error.code).toBe('validation_error')
   })
 
+  // Relevant to the WebGL discussion (issue #14): whatever the engine ends up reading, the API
+  // layer neither drops nor rewrites a configured webgl pair — a null vendor/renderer observed by a
+  // probe cannot be caused by the transport or by the shared contract.
+  it('round-trips a non-null webgl pair unchanged', async () => {
+    const created = await createProfile('WebGL')
+    const webgl = { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA GeForce RTX 4090)' }
+    const res = await h.app.inject({
+      method: 'PATCH',
+      url: API_ROUTES.profile(created.id),
+      headers: { ...h.auth, ...json },
+      payload: { fingerprint: { webgl } },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.fingerprint.webgl).toEqual(webgl)
+  })
+
   it('rejects an empty JSON body with 400', async () => {
     const res = await h.app.inject({
       method: 'POST',
