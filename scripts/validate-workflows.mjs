@@ -121,6 +121,32 @@ for (const [relative, document] of documents) {
   }
 }
 
+// ------------------------------------------------------- GitHub context availability
+// A context used where GitHub does not provide it is not a runtime error: GitHub rejects the
+// whole file while parsing it, produces a run with **0 jobs** and no log, and names the workflow
+// by its file path. That cost a full push-and-wait cycle once (`${{ runner.temp }}` in a
+// workflow-level `env:`), so it is worth a static check.
+//
+// Only `github`, `inputs`, `vars` (and `secrets` for `env`) exist at workflow level. Everything
+// below is job- or step-scoped, and a plain YAML parser cannot tell the difference.
+const JOB_SCOPED_CONTEXTS = ['runner', 'strategy', 'matrix', 'steps', 'needs', 'job', 'env']
+for (const [relative, document] of documents) {
+  if (!document?.jobs) continue // composite actions have runs.steps, not jobs
+  for (const key of ['env', 'concurrency', 'run-name', 'name']) {
+    if (document[key] === undefined) continue
+    const text = JSON.stringify(document[key])
+    for (const context of JOB_SCOPED_CONTEXTS) {
+      const pattern = new RegExp(`\\$\\{\\{[^}]*\\b${context}\\.`)
+      if (!pattern.test(text)) continue
+      bad(
+        `${relative}: the workflow-level \`${key}\` uses the \`${context}\` context, which only ` +
+          'exists at job/step level — GitHub rejects the entire file with a 0-job startup failure ' +
+          'and no log. Move it to jobs.<id>.env, or use a workflow-level context such as github.',
+      )
+    }
+  }
+}
+
 // ------------------------------------------------------------------------- cache hygiene
 for (const [relative, document] of documents) {
   walk(document, (key, value) => {
