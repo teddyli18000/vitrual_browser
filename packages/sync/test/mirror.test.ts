@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
-  SYNC_LISTENER_SOURCE,
-  SYNC_TEARDOWN_SOURCE,
-  WHEEL_LINE_HEIGHT_PX,
   createReplayState,
   normalizeMirrorEvent,
   replayEvent,
+  SYNC_LISTENER_SOURCE,
+  SYNC_TEARDOWN_SOURCE,
+  WHEEL_LINE_HEIGHT_PX,
 } from '../src/mirror.js'
 import { FakePage, keyPayload, mousePayload } from './helpers/fake-browser.js'
 
@@ -24,7 +24,10 @@ interface FakeWindow {
   listenerCount(): number
 }
 
-function createWindow(report?: (payload: unknown) => void): { win: FakeWindow; reported: unknown[] } {
+function createWindow(report?: (payload: unknown) => void): {
+  win: FakeWindow
+  reported: unknown[]
+} {
   const reported: unknown[] = []
   const listeners = new Map<string, Set<(event: unknown) => void>>()
   const win: FakeWindow = {

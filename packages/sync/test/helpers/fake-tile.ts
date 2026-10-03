@@ -1,5 +1,5 @@
-import type { Rect } from '../../src/tile-grid.js'
 import type { TileBackend } from '../../src/tile.js'
+import type { Rect } from '../../src/tile-grid.js'
 
 /** Records what the session asked the tiling layer to do, without touching a real window. */
 export class FakeTileBackend implements TileBackend {

@@ -18,7 +18,6 @@
 
 import { mkdirSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { APP_ID, HOMEPAGE, PRODUCT_NAME } from '@vfox/shared'
 import { app, BrowserWindow, ipcMain, Menu, shell, type Tray } from 'electron'
 import { BRIDGE_CHANNEL, type BridgePayload } from '../shared/bridge'
@@ -34,7 +33,13 @@ import { createTray } from './tray.js'
 import { loadUiState, saveUiState, trackWindowState, type UiState } from './window-state.js'
 
 const isDev = !app.isPackaged
-const here = fileURLToPath(new URL('.', import.meta.url))
+
+/**
+ * `out/main` at runtime. The main bundle is CommonJS (see electron.vite.config.ts), so
+ * `__dirname` is the real thing here — `import.meta.url` would not exist.
+ */
+declare const __dirname: string
+const here = __dirname
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null

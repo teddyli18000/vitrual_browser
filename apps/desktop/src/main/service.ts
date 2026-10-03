@@ -11,6 +11,7 @@
 
 import { createConnection } from 'node:net'
 import type { ServerHandle } from '@vfox/server'
+import { createFileLogger, type Logger } from './log-file.js'
 import {
   API_ROUTES,
   API_TOKEN_HEADER,
@@ -34,22 +35,24 @@ export interface ServiceState {
 
 let handle: ServerHandle | null = null
 
-const log = {
+let log: Logger = {
   debug: (msg: string, ...args: unknown[]) => console.debug(`[vfox] ${msg}`, ...args),
   info: (msg: string, ...args: unknown[]) => console.info(`[vfox] ${msg}`, ...args),
   warn: (msg: string, ...args: unknown[]) => console.warn(`[vfox] ${msg}`, ...args),
   error: (msg: string, ...args: unknown[]) => console.error(`[vfox] ${msg}`, ...args),
 }
 
+/**
+ * Redirect the service logger into `<dataDir>/logs` once the data directory is known, so the
+ * core's own logs travel with a portable folder instead of landing somewhere absolute.
+ */
+export function configureLogging(logDir: string): void {
+  log = createFileLogger(logDir)
+}
+
 function describe(err: unknown): string {
   if (err instanceof Error) return err.message
   return String(err)
-}
-
-/** Where the profile store lives. `VFOX_DATA_DIR` overrides it (dev, CI, portable runs). */
-export function resolveDataDir(fallback: string): string {
-  const override = process.env[ENV.dataDir]
-  return override && override.trim().length > 0 ? override : fallback
 }
 
 export function currentHandle(): ServerHandle | null {

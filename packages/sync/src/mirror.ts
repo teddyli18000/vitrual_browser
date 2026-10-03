@@ -54,7 +54,13 @@ export interface MirrorEvent {
   viewport: ViewportSize
 }
 
-const MOUSE_KINDS = new Set<MirrorEventKind>(['mousedown', 'mouseup', 'click', 'wheel', 'mousemove'])
+const MOUSE_KINDS = new Set<MirrorEventKind>([
+  'mousedown',
+  'mouseup',
+  'click',
+  'wheel',
+  'mousemove',
+])
 const EVENT_KINDS = new Set<string>([...MOUSE_KINDS, 'keydown', 'keyup'])
 
 /**

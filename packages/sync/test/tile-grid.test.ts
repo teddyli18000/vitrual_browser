@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { TILE_GAP, computeTileGrid, gridShape, type Rect } from '../src/tile-grid.js'
+import { computeTileGrid, gridShape, type Rect, TILE_GAP } from '../src/tile-grid.js'
 
 const workArea: Rect = { x: 0, y: 0, width: 1920, height: 1040 }
 
 function overlaps(a: Rect, b: Rect): boolean {
-  return (
-    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
-  )
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
 function right(rect: Rect): number {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ViewportTracker, clampPoint, mapPoint, normalizeViewport } from '../src/mapping.js'
+import { clampPoint, mapPoint, normalizeViewport, ViewportTracker } from '../src/mapping.js'
 import { FakePage } from './helpers/fake-browser.js'
 
 describe('mapPoint', () => {
@@ -106,9 +106,16 @@ describe('ViewportTracker', () => {
     expect(await tracker.get(page)).toEqual({ width: 1024, height: 768 })
   })
 
-  it('throws when a page never reported a usable viewport', async () => {
+  it('propagates the reason a page could not answer at all', async () => {
     const page = new FakePage()
     page.failEvaluate = 'Target page, context or browser has been closed'
+    await expect(new ViewportTracker().get(page)).rejects.toThrow(
+      'Target page, context or browser has been closed',
+    )
+  })
+
+  it('refuses a page that reports an empty viewport', async () => {
+    const page = new FakePage({ measured: { width: 0, height: 0 } })
     await expect(new ViewportTracker().get(page)).rejects.toThrow('no usable viewport')
   })
 })

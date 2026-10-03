@@ -29,7 +29,11 @@ export interface MouseLike {
   move(x: number, y: number): Promise<void>
   down(options?: { button?: MouseButton }): Promise<void>
   up(options?: { button?: MouseButton }): Promise<void>
-  click(x: number, y: number, options?: { button?: MouseButton; clickCount?: number }): Promise<void>
+  click(
+    x: number,
+    y: number,
+    options?: { button?: MouseButton; clickCount?: number },
+  ): Promise<void>
   wheel(deltaX: number, deltaY: number): Promise<void>
 }
 

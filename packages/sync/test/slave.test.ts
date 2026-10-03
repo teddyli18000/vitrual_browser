@@ -6,9 +6,9 @@ import {
   FakePage,
   FakeWorld,
   mousePayload,
+  type TestLogger,
   testLogger,
   waitFor,
-  type TestLogger,
 } from './helpers/fake-browser.js'
 
 function event(
@@ -253,8 +253,8 @@ describe('SlaveMirror', () => {
 
   it('fails with a clear error when the browser cannot be reached', async () => {
     const world = new FakeWorld()
-    const profile = world.add('slave')
-    profile.target.wsEndpoint = 'ws://127.0.0.1/never-listened'
+    world.add('slave')
+    world.kill('ws://127.0.0.1/slave')
 
     await expect(attach(world, 'slave')).rejects.toThrow(
       'could not attach to slave profile "slave"',

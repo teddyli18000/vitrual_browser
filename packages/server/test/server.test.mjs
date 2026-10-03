@@ -4,7 +4,7 @@
  * that actually answers.
  */
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { startServer } from '../dist/app.js'
 import { silentLogger } from '../dist/logger.js'
 import { createFakeCore } from './helpers/fake-core.mjs'
+import { tick } from './helpers/harness.mjs'
 
 const TEST_TOKEN = 'start-server-token-abcdef'
 
@@ -138,5 +139,33 @@ describe('startServer', () => {
 
   it('requires a dataDir', async () => {
     await expect(startServer({ dataDir: '', logger: silentLogger, core })).rejects.toThrow(/dataDir/)
+  })
+
+  it('writes a diagnostics log without ever recording the token value', async () => {
+    const handle = await serve({ port: 0 })
+
+    await fetch(`${handle.url}${API_ROUTES.profiles}`) // 401: no token
+    await fetch(`${handle.url}${API_ROUTES.profiles}`, {
+      headers: { [API_TOKEN_HEADER]: handle.token },
+    })
+    await tick(50)
+
+    const log = await readFile(path.join(dataDir, 'logs', 'vfox.log'), 'utf8')
+    expect(log).toContain(`listening on ${handle.url}`)
+    expect(log).toContain('api token: present')
+    expect(log).toContain(`GET ${API_ROUTES.profiles} -> 401`)
+    // The token's presence is logged; its value never is.
+    expect(log).not.toContain(handle.token)
+  })
+
+  it('rotates the log and keeps at most five files', async () => {
+    // A tiny cap makes rotation observable in a handful of lines.
+    const { createRotatingLogger } = await import('../dist/file-logger.js')
+    const logger = createRotatingLogger({ dataDir, maxBytes: 200, maxFiles: 5 })
+    for (let index = 0; index < 60; index += 1) logger.info(`line ${index} ${'x'.repeat(20)}`)
+
+    const logs = (await readdir(path.join(dataDir, 'logs'))).sort()
+    expect(logs).toEqual(['vfox.log', 'vfox.log.1', 'vfox.log.2', 'vfox.log.3', 'vfox.log.4'])
+    expect((await stat(path.join(dataDir, 'logs', 'vfox.log'))).size).toBeLessThanOrEqual(200)
   })
 })

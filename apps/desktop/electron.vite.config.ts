@@ -5,28 +5,39 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 /**
  * electron-vite layout: src/main, src/preload, src/renderer -> out/{main,preload,renderer}.
  *
- * `externalizeDepsPlugin` keeps every runtime dependency (including the workspace packages
- * @vfox/server, @vfox/core and @vfox/shared) as a real ESM import in the main/preload bundles,
- * so the desktop app loads exactly the same code the CLI and the tests exercise — no duplicated
- * copy of the core inside the Electron bundle.
+ * `externalizeDepsPlugin` keeps every runtime dependency (camoufox-js, playwright-core) as a real
+ * import in the main bundle, while the bundled devDependencies (@vfox/server, @vfox/core,
+ * @vfox/shared and their transitive CJS deps) are inlined so the packaged app cannot lose them to
+ * pnpm's symlinked node_modules layout.
  *
  * The renderer is a normal web build: it talks plain HTTP/SSE to the loopback API and never
  * imports Electron or Node APIs.
+ *
+ * BOTH node-side bundles are emitted as CommonJS, and that is load-bearing:
+ *  - `electron` is a CJS module whose exports are defined dynamically, so Node's ESM loader cannot
+ *    see named exports and `import { BrowserWindow } from 'electron'` dies at instantiation with
+ *    "does not provide an export named 'BrowserWindow'". Running the app proved it; no typecheck
+ *    can.
+ *  - a sandboxed preload script must be CommonJS anyway.
+ * The `.cjs` extension keeps the format unambiguous even though this package is `"type": "module"`,
+ * and `chunkFileNames` must carry it too — a `.js` chunk in this package would be read as ESM and
+ * the CJS `require()` of it would fail.
  */
+
+const cjs = {
+  format: 'cjs' as const,
+  entryFileNames: '[name].cjs',
+  chunkFileNames: '[name]-[hash].cjs',
+}
+
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    build: { rollupOptions: { output: cjs } },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
-    build: {
-      rollupOptions: {
-        // The window runs with `sandbox: true`, and sandboxed preload scripts must be CommonJS:
-        // an ESM preload would force `sandbox: false` and weaken the renderer isolation. `.cjs`
-        // keeps the format unambiguous even though this package is `"type": "module"`.
-        output: { format: 'cjs', entryFileNames: '[name].cjs' },
-      },
-    },
+    build: { rollupOptions: { output: cjs } },
   },
   renderer: {
     resolve: {

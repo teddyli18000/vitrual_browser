@@ -183,6 +183,8 @@ export const en: Messages = {
   'fp.localePlaceholder': 'e.g. en-US or en-US,en;q=0.9',
   'fp.hardwareConcurrency': 'Hardware concurrency',
   'fp.deviceMemory': 'Device memory (GB)',
+  'fp.deviceMemoryUnsupported':
+    'Not supported: the Firefox engine has no navigator.deviceMemory, and setting it makes launches fail',
   'fp.userAgent': 'User-Agent',
   'fp.userAgentPlaceholder': 'Leave empty and the engine generates one from the OS / version',
   'fp.geoip': 'Match timezone / locale / geolocation to the proxy IP',

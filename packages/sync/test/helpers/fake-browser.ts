@@ -135,8 +135,10 @@ export class FakePage implements PageLike {
 export class FakeContext implements ContextLike {
   readonly pageList: FakePage[] = []
   readonly initScripts: string[] = []
-  binding: { name: string; callback: (source: BindingSourceLike, payload: unknown) => unknown } | null =
-    null
+  binding: {
+    name: string
+    callback: (source: BindingSourceLike, payload: unknown) => unknown
+  } | null = null
   bindingDisposed = false
 
   readonly #pageListeners = new Set<(page: FakePage) => void>()

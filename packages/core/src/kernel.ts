@@ -34,6 +34,8 @@ export interface KernelManagerOptions {
 const LAUNCH_FILE = 'camoufox.exe'
 const VERSION_FILE = 'version.json'
 const MMDB_FILE = 'GeoLite2-City.mmdb'
+/** Download (~550 MB) + extracted engine (~1 GB) + staging copy, with headroom. */
+const REQUIRED_FREE_BYTES = 3 * 1024 ** 3
 
 /**
  * Point camoufox-js at `kernelDir`.
@@ -94,6 +96,16 @@ export class KernelManager {
   }
 
   async #runInstall(): Promise<KernelInfo> {
+    // A user-supplied engine directory is honoured, but it is validated first: pointing VFox at a
+    // folder that holds something else must not silently fill it with a 1 GB browser.
+    const dir = await installDir()
+    if (await looksLikeSomethingElse(dir)) {
+      this.#options.logger.warn(
+        `the configured engine directory ${dir} exists but contains no ${LAUNCH_FILE}; ` +
+          'installing the Camoufox engine into it',
+      )
+    }
+
     this.#emit({ phase: 'checking', message: 'Checking the latest Camoufox release' })
     try {
       await (this.#options.installer ?? installCamoufoxEngine)(progress => this.#emit(progress))
@@ -156,6 +168,7 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
   }
 
   if (current !== fetcher.verstr || !(await exists(path.join(target, LAUNCH_FILE)))) {
+    await requireFreeSpace(target)
     const staging = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-camoufox-'))
     try {
       const archive = await downloadEngine(fetcher, staging, emit)
@@ -180,8 +193,7 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
 }
 
 /** Stream the engine archive into `staging` and return its path, reporting real byte counts. */
-async function downloadEngine(
-  fetcher: CamoufoxFetcher,
+async function downloadEngine(  fetcher: CamoufoxFetcher,
   staging: string,
   emit: ProgressReporter,
 ): Promise<string> {
@@ -247,6 +259,61 @@ async function contentLength(url: string): Promise<number | null> {
 async function installDir(): Promise<string> {
   const { INSTALL_DIR } = await import('camoufox-js/dist/pkgman.js')
   return INSTALL_DIR.toString()
+}
+
+/**
+ * True when the engine directory exists, is not empty, and holds no engine — i.e. the user pointed
+ * VFox at the wrong folder.
+ */
+async function looksLikeSomethingElse(dir: string): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(dir)
+    return entries.length > 0 && !entries.includes(LAUNCH_FILE)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Refuse to start a ~1.5 GB install with no room for it.
+ *
+ * The archive is ~550 MB and extracts to roughly 1 GB, and the download is staged in `os.tmpdir()`
+ * first, so the requirement is deliberately generous. A missing engine directory is walked up to
+ * its nearest existing ancestor, because that is where the bytes will actually land.
+ */
+async function requireFreeSpace(target: string): Promise<void> {
+  const free = await freeBytes(target)
+  if (free === null || free >= REQUIRED_FREE_BYTES) {
+    return
+  }
+  throw new Error(
+    `Not enough free disk space to install the Camoufox engine: ${formatBytes(free)} available ` +
+      `at ${path.resolve(target)}, about ${formatBytes(REQUIRED_FREE_BYTES)} required ` +
+      '(the download is ~550 MB and extracts to ~1 GB). Free some space or set ' +
+      'CAMOUFOX_INSTALL_DIR to a drive with more room.',
+  )
+}
+
+async function freeBytes(target: string): Promise<number | null> {
+  let dir = path.resolve(target)
+  for (let depth = 0; depth < 8; depth += 1) {
+    try {
+      const stats = await fs.statfs(dir)
+      return Number(stats.bavail) * Number(stats.bsize)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      const parent = path.dirname(dir)
+      if (code !== 'ENOENT' || parent === dir) {
+        return null
+      }
+      dir = parent
+    }
+  }
+  return null
+}
+
+function formatBytes(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`
 }
 
 async function exists(target: string): Promise<boolean> {

@@ -210,9 +210,11 @@ function close(): void {
             <ElInputNumber v-model="draft.hardwareConcurrency" :min="1" :max="64" controls-position="right" />
           </AutoField>
 
-          <AutoField v-model:auto="draft.deviceMemoryAuto" :label="t('fp.deviceMemory')">
-            <ElInputNumber v-model="draft.deviceMemory" :min="1" :max="64" controls-position="right" />
-          </AutoField>
+          <div class="field">
+            <span class="field-label">{{ t('fp.deviceMemory') }}</span>
+            <ElInputNumber disabled controls-position="right" />
+            <span class="hint warn">{{ t('fp.deviceMemoryUnsupported') }}</span>
+          </div>
 
           <AutoField v-model:auto="draft.userAgentAuto" :label="t('fp.userAgent')" class="span-2">
             <ElInput v-model="draft.userAgent" :placeholder="t('fp.userAgentPlaceholder')" />

@@ -119,9 +119,7 @@ interface KoffiType {
   readonly name?: string
 }
 type KoffiCallback = (...args: unknown[]) => unknown
-interface KoffiFunction {
-  (...args: unknown[]): unknown
-}
+type KoffiFunction = (...args: unknown[]) => unknown
 interface KoffiLibrary {
   func(signature: string): KoffiFunction
 }
@@ -171,7 +169,9 @@ async function createUser32(): Promise<User32Api> {
     right: 'int32',
     bottom: 'int32',
   })
-  const monitorInfoType = koffi.struct('VFOX_MONITORINFO', {
+  // Registered for its side effect: koffi resolves type names globally, so the signature strings
+  // below can refer to `VFOX_MONITORINFO` without threading the type object through every call.
+  koffi.struct('VFOX_MONITORINFO', {
     cbSize: 'uint32',
     rcMonitor: rectType,
     rcWork: rectType,

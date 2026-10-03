@@ -33,8 +33,8 @@ import { connectBrowser } from './browser.js'
 import { createSyncWith } from './session.js'
 import { createTileBackend } from './tile.js'
 
-export { SyncError } from './errors.js'
 export type { SyncErrorCode } from './errors.js'
+export { SyncError } from './errors.js'
 
 /** Where a profile's browser can be reached, as resolved by the caller (the server). */
 export interface SyncTarget {

@@ -11,8 +11,8 @@
 import type { CoreLogger } from '@vfox/core'
 import type { BrowserConnector, BrowserLike, ContextLike, PageLike } from './browser.js'
 import { SyncError } from './errors.js'
-import { type MirrorEvent, createReplayState, replayEvent } from './mirror.js'
 import type { ViewportTracker } from './mapping.js'
+import { createReplayState, type MirrorEvent, replayEvent } from './mirror.js'
 
 export interface SlaveLimits {
   /** Pending `mousemove` events tolerated before new ones are dropped. */

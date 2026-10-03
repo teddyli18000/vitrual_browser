@@ -180,6 +180,8 @@ export const zhCN = {
   'fp.localePlaceholder': '例如 zh-CN 或 zh-CN,zh;q=0.9',
   'fp.hardwareConcurrency': '硬件并发数',
   'fp.deviceMemory': '设备内存 (GB)',
+  'fp.deviceMemoryUnsupported':
+    '不支持：Firefox 内核没有 navigator.deviceMemory，设置它会导致启动失败',
   'fp.userAgent': 'User-Agent',
   'fp.userAgentPlaceholder': '留空则由引擎按系统 / 版本自动生成',
   'fp.geoip': '按 IP 自动匹配时区 / 语言 / 地理位置',

@@ -227,7 +227,10 @@ export function payloadFrom(draft: ProfileDraft): DraftConversion {
     blockWebgl: draft.blockWebgl,
     disableCoop: draft.disableCoop,
     hardwareConcurrency: draft.hardwareConcurrencyAuto ? null : draft.hardwareConcurrency,
-    deviceMemory: draft.deviceMemoryAuto ? null : draft.deviceMemory,
+    // Always null, never a value: the Firefox engine has no `navigator.deviceMemory`, and passing
+    // it throws UnknownProperty and aborts every launch. The field stays in the shared schema for
+    // contract stability, but the GUI must not be able to set it.
+    deviceMemory: null,
     userAgent:
       draft.userAgentAuto || draft.userAgent.trim().length === 0 ? null : draft.userAgent.trim(),
     config,

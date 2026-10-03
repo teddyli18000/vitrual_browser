@@ -276,7 +276,7 @@ class SyncEngine implements SyncHandle {
 
   #onSlaveGone(profileId: string): void {
     const session = this.#session
-    if (!session || !session.slaveProfileIds.includes(profileId)) {
+    if (!session?.slaveProfileIds.includes(profileId)) {
       return
     }
     this.#slaves = this.#slaves.filter(slave => slave.profileId !== profileId)

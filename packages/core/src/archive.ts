@@ -27,6 +27,16 @@ interface ArchiveFile {
   data: Buffer
 }
 
+/**
+ * Refuse to export a data directory bigger than this.
+ *
+ * The archive is assembled in memory (adm-zip has no streaming writer), so an unbounded export of a
+ * profile with a large cache directory would exhaust the core process instead of failing cleanly.
+ * 2 GB is far above a real Firefox profile and far below a 32-bit-ish heap; the caller is expected
+ * to surface this message to the user as-is.
+ */
+const MAX_EXPORT_BYTES = 2 * 1024 ** 3
+
 /** Write `profile` + its userdata directory to `destFile`. */
 export async function writeProfileZip(
   profile: Profile,
@@ -42,11 +52,18 @@ export async function writeProfileZip(
   // which on Windows turns `C:\…\userdata` into a path that does not exist. Its ENOENT branch then
   // resolves the promise without adding a single entry — a silently empty export. Walking it
   // ourselves also pins the in-archive layout to forward slashes on every platform.
+  let total = 0
   for (const relative of await listFiles(userDataDir)) {
-    zip.addFile(
-      `${USERDATA_PREFIX}${relative}`,
-      await fs.readFile(path.join(userDataDir, relative)),
-    )
+    const data = await fs.readFile(path.join(userDataDir, relative))
+    total += data.length
+    if (total > MAX_EXPORT_BYTES) {
+      throw new Error(
+        `Profile ${profile.name} is too large to export: the data directory exceeds ` +
+          `${formatGigabytes(MAX_EXPORT_BYTES)} (archives are built in memory). ` +
+          'Delete the profile cache directory and try again.',
+      )
+    }
+    zip.addFile(`${USERDATA_PREFIX}${relative}`, data)
   }
 
   const target = path.resolve(destFile)
@@ -228,4 +245,8 @@ async function exists(target: string): Promise<boolean> {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function formatGigabytes(bytes: number): string {
+  return `${Math.round(bytes / 1024 ** 3)} GB`
 }

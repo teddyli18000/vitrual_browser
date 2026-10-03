@@ -4,13 +4,13 @@ import { SyncError } from '../src/errors.js'
 import { SYNC_LISTENER_SOURCE, SYNC_TEARDOWN_SOURCE } from '../src/mirror.js'
 import { createSyncWith } from '../src/session.js'
 import {
+  type FakeProfile,
   FakeWorld,
   keyPayload,
   mousePayload,
+  type TestLogger,
   testLogger,
   waitFor,
-  type FakeProfile,
-  type TestLogger,
 } from './helpers/fake-browser.js'
 import { FakeTileBackend } from './helpers/fake-tile.js'
 
@@ -88,11 +88,7 @@ describe('start validation', () => {
   it('rejects a master that is not running', async () => {
     const { sync, master } = harness()
     master.target.wsEndpoint = null
-    await expectSyncError(
-      sync.start(startInput),
-      'not_running',
-      'profile "master" is not running',
-    )
+    await expectSyncError(sync.start(startInput), 'not_running', 'profile "master" is not running')
   })
 
   it('rejects a slave that is not running', async () => {
@@ -141,9 +137,11 @@ describe('start validation', () => {
 
   it('leaves nothing behind when a slave cannot be attached', async () => {
     const { sync, world, master, slaveB } = harness()
-    slaveB.target.wsEndpoint = 'ws://127.0.0.1/gone'
+    const revive = world.kill('ws://127.0.0.1/slave-b')
 
-    await expect(sync.start(startInput)).rejects.toThrow('could not attach to slave profile "slave-b"')
+    await expect(sync.start(startInput)).rejects.toThrow(
+      'could not attach to slave profile "slave-b"',
+    )
 
     expect(sync.current()).toBeNull()
     expect(master.context.binding).toBeNull()
@@ -151,12 +149,13 @@ describe('start validation', () => {
     expect(world.connectCalls).toEqual([
       'ws://127.0.0.1/master',
       'ws://127.0.0.1/slave-a',
-      'ws://127.0.0.1/gone',
+      'ws://127.0.0.1/slave-b',
     ])
     // A later session must still be able to attach to the master context.
-    slaveB.target.wsEndpoint = 'ws://127.0.0.1/slave-b'
+    revive()
     const session = await sync.start(startInput)
     expect(session.slaveProfileIds).toEqual(['slave-a', 'slave-b'])
+    expect(slaveB.context.binding).toBeNull()
     await sync.stop()
   })
 })
@@ -399,9 +398,10 @@ describe('browser disconnects', () => {
     sync.on('change', session => seen.push(session))
 
     master.browser.disconnect()
-    await waitFor(() => sync.current() === null)
+    await waitFor(() => seen.length === 1)
 
     expect(seen).toEqual([null])
+    expect(sync.current()).toBeNull()
   })
 
   it('drops a slave that goes away and stops when none is left', async () => {
@@ -411,14 +411,14 @@ describe('browser disconnects', () => {
     sync.on('change', session => seen.push(session))
 
     slaveA.browser.disconnect()
-    await waitFor(() => sync.current()?.slaveProfileIds.length === 1)
+    await waitFor(() => seen.length === 1)
     expect(sync.current()?.slaveProfileIds).toEqual(['slave-b'])
-    expect(seen).toHaveLength(1)
+    expect(seen[0]?.slaveProfileIds).toEqual(['slave-b'])
 
     slaveB.browser.disconnect()
-    await waitFor(() => sync.current() === null)
-    expect(seen).toHaveLength(2)
+    await waitFor(() => seen.length === 2)
     expect(seen[1]).toBeNull()
+    expect(sync.current()).toBeNull()
   })
 })
 

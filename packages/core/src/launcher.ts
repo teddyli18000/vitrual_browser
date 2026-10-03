@@ -42,6 +42,7 @@
 import { spawnSync } from 'node:child_process'
 import type { Profile } from '@vfox/shared'
 import { firefox } from 'playwright-core'
+import type { LaunchOptions } from 'camoufox-js'
 import { type FingerprintWarning, toEngineOptions } from './fingerprint.js'
 
 export interface BrowserExit {
@@ -89,6 +90,11 @@ export async function toServerOptions(
 
   const options = (await launchOptions({
     ...engine,
+    // The profile's stored device identity, re-injected verbatim. Without it the engine generates a
+    // brand new device on every launch (see src/identity.ts), which is the one thing this product
+    // must never do. `identity.fingerprint` is an open record in the shared schema because it is
+    // whatever the engine's generator produced, hence the cast back to the engine's own type.
+    fingerprint: profile.identity?.fingerprint as LaunchOptions['fingerprint'],
     headless: profile.launch.headless,
   })) as ServerOptions
 
@@ -128,6 +134,12 @@ export const launchCamoufox: BrowserLauncher = async ({
   debug,
 }: LaunchContext): Promise<BrowserHandle> => {
   const options = await toServerOptions(profile, userDataDir, warn)
+  // The spawn line is the first thing support needs; Playwright does not expose the argv after a
+  // successful launch, so log what we handed it.
+  debug(
+    `spawning engine for profile ${profile.id}: ${String(options.executablePath)} ` +
+      `headless=${String(options.headless)} args=${JSON.stringify(options.args ?? [])}`,
+  )
   const server = await firefox.launchServer(options)
 
   const browserProcess = server.process()
@@ -141,6 +153,7 @@ export const launchCamoufox: BrowserLauncher = async ({
   // `close` event (coreBundle.js:52582-52585), but it is typed, so it needs no cast.
   browserProcess?.on('exit', (exitCode, signal) => {
     exited = { exitCode, signal }
+    debug(`profile ${profile.id}: engine process exited (code ${exitCode}, signal ${signal})`)
     exitListener?.(exited)
   })
 
