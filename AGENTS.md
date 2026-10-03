@@ -26,8 +26,13 @@ Mental model: **every profile is a VM instance.**
    (a) the Camoufox kernel download on first run, (b) the user's own configured proxy, and
    (c) the GeoIP lookup the engine performs when `fingerprint.geoip` is enabled.
    Any new outbound call must be documented in `README.md` and justified in the PR.
-2. **Zero paywall.** Every feature ships to everyone. There is no license check, no activation, no
-   "pro" tier, and no code path that could grow one.
+2. **Zero paywall, zero promotion, zero cloud.** Every feature ships to everyone: no licence check, no
+   activation, no "pro" tier, no referral or invite links, no ads, no community-group or website
+   promotion inside the app, and no hosted service of ours. There is deliberately **no cloud-sync /
+   WebDAV backup package** — the project operates no servers and never asks the user for an account.
+   Moving or backing up a profile is done with per-profile export/import to a local zip
+   (`profiles.exportZip` / `profiles.importZip`). Do not add a remote endpoint, an account, or a
+   payment surface; if a task seems to require one, stop and ask.
 3. **Real windows.** `launch.headless` defaults to `false`. Profiles open visible windows; a
    headless mode exists only for CI and automation and must never become the default.
 4. **Lightweight by construction.** See the invariants below. A feature that adds an idle process,
@@ -130,14 +135,19 @@ Verified on this machine: Node 24.14, pnpm 10.33, `camoufox-js` 0.12.0,
   `firefox.connect(wsEndpoint)` from `playwright-core`, not `chromium.connectOverCDP`.
   The VirtualBrowser-compatible `/api/v1/launchBrowser` alias therefore returns `wsEndpoint` and
   leaves `debuggingPort` null rather than inventing a port.
-- **Persistent profile and wsEndpoint are mutually exclusive in playwright-core 1.60.**
-  `firefox.defaultArgs` (`coreBundle.js:44188`) throws `_createUserDataDirArgMisuseError` if
-  `-profile` appears in `args`, and `launchServer()` is always non-persistent (throwaway temp
-  profile). `launchPersistentContext()` — which is what gives every VFox profile its own durable,
-  isolated directory — has no server variant. v0.1 therefore launches **persistent contexts only**
-  and `ProfileRuntime.wsEndpoint` is always `null`. Do not "fix" this by passing `-profile`; it
-  throws. Revisit via WebDriver BiDi (`--remote-debugging-port`, which does accept `--profile`) if
-  server-mode automation is ever needed.
+- **Persistent profile + wsEndpoint are BOTH available, via one private playwright-core hook.**
+  `firefox.launchServer({ ...opts, _userDataDir })` routes into `launchPersistentContext` and returns
+  that context's browser wrapped in a `BrowserServer` (`coreBundle.js:52555-52586`), so a profile keeps
+  its durable isolated directory **and** exposes `wsEndpoint()`, `process()` (the real browser pid) and
+  `on('close', (exitCode, signal))`. Two private options are load-bearing and must be pinned:
+  - `_userDataDir` — the durable per-profile directory. Without it `launchServer` uses a throwaway temp profile.
+  - `_sharedBrowser: true` — the browser survives the last automation client disconnecting, so the
+    user's window does not vanish when their script exits.
+  The `-profile` guard in `firefox.defaultArgs` (`coreBundle.js:44190`) only throws when a *caller*
+  injects `-profile` into `args`; Playwright owns that argument itself.
+  Because both options are undocumented, `playwright-core` is pinned to an exact version and
+  `packages/core` carries a guard test asserting the hook still exists — a silent Playwright bump must
+  fail CI, not quietly degrade every profile to a temp directory.
 - `better-sqlite3` appears in `camoufox-js`'s dependency list but is **never imported by its build
   output**. Ignore the pnpm "ignored build scripts" warning; do not add native build steps for it.
 - The Camoufox kernel is ~493 MB and is deliberately *not* committed and *not* bundled into the

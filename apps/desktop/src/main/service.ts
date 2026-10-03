@@ -10,16 +10,16 @@
  */
 
 import { createConnection } from 'node:net'
+import type { ServerHandle } from '@vfox/server'
 import {
   API_ROUTES,
   API_TOKEN_HEADER,
+  type ApiResult,
   DEFAULT_API_HOST,
   DEFAULT_API_PORT,
   ENV,
-  type ApiResult,
   type ProfileRuntime,
 } from '@vfox/shared'
-import type { ServerHandle } from '@vfox/server'
 
 export interface ServiceState {
   /** true when the embedded HTTP API is listening. */
@@ -124,9 +124,9 @@ export async function stopAllProfiles(): Promise<number> {
     log.warn(`cannot list runtime state: ${describe(err)}`)
     return 0
   }
-  const active = runtimes.filter((rt) => rt.status !== 'stopped' && rt.status !== 'error')
+  const active = runtimes.filter(rt => rt.status !== 'stopped' && rt.status !== 'error')
   await Promise.allSettled(
-    active.map((rt) => api<ProfileRuntime>(API_ROUTES.stopProfile(rt.profileId), { method: 'POST' })),
+    active.map(rt => api<ProfileRuntime>(API_ROUTES.stopProfile(rt.profileId), { method: 'POST' })),
   )
   return active.length
 }
@@ -146,8 +146,12 @@ export interface ProxyProbeResult {
  * the product itself talk to a server the user never configured, which the zero-telemetry rule
  * forbids. This tells the user exactly what it can tell: whether the proxy endpoint answers.
  */
-export function probeProxy(host: string, port: number, timeoutMs = 6000): Promise<ProxyProbeResult> {
-  return new Promise((resolve) => {
+export function probeProxy(
+  host: string,
+  port: number,
+  timeoutMs = 6000,
+): Promise<ProxyProbeResult> {
+  return new Promise(resolve => {
     const started = Date.now()
     let settled = false
     const socket = createConnection({ host, port })
@@ -161,8 +165,12 @@ export function probeProxy(host: string, port: number, timeoutMs = 6000): Promis
     }
 
     socket.setTimeout(timeoutMs)
-    socket.once('connect', () => finish({ ok: true, ms: Date.now() - started, message: 'TCP 连接成功' }))
-    socket.once('timeout', () => finish({ ok: false, ms: null, message: `连接超时（${timeoutMs} ms）` }))
+    socket.once('connect', () =>
+      finish({ ok: true, ms: Date.now() - started, message: 'TCP 连接成功' }),
+    )
+    socket.once('timeout', () =>
+      finish({ ok: false, ms: null, message: `连接超时（${timeoutMs} ms）` }),
+    )
     socket.once('error', (err: Error) => finish({ ok: false, ms: null, message: err.message }))
   })
 }

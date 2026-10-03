@@ -5,9 +5,37 @@
  * into the renderer.
  */
 
-/** `additionalArguments` entry the main process uses to hand the bridge over to the preload. */
-export const BRIDGE_ARG_PREFIX = '--vfox-bridge='
+/** Synchronous channel the preload uses to read the connection facts before the page runs. */
+export const BRIDGE_CHANNEL = 'vfox:bridge-info'
 
+export interface ServiceState {
+  ok: boolean
+  /** Base URL the renderer must talk to, with no trailing slash. */
+  url: string
+  /** Token for the `x-vfox-token` header. Empty when the service is down. */
+  token: string
+  /** Human readable reason the service is unavailable, or null. */
+  error: string | null
+}
+
+export interface ProxyProbe {
+  ok: boolean
+  /** Round trip time in milliseconds, when the endpoint answered. */
+  ms: number | null
+  message: string
+}
+
+export interface ProfileUsage {
+  path: string
+  exists: boolean
+  bytes: number
+  files: number
+}
+
+/**
+ * `window.vfox` — named functions only. No `ipcRenderer`, no `require`, no `process`, no generic
+ * `invoke(channel, ...args)`, no filesystem primitive.
+ */
 export interface VfoxBridge {
   /** `http://127.0.0.1:<port>`, no trailing slash. Empty when the service failed to start. */
   apiBase: string
@@ -21,28 +49,20 @@ export interface VfoxBridge {
   serviceError: string | null
   openPath(path: string): Promise<string>
   revealPath(path: string): Promise<boolean>
+  /** Opens the one hardcoded first-party homepage; takes no argument on purpose. */
+  openHomepage(): Promise<string>
   probeProxy(input: { host: string; port: number }): Promise<ProxyProbe>
   restartService(): Promise<ServiceState>
-  saveExport(input: { suggestedName: string; base64: string }): Promise<{ saved: boolean; path: string | null }>
+  profileDir(profileId: string): Promise<string | null>
+  profileUsage(profileId: string): Promise<ProfileUsage>
+  saveExport(input: {
+    suggestedName: string
+    base64: string
+  }): Promise<{ saved: boolean; path: string | null }>
   pickImport(): Promise<{ name: string; base64: string } | null>
-  profileDir(profileId: string): Promise<string>
 }
 
-export interface ProxyProbe {
-  ok: boolean
-  /** Round trip time in milliseconds, when the endpoint answered. */
-  ms: number | null
-  message: string
-}
-
-export interface ServiceState {
-  ok: boolean
-  url: string
-  token: string
-  error: string | null
-}
-
-/** Shape carried in `--vfox-bridge=`; identical to the bridge minus the callable capabilities. */
+/** Shape carried over `BRIDGE_CHANNEL`; the bridge minus the callable capabilities. */
 export interface BridgePayload {
   apiBase: string
   token: string

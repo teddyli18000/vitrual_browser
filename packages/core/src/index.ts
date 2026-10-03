@@ -14,6 +14,7 @@ import type {
   ProfileRuntime,
   ProfileUpdate,
 } from '@vfox/shared'
+import { createCoreImpl } from './core.js'
 
 export interface CoreLogger {
   debug(msg: string, ...args: unknown[]): void
@@ -80,6 +81,6 @@ export interface Core {
   close(): Promise<void>
 }
 
-export function createCore(_options: CoreOptions): Promise<Core> {
-  throw new Error('@vfox/core: createCore() is not implemented yet')
+export function createCore(options: CoreOptions): Promise<Core> {
+  return createCoreImpl(options)
 }

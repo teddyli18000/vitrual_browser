@@ -19,24 +19,35 @@ export interface ResolveTokenOptions {
   token?: string
 }
 
+export type TokenSource = 'option' | 'env' | 'file' | 'generated'
+
 export interface ResolvedToken {
   token: string
   /** `true` when the token was read from or written to `<dataDir>/api-token`. */
   persisted: boolean
+  /** `true` when this call minted a brand new token. */
+  generated: boolean
+  /** Where the token came from. Safe to log; the value itself never is. */
+  source: TokenSource
 }
 
 export async function resolveToken(options: ResolveTokenOptions): Promise<ResolvedToken> {
-  const explicit = options.token ?? process.env[ENV.apiToken]
-  if (explicit && explicit.length > 0) return { token: explicit, persisted: false }
+  if (options.token && options.token.length > 0) {
+    return { token: options.token, persisted: false, generated: false, source: 'option' }
+  }
+  const fromEnv = process.env[ENV.apiToken]
+  if (fromEnv && fromEnv.length > 0) {
+    return { token: fromEnv, persisted: false, generated: false, source: 'env' }
+  }
 
   const file = apiTokenPath(options.dataDir)
   const existing = await readTokenFile(file)
-  if (existing) return { token: existing, persisted: true }
+  if (existing) return { token: existing, persisted: true, generated: false, source: 'file' }
 
   const token = randomBytes(32).toString('hex')
   await mkdir(path.dirname(file), { recursive: true })
   await writeFile(file, `${token}\n`, { encoding: 'utf8', mode: 0o600 })
-  return { token, persisted: true }
+  return { token, persisted: true, generated: true, source: 'generated' }
 }
 
 async function readTokenFile(file: string): Promise<string | undefined> {

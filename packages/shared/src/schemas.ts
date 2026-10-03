@@ -81,6 +81,25 @@ export const GroupSchema = z.object({
 })
 export type Group = z.infer<typeof GroupSchema>
 
+/**
+ * The device identity a profile was born with.
+ *
+ * The engine's fingerprint generator is **not reproducible across launches** — upstream Camoufox's
+ * ROADMAP still lists "the same seed gives the same device, including its canvas and audio output"
+ * as unfinished. So VFox generates the identity exactly ONCE at profile creation, stores it here,
+ * and re-injects it on every launch. Without this a profile would present a different device every
+ * time it is opened, which silently destroys the product's central promise.
+ */
+export const FingerprintIdentitySchema = z.object({
+  version: z.literal(1),
+  /** Engine version the identity was generated against; a different engine may need a re-roll. */
+  engine: z.string().nullable().default(null),
+  generatedAt: z.string(),
+  /** The generated fingerprint object, passed back verbatim as the engine's `fingerprint` option. */
+  fingerprint: z.record(z.string(), z.unknown()),
+})
+export type FingerprintIdentity = z.infer<typeof FingerprintIdentitySchema>
+
 export const ProfileSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -89,6 +108,8 @@ export const ProfileSchema = z.object({
   color: z.string().nullable().default(null),
   proxy: ProxySchema.nullable().default(null),
   fingerprint: FingerprintSchema,
+  /** Generated once, re-injected on every launch. See {@link FingerprintIdentitySchema}. */
+  identity: FingerprintIdentitySchema.nullable().default(null),
   launch: LaunchPrefsSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -119,12 +140,9 @@ export const ProfileRuntimeSchema = z.object({
   status: RuntimeStatusSchema,
   pid: z.number().int().nullable().default(null),
   /**
-   * Reserved. Always null in v0.1: the engine is launched as a *persistent* context
-   * (`launchPersistentContext`) so every profile keeps its own isolated, durable profile
-   * directory, and playwright-core refuses to expose a websocket server for persistent
-   * launches (it also throws if `-profile` is passed through `args`). External Playwright
-   * attach therefore has no endpoint yet; the field exists so adding one is not a breaking
-   * contract change.
+   * Playwright (Juggler) websocket endpoint for this running profile. External automation attaches
+   * with `firefox.connect(wsEndpoint)` from playwright-core — the Firefox engine has no CDP port.
+   * Populated while the profile is running; null when stopped.
    */
   wsEndpoint: z.string().nullable().default(null),
   startedAt: z.string().nullable().default(null),
@@ -161,6 +179,40 @@ export const KernelProgressSchema = z.object({
   message: z.string().nullable().default(null),
 })
 export type KernelProgress = z.infer<typeof KernelProgressSchema>
+
+/* --------------------------------------------------------- window synchroniser */
+
+/**
+ * A synchroniser session: input performed in the master profile is replayed into every slave
+ * profile. This is the multi-account "do it once, apply everywhere" feature.
+ */
+export const SyncSessionSchema = z.object({
+  id: z.string().min(1),
+  masterProfileId: z.string().min(1),
+  slaveProfileIds: z.array(z.string().min(1)),
+  active: z.boolean().default(false),
+  startedAt: z.string().nullable().default(null),
+  /** Events mirrored so far. Local diagnostic counter only — never reported anywhere. */
+  mirroredEvents: z.number().int().nonnegative().default(0),
+})
+export type SyncSession = z.infer<typeof SyncSessionSchema>
+
+export const SyncStartSchema = z.object({
+  masterProfileId: z.string().min(1),
+  slaveProfileIds: z.array(z.string().min(1)).min(1),
+})
+export type SyncStart = z.infer<typeof SyncStartSchema>
+
+export const TileLayoutSchema = z.enum(['grid', 'rows', 'columns'])
+export type TileLayout = z.infer<typeof TileLayoutSchema>
+
+export const TileRequestSchema = z.object({
+  profileIds: z.array(z.string().min(1)).min(1),
+  layout: TileLayoutSchema.default('grid'),
+  /** 0-based monitor index; null = primary monitor. */
+  displayIndex: z.number().int().nonnegative().nullable().default(null),
+})
+export type TileRequest = z.infer<typeof TileRequestSchema>
 
 /* ------------------------------------------------------------------ api envelope */
 

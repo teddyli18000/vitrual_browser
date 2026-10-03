@@ -3,7 +3,7 @@
  * so the tray is the only way back — and the only place 全部停止 / 退出 live.
  */
 
-import { Menu, Tray, nativeImage } from 'electron'
+import { Menu, nativeImage, Tray } from 'electron'
 
 export interface TrayActions {
   show(): void
@@ -13,7 +13,9 @@ export interface TrayActions {
 
 export function createTray(iconPath: string, actions: TrayActions): Tray {
   const image = nativeImage.createFromPath(iconPath)
-  const tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image.resize({ width: 16, height: 16 }))
+  const tray = new Tray(
+    image.isEmpty() ? nativeImage.createEmpty() : image.resize({ width: 16, height: 16 }),
+  )
   tray.setToolTip('VFox 指纹浏览器')
   tray.setContextMenu(
     Menu.buildFromTemplate([

@@ -3,33 +3,38 @@
   "version": "0.1.0",
   "private": true,
   "description": "VFox desktop application",
+  "productName": "VFox",
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "dist": "electron-vite build && electron-builder --win --x64 --publish never",
+    "icons": "node scripts/generate-icons.mjs",
+    "smoke:api": "node scripts/smoke-api.mjs",
     "lint": "biome check src"
   },
   "dependencies": {
-    "@element-plus/icons-vue": "^2.3.2",
+    "camoufox-js": "^0.12.0",
+    "playwright-core": "1.60.0"
+  },
+  "devDependencies": {
+    "@electron/fuses": "^2.0.0",
     "@vfox/core": "workspace:*",
     "@vfox/server": "workspace:*",
     "@vfox/shared": "workspace:*",
-    "element-plus": "^2.11.5",
-    "pinia": "^3.0.3",
-    "vue": "^3.5.22",
-    "vue-router": "^4.5.1"
-  },
-  "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.1",
     "electron": "^38.2.2",
     "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.1",
+    "element-plus": "^2.11.5",
+    "pinia": "^3.0.3",
     "typescript": "^5.9.3",
     "vite": "^7.1.9",
+    "vue": "^3.5.22",
+    "vue-router": "^4.5.1",
     "vue-tsc": "^3.1.1"
   }
 }

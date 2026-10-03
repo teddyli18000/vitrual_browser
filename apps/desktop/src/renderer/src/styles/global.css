@@ -1,0 +1,107 @@
+:root {
+  --vfox-bg: #f5f6f8;
+  --vfox-panel: #ffffff;
+  --vfox-border: #e6e8ee;
+  --vfox-sidebar: #1e2230;
+  --vfox-sidebar-hover: #2a3040;
+  --vfox-text: #1f2430;
+  --vfox-muted: #7b8397;
+  --vfox-accent: #4a6cf7;
+  --vfox-ok: #22c55e;
+  --vfox-warn: #f59e0b;
+  --vfox-err: #ef4444;
+  --vfox-idle: #b6bccb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family:
+    "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  color: var(--vfox-text);
+  background: var(--vfox-bg);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/*
+ * Dense, VM-manager-like tables: tighter rows than Element Plus defaults.
+ * Scoped under `#app` deliberately — that makes these win on specificity, so the result does not
+ * depend on the order the bundler happens to emit Element Plus's CSS in.
+ */
+#app .vfox-table .el-table__cell {
+  padding: 6px 0;
+}
+
+#app .vfox-table .cell {
+  padding: 0 10px;
+  line-height: 20px;
+}
+
+#app .vfox-table .el-table__row {
+  height: 40px;
+}
+
+.vfox-mono {
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 12px;
+}
+
+.vfox-muted {
+  color: var(--vfox-muted);
+}
+
+.vfox-auto-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 11px;
+  color: var(--vfox-accent);
+  background: rgba(74, 108, 247, 0.1);
+  white-space: nowrap;
+}
+
+.vfox-field-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.vfox-field-row > .vfox-field-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.vfox-scroll {
+  overflow: auto;
+}
+
+/* Scrollbars that do not shout. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #ccd1dc;
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b3bacb;
+  background-clip: content-box;
+}

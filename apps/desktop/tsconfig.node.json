@@ -10,7 +10,13 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "types": ["node"],
+    "noUnusedLocals": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/shared/**/*.ts", "src/main/**/*.ts", "src/preload/**/*.ts", "electron.vite.config.ts"]
+  "include": [
+    "src/shared/**/*.ts",
+    "src/main/**/*.ts",
+    "src/preload/**/*.ts",
+    "electron.vite.config.ts"
+  ]
 }

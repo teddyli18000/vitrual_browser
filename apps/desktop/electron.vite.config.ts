@@ -19,12 +19,26 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        // The window runs with `sandbox: true`, and sandboxed preload scripts must be CommonJS:
+        // an ESM preload would force `sandbox: false` and weaken the renderer isolation. `.cjs`
+        // keeps the format unambiguous even though this package is `"type": "module"`.
+        output: { format: 'cjs', entryFileNames: '[name].cjs' },
+      },
+    },
   },
   renderer: {
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src'),
       },
+    },
+    build: {
+      // Vite otherwise injects an inline <script type="module"> module-preload polyfill into
+      // index.html, which the strict `script-src 'self'` policy in index.html would block.
+      // Electron 38 supports modulepreload natively, so nothing is lost.
+      modulePreload: { polyfill: false },
     },
     plugins: [vue()],
   },

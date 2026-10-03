@@ -11,6 +11,7 @@
     "moduleResolution": "Bundler",
     "jsx": "preserve",
     "types": [],
+    "noUnusedLocals": true,
     "baseUrl": ".",
     "paths": {
       "@renderer/*": ["src/renderer/src/*"]

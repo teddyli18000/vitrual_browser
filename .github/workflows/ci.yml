@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The repository default workflow permission is `read`; state it explicitly so no job can
+# silently gain more.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep every large download inside the workspace. windows-latest has ~14 GB free on C:
+  # but a far larger D: (where github.workspace lives), and actions/cache only takes
+  # workspace-relative paths. scripts/*.mjs apply the same defaults when these are unset.
+  CAMOUFOX_INSTALL_DIR: ${{ github.workspace }}/.cache/camoufox
+  ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+  ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+  PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/playwright
+
+jobs:
+  validate:
+    name: typecheck, lint, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Node.js and pnpm
+        uses: ./.github/actions/setup
+
+      # @vfox/core, @vfox/server and @vfox/cli resolve @vfox/shared through its built
+      # `dist/`, so the frozen contract has to exist before anything typechecks.
+      - name: Build the frozen contract
+        run: pnpm --filter @vfox/shared build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      # Enforces the supply-chain rule that every third-party action stays pinned to a full
+      # commit SHA, and that no workflow references a path that does not exist.
+      - name: Validate the workflows
+        run: node scripts/validate-workflows.mjs
+
+      - name: Test
+        run: pnpm test
+
+      # Builds packages/* and the desktop renderer. The installer is deliberately NOT built
+      # here: it is a release-only concern and would add minutes to every push.
+      - name: Build packages and the desktop renderer
+        run: pnpm build
+
+  e2e-engine:
+    name: engine launch and fingerprint smoke test
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Node.js and pnpm
+        uses: ./.github/actions/setup
+
+      - name: Report free disk space
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem |
+            Where-Object { $_.Used -ne $null } |
+            ForEach-Object { '{0}: {1:N1} GB free of {2:N1} GB' -f $_.Name, ($_.Free / 1GB), (($_.Used + $_.Free) / 1GB) }
+
+      # The cache key is the engine version itself, resolved from camoufox-js's own release
+      # lookup — not the lockfile hash. That way the ~550 MB engine is re-downloaded exactly
+      # when the engine changes, and never on an unrelated push. There are deliberately no
+      # restore-keys: restoring a stale engine would cost a full 550 MB transfer and then be
+      # replaced anyway.
+      - name: Resolve the Camoufox engine version
+        id: engine
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $version = (node scripts/kernel-version.mjs).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
+            throw 'Could not resolve the Camoufox engine version; `camoufox fetch` would fail too.'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Camoufox engine version: $version"
+
+      - name: Restore the Camoufox engine
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ steps.engine.outputs.version }}
+
+      - name: Fetch the Camoufox engine
+        run: node scripts/fetch-kernel.mjs
+
+      - name: Build the workspace
+        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build
+
+      - name: Launch the engine and verify fingerprint spoofing
+        uses: ./.github/actions/engine-smoke
+        with:
+          headless: '1'

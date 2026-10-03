@@ -9,26 +9,46 @@
  *
  * No business logic lives here: the GUI, the CLI and the API all speak the same HTTP contract.
  * No auto-updater, no crash reporter, no devtools in production, no telemetry.
+ *
+ * The installer must never be able to damage the machine it lands on, so this process
+ * registers no protocol handler, no file association, no auto-start entry, no scheduled task
+ * and no service, never writes to HKLM, and never touches the hosts file, proxy settings,
+ * firewall rules, PATH or Defender exclusions.
  */
 
 import { mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { BrowserWindow, Menu, Tray, app, dialog, ipcMain, shell } from 'electron'
-import { APP_ID, PRODUCT_NAME } from '@vfox/shared'
-import { BRIDGE_ARG_PREFIX, type BridgePayload } from '../shared/bridge'
-import { probeProxy, resolveDataDir, startService, stopAllProfiles, stopService } from './service.js'
+import { APP_ID, HOMEPAGE, PRODUCT_NAME } from '@vfox/shared'
+import { app, BrowserWindow, ipcMain, Menu, shell, type Tray } from 'electron'
+import { BRIDGE_CHANNEL, type BridgePayload } from '../shared/bridge'
+import { profileUsage } from './profile-usage.js'
+import {
+  probeProxy,
+  resolveDataDir,
+  startService,
+  stopAllProfiles,
+  stopService,
+} from './service.js'
 import { createTray } from './tray.js'
 import { loadUiState, saveUiState, trackWindowState, type UiState } from './window-state.js'
 
 const isDev = !app.isPackaged
-const here = dirname(fileURLToPath(import.meta.url))
+const here = fileURLToPath(new URL('.', import.meta.url))
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let uiState: UiState
 let dataDir = ''
 let quitting = false
+let bridgePayload: BridgePayload = {
+  apiBase: '',
+  token: '',
+  version: '0.0.0',
+  platform: process.platform,
+  dataDir: '',
+  serviceError: '主进程尚未就绪',
+}
 
 /* ------------------------------------------------------------------ single instance */
 
@@ -52,6 +72,8 @@ async function bootstrap(): Promise<void> {
     app.setPath('sessionData', override)
   }
 
+  // Sandbox every renderer, including any future one.
+  app.enableSandbox()
   app.setAppUserModelId(APP_ID)
   Menu.setApplicationMenu(null)
 
@@ -61,10 +83,25 @@ async function bootstrap(): Promise<void> {
   mkdirSync(dataDir, { recursive: true })
   uiState = loadUiState(dataDir)
 
-  const service = await startService(dataDir)
+  // Point the engine at a stable, app-owned directory BEFORE @vfox/server (and therefore
+  // @vfox/core and camoufox-js) is loaded, but never override an explicit setting: local
+  // development keeps using the repo cache and must not re-download 550 MB.
+  if (!process.env.CAMOUFOX_INSTALL_DIR) {
+    process.env.CAMOUFOX_INSTALL_DIR = join(dataDir, 'engine')
+  }
 
-  registerIpc(dataDir)
-  createWindow(service.url, service.token, service.error)
+  const service = await startService(dataDir)
+  bridgePayload = {
+    apiBase: service.url,
+    token: service.token,
+    version: app.getVersion(),
+    platform: process.platform,
+    dataDir,
+    serviceError: service.error,
+  }
+
+  registerIpc()
+  createWindow()
 
   tray = createTray(join(resourceRoot(), 'tray.png'), {
     show: () => showWindow(),
@@ -82,32 +119,28 @@ function resourceRoot(): string {
 
 /* ---------------------------------------------------------------------------- window */
 
-function createWindow(apiBase: string, token: string, serviceError: string | null): void {
+function createWindow(): void {
   mainWindow = new BrowserWindow({
     ...uiState.window,
-    minWidth: 940,
-    minHeight: 600,
+    minWidth: 1024,
+    minHeight: 700,
     show: false,
     title: PRODUCT_NAME,
     backgroundColor: '#f5f6f8',
     autoHideMenuBar: true,
     icon: join(resourceRoot(), 'icon.png'),
     webPreferences: {
-      preload: join(here, '..', 'preload', 'index.mjs'),
-      // ESM preload scripts require sandbox: false. contextIsolation stays on and the renderer
-      // has no Node access, which is what actually matters here.
-      sandbox: false,
+      preload: join(here, '..', 'preload', 'index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
+      nodeIntegrationInWorker: false,
+      webviewTag: false,
       spellcheck: false,
-      additionalArguments: [`${BRIDGE_ARG_PREFIX}${encodeURIComponent(JSON.stringify({
-        apiBase,
-        token,
-        version: app.getVersion(),
-        platform: process.platform,
-        dataDir,
-        serviceError,
-      } satisfies BridgePayload))}`],
+      devTools: isDev,
     },
   })
 
@@ -115,18 +148,22 @@ function createWindow(apiBase: string, token: string, serviceError: string | nul
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
-    if (isDev && process.env.VFOX_DEVTOOLS === '1') mainWindow?.webContents.openDevTools({ mode: 'detach' })
+    if (isDev && process.env.VFOX_DEVTOOLS === '1')
+      mainWindow?.webContents.openDevTools({ mode: 'detach' })
   })
 
   // Closing the window hides it: the profiles keep running and the tray brings it back.
-  mainWindow.on('close', (event) => {
+  mainWindow.on('close', event => {
     if (quitting) return
     event.preventDefault()
     mainWindow?.hide()
     if (!uiState.trayHintShown) {
       uiState = { ...uiState, trayHintShown: true }
       saveUiState(dataDir, uiState)
-      tray?.displayBalloon({ title: 'VFox 仍在后台运行', content: '环境会继续运行，可从托盘图标重新打开主界面。' })
+      tray?.displayBalloon({
+        title: 'VFox 仍在后台运行',
+        content: '环境会继续运行，可从托盘图标重新打开主界面。',
+      })
     }
   })
 
@@ -136,10 +173,14 @@ function createWindow(apiBase: string, token: string, serviceError: string | nul
 
   trackWindowState(mainWindow, dataDir, () => uiState)
 
-  // External links open in the user's browser, never inside the app shell.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://')) void shell.openExternal(url)
-    return { action: 'deny' }
+  // Nothing may open a new window, ever — not the app, not a profile, not a remote page.
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+
+  // The renderer is the only thing allowed to navigate this window.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const current = mainWindow?.webContents.getURL() ?? ''
+    const sameDocument = current.length > 0 && url.startsWith(current.split('#')[0] ?? current)
+    if (!sameDocument) event.preventDefault()
   })
 
   const devUrl = process.env.ELECTRON_RENDERER_URL
@@ -159,16 +200,46 @@ function showWindow(): void {
 
 /* ------------------------------------------------------------------------------- ipc */
 
-function registerIpc(storeDir: string): void {
+/** True when `target` really is inside the app's own data directory. */
+function insideDataDir(target: string): boolean {
+  const root = resolve(dataDir)
+  const rel = relative(root, resolve(target))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+const PROFILE_ID = /^[A-Za-z0-9._-]+$/
+
+function profileUserDataDir(profileId: string): string | null {
+  if (!PROFILE_ID.test(profileId)) return null
+  return join(dataDir, 'profiles', profileId, 'userdata')
+}
+
+function registerIpc(): void {
+  // Synchronous on purpose: the preload needs the connection facts before the page runs, and
+  // this keeps the bridge a plain object instead of a promise the renderer has to await.
+  ipcMain.on(BRIDGE_CHANNEL, event => {
+    event.returnValue = bridgePayload
+  })
+
   ipcMain.handle('vfox:open-path', async (_event, target: string) => {
     if (typeof target !== 'string' || target.length === 0) return '无效路径'
+    if (!insideDataDir(target)) return '出于安全考虑，只允许打开 VFox 数据目录内的路径'
+    mkdirSync(target, { recursive: true })
     return shell.openPath(target)
   })
 
   ipcMain.handle('vfox:reveal-path', (_event, target: string) => {
     if (typeof target !== 'string' || target.length === 0) return false
+    if (!insideDataDir(target)) return false
     shell.showItemInFolder(target)
     return true
+  })
+
+  // Zero-argument capability: the renderer cannot pass a URL, so it cannot open anything but
+  // this one hardcoded, first-party documentation link.
+  ipcMain.handle('vfox:open-homepage', async () => {
+    await shell.openExternal(HOMEPAGE)
+    return HOMEPAGE
   })
 
   ipcMain.handle('vfox:probe-proxy', async (_event, input: { host: string; port: number }) => {
@@ -179,25 +250,47 @@ function registerIpc(storeDir: string): void {
   })
 
   /** Lets the 重试 button in the renderer re-run the in-process bootstrap after a failure. */
-  ipcMain.handle('vfox:restart-service', async () => startService(storeDir))
-
-  ipcMain.handle('vfox:save-export', async (_event, input: { suggestedName: string; base64: string }) => {
-    const window = mainWindow
-    if (!window) return { saved: false, path: null as string | null }
-    const result = await dialog.showSaveDialog(window, {
-      title: '导出环境',
-      defaultPath: input.suggestedName,
-      filters: [{ name: 'VFox 环境包', extensions: ['zip'] }],
-    })
-    if (result.canceled || !result.filePath) return { saved: false, path: null as string | null }
-    const { writeFile } = await import('node:fs/promises')
-    await writeFile(result.filePath, Buffer.from(input.base64, 'base64'))
-    return { saved: true, path: result.filePath }
+  ipcMain.handle('vfox:restart-service', async () => {
+    const state = await startService(dataDir)
+    bridgePayload = {
+      ...bridgePayload,
+      apiBase: state.url,
+      token: state.token,
+      serviceError: state.error,
+    }
+    return state
   })
+
+  ipcMain.handle('vfox:profile-dir', (_event, profileId: string) => profileUserDataDir(profileId))
+
+  ipcMain.handle('vfox:profile-usage', async (_event, profileId: string) => {
+    const dir = profileUserDataDir(profileId)
+    if (!dir) return { path: '', exists: false, bytes: 0, files: 0 }
+    return profileUsage(dir)
+  })
+
+  ipcMain.handle(
+    'vfox:save-export',
+    async (_event, input: { suggestedName: string; base64: string }) => {
+      const window = mainWindow
+      if (!window) return { saved: false, path: null as string | null }
+      const { dialog } = await import('electron')
+      const result = await dialog.showSaveDialog(window, {
+        title: '导出环境',
+        defaultPath: input.suggestedName,
+        filters: [{ name: 'VFox 环境包', extensions: ['zip'] }],
+      })
+      if (result.canceled || !result.filePath) return { saved: false, path: null as string | null }
+      const { writeFile } = await import('node:fs/promises')
+      await writeFile(result.filePath, Buffer.from(input.base64, 'base64'))
+      return { saved: true, path: result.filePath }
+    },
+  )
 
   ipcMain.handle('vfox:pick-import', async () => {
     const window = mainWindow
     if (!window) return null
+    const { dialog } = await import('electron')
     const result = await dialog.showOpenDialog(window, {
       title: '导入环境',
       properties: ['openFile'],
@@ -209,11 +302,6 @@ function registerIpc(storeDir: string): void {
     const bytes = await readFile(file)
     return { name: file.split(/[\\/]/).pop() ?? file, base64: bytes.toString('base64') }
   })
-
-  ipcMain.handle('vfox:profile-dir', (_event, profileId: string) => {
-    if (typeof profileId !== 'string' || profileId.length === 0) return storeDir
-    return join(storeDir, 'profiles', profileId, 'userdata')
-  })
 }
 
 /* ------------------------------------------------------------------------------ quit */
@@ -223,7 +311,7 @@ async function handleStopAll(): Promise<void> {
   if (stopped > 0) console.info(`[vfox] stopped ${stopped} profile(s)`)
 }
 
-app.on('before-quit', (event) => {
+app.on('before-quit', event => {
   if (quitting) return
   event.preventDefault()
   quitting = true

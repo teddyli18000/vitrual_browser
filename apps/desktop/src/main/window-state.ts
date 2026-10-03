@@ -6,7 +6,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { screen, type BrowserWindow, type Rectangle } from 'electron'
+import { type BrowserWindow, type Rectangle, screen } from 'electron'
 
 export interface UiState {
   window: Rectangle
@@ -36,7 +36,7 @@ function isRectangle(value: unknown): value is Rectangle {
 
 /** True when at least a strip of the saved rectangle is still on a live display. */
 function isVisibleOnSomeDisplay(bounds: Rectangle): boolean {
-  return screen.getAllDisplays().some((display) => {
+  return screen.getAllDisplays().some(display => {
     const area = display.workArea
     return (
       bounds.x < area.x + area.width &&
@@ -57,7 +57,10 @@ export function loadUiState(dataDir: string): UiState {
   }
   try {
     const parsed = JSON.parse(raw) as Partial<UiState>
-    const bounds = isRectangle(parsed.window) && isVisibleOnSomeDisplay(parsed.window) ? parsed.window : DEFAULT_BOUNDS
+    const bounds =
+      isRectangle(parsed.window) && isVisibleOnSomeDisplay(parsed.window)
+        ? parsed.window
+        : DEFAULT_BOUNDS
     return {
       window: bounds,
       maximized: parsed.maximized === true,
@@ -82,14 +85,19 @@ export function saveUiState(dataDir: string, state: UiState): void {
  * Persist bounds as the user moves/resizes, coalesced so a drag does not write on every frame.
  * `getUiState` lets the caller merge flags it owns (e.g. `trayHintShown`).
  */
-export function trackWindowState(window: BrowserWindow, dataDir: string, getUiState: () => UiState): void {
+export function trackWindowState(
+  window: BrowserWindow,
+  dataDir: string,
+  getUiState: () => UiState,
+): void {
   let timer: NodeJS.Timeout | null = null
   const persist = (): void => {
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => {
       timer = null
       const state = getUiState()
-      const bounds = window.isMaximized() || window.isMinimized() ? state.window : window.getNormalBounds()
+      const bounds =
+        window.isMaximized() || window.isMinimized() ? state.window : window.getNormalBounds()
       saveUiState(dataDir, { ...state, window: bounds, maximized: window.isMaximized() })
     }, 400)
   }
@@ -103,7 +111,8 @@ export function trackWindowState(window: BrowserWindow, dataDir: string, getUiSt
       timer = null
     }
     const state = getUiState()
-    const bounds = window.isMaximized() || window.isMinimized() ? state.window : window.getNormalBounds()
+    const bounds =
+      window.isMaximized() || window.isMinimized() ? state.window : window.getNormalBounds()
     saveUiState(dataDir, { ...state, window: bounds, maximized: window.isMaximized() })
   })
 }

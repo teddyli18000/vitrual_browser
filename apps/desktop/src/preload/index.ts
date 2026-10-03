@@ -2,13 +2,17 @@
  * The only bridge between the renderer and the main process.
  *
  * It carries connection facts (`apiBase` + `token`) and a handful of OS capabilities (open a
- * path, reveal a path, pick/save a file, probe a proxy endpoint, retry the embedded service).
- * Every piece of product logic — profiles, groups, runtime, kernel — travels over plain HTTP
- * to the loopback API, so the GUI, the CLI and external automation share one contract.
+ * path, reveal a path, pick/save a file, probe a proxy endpoint, retry the embedded service,
+ * open the first-party homepage). Every piece of product logic — profiles, groups, runtime,
+ * kernel — travels over plain HTTP to the loopback API, so the GUI, the CLI and external
+ * automation share one contract.
+ *
+ * Only named functions cross the bridge: `ipcRenderer`, `require`, `process` and any generic
+ * `invoke(channel, ...)` stay on this side of the wall.
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { BRIDGE_ARG_PREFIX, type BridgePayload, type VfoxBridge } from '../shared/bridge'
+import { BRIDGE_CHANNEL, type BridgePayload, type VfoxBridge } from '../shared/bridge'
 
 const FALLBACK: BridgePayload = {
   apiBase: '',
@@ -20,27 +24,25 @@ const FALLBACK: BridgePayload = {
 }
 
 function readPayload(): BridgePayload {
-  const raw = process.argv.find((arg) => arg.startsWith(BRIDGE_ARG_PREFIX))
-  if (!raw) return FALLBACK
   try {
-    const parsed = JSON.parse(decodeURIComponent(raw.slice(BRIDGE_ARG_PREFIX.length))) as Partial<BridgePayload>
-    return { ...FALLBACK, ...parsed }
+    const payload = ipcRenderer.sendSync(BRIDGE_CHANNEL) as Partial<BridgePayload> | undefined
+    return { ...FALLBACK, ...(payload ?? {}) }
   } catch {
     return FALLBACK
   }
 }
 
-const payload = readPayload()
-
 const bridge: VfoxBridge = {
-  ...payload,
-  openPath: (path) => ipcRenderer.invoke('vfox:open-path', path),
-  revealPath: (path) => ipcRenderer.invoke('vfox:reveal-path', path),
-  probeProxy: (input) => ipcRenderer.invoke('vfox:probe-proxy', input),
+  ...readPayload(),
+  openPath: path => ipcRenderer.invoke('vfox:open-path', path),
+  revealPath: path => ipcRenderer.invoke('vfox:reveal-path', path),
+  openHomepage: () => ipcRenderer.invoke('vfox:open-homepage'),
+  probeProxy: input => ipcRenderer.invoke('vfox:probe-proxy', input),
   restartService: () => ipcRenderer.invoke('vfox:restart-service'),
-  saveExport: (input) => ipcRenderer.invoke('vfox:save-export', input),
+  profileDir: profileId => ipcRenderer.invoke('vfox:profile-dir', profileId),
+  profileUsage: profileId => ipcRenderer.invoke('vfox:profile-usage', profileId),
+  saveExport: input => ipcRenderer.invoke('vfox:save-export', input),
   pickImport: () => ipcRenderer.invoke('vfox:pick-import'),
-  profileDir: (profileId) => ipcRenderer.invoke('vfox:profile-dir', profileId),
 }
 
 contextBridge.exposeInMainWorld('vfox', bridge)

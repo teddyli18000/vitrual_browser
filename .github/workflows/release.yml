@@ -1,0 +1,223 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, without the leading "v" (must match package.json).
+        required: true
+        type: string
+
+# The repository default workflow permission is `read`. Creating the GitHub Release and
+# uploading its assets needs `contents: write`, and nothing more.
+permissions:
+  contents: write
+
+# Never cancel a release halfway through: a partially uploaded Release is worse than a
+# slow one. Runs are serialised per tag instead.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Same workspace-local caches as ci.yml, so a release reuses the 550 MB engine cache and
+  # the Electron/NSIS downloads instead of fetching them again.
+  CAMOUFOX_INSTALL_DIR: ${{ github.workspace }}/.cache/camoufox
+  ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+  ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+  PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/playwright
+
+jobs:
+  release:
+    name: build, verify and publish the Windows release
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Node.js and pnpm
+        uses: ./.github/actions/setup
+
+      - name: Resolve and verify the release version
+        id: version
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { "v$($env:INPUT_VERSION.TrimStart('v'))" } else { $env:REF_NAME }
+          $version = (node scripts/version.mjs --tag $tag).Trim()
+          if ($LASTEXITCODE -ne 0) {
+            throw "scripts/version.mjs rejected tag $tag"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Releasing $tag (version $version)"
+
+      - name: Report free disk space
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem |
+            Where-Object { $_.Used -ne $null } |
+            ForEach-Object { '{0}: {1:N1} GB free of {2:N1} GB' -f $_.Name, ($_.Free / 1GB), (($_.Used + $_.Free) / 1GB) }
+
+      # Cache key = the resolved engine version, exactly as in ci.yml, so a release reuses
+      # the cache ci.yml already populated for the same engine.
+      - name: Resolve the Camoufox engine version
+        id: engine
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $version = (node scripts/kernel-version.mjs).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
+            throw 'Could not resolve the Camoufox engine version.'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Camoufox engine version: $version"
+
+      - name: Restore the Camoufox engine
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ steps.engine.outputs.version }}
+
+      - name: Restore the Electron and electron-builder caches
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            .cache/electron
+            .cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/desktop/package.json') }}
+
+      # `node scripts/fetch-kernel.mjs` runs exactly the `camoufox-js fetch` that
+      # `pnpm kernel:fetch` runs, plus a retry and a resolved-version check.
+      - name: Fetch the Camoufox engine
+        run: node scripts/fetch-kernel.mjs
+
+      - name: Build the workspace
+        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build
+
+      # A release must never ship an engine integration that was never executed.
+      - name: Launch the engine and verify fingerprint spoofing
+        uses: ./.github/actions/engine-smoke
+        with:
+          headless: '1'
+
+      - name: Build the NSIS installer and the portable zip
+        run: node scripts/build-installer.mjs
+
+      - name: Verify the release artifacts
+        run: node scripts/verify-release.mjs
+
+      - name: Write the release notes
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ENGINE_VERSION: ${{ steps.engine.outputs.version }}
+        run: |
+          # Single-quoted here-string: no PowerShell escaping, so the markdown (backticks,
+          # dollar signs) survives verbatim. Placeholders are substituted explicitly.
+          $template = @'
+          ## VFox __VERSION__
+
+          Open-source, telemetry-free anti-detect browser for Windows, powered by the
+          [Camoufox](https://camoufox.com/) engine (engine build `__ENGINE__`).
+
+          ### Downloads
+
+          | File | What it is |
+          | --- | --- |
+          | `VFox-Setup-__VERSION__.exe` | Per-user NSIS installer (x64). **No administrator rights required.** |
+          | `VFox-__VERSION__-portable.zip` | Unpacked application; run `VFox.exe` from anywhere. |
+          | `SHA256SUMS.txt` | SHA-256 of both files above. |
+
+          ### Verify your download
+
+          ```powershell
+          Get-FileHash .\VFox-Setup-__VERSION__.exe -Algorithm SHA256
+          # compare with the matching line in SHA256SUMS.txt
+          ```
+
+          ### This build is not code-signed
+
+          There is no Authenticode certificate behind this release, so Windows SmartScreen will
+          show "Windows protected your PC" the first time you run the installer. Choose
+          **More info** then **Run anyway**. Verify the SHA-256 above first. Signing is not
+          faked or bypassed — it is simply not done yet.
+
+          ### The installer does not contain the browser engine
+
+          The Camoufox engine is **not** bundled in either download — that is why the installer
+          is only about a hundred megabytes instead of a gigabyte. On first launch VFox downloads
+          it (**~550 MB**: a ~493 MB browser build plus a ~64 MB GeoIP database) from the official
+          [Camoufox release page](https://github.com/daijro/camoufox/releases) into your local
+          cache. If you are offline or behind a restricted network, pre-seed that directory once
+          and VFox will use it as-is.
+
+          ### No activation, no licence key, no phone-home
+
+          VFox has **no activation server, no licence key, no account, no usage analytics and no
+          update check**. Nothing in the application contacts us, ever. The only network traffic
+          VFox itself initiates is the one-time engine download above; everything else is your own
+          browsing and the proxy you configure.
+
+          ### What the installer touches
+
+          - installs into `%LOCALAPPDATA%\Programs\VFox` (per-user, no UAC prompt)
+          - creates a Start Menu shortcut and a Desktop shortcut
+          - writes one uninstall entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall`
+          - registers **no** file associations, protocol handlers, services, scheduled tasks or
+            auto-start entries, and does not touch anything outside the current user's profile
+
+          Uninstalling removes only the items above and leaves `%APPDATA%\vfox` (your browser
+          profiles) untouched.
+          '@
+          $text = $template.Replace('__VERSION__', $env:VERSION).Replace('__ENGINE__', $env:ENGINE_VERSION)
+          $notes = Join-Path $env:RUNNER_TEMP 'vfox-release-notes.md'
+          Set-Content -Path $notes -Value $text -Encoding utf8
+          Write-Host "Release notes written to $notes"
+
+      - name: Create the GitHub Release and upload the artifacts
+        id: publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $notes = Join-Path $env:RUNNER_TEMP 'vfox-release-notes.md'
+          $ghArgs = @(
+            'release', 'create', $env:TAG,
+            '--title', "VFox $env:VERSION",
+            '--notes-file', $notes
+          )
+          # A prerelease version must not become the repository's "latest" release.
+          if ($env:VERSION -match '-') { $ghArgs += '--prerelease' }
+          # For workflow_dispatch the tag may not exist yet; create it at this commit.
+          git rev-parse -q --verify "refs/tags/$env:TAG" | Out-Null
+          if ($LASTEXITCODE -ne 0) { $ghArgs += @('--target', $env:GITHUB_SHA) }
+          $ghArgs += @(
+            "release/VFox-Setup-$env:VERSION.exe",
+            "release/VFox-$env:VERSION-portable.zip",
+            'release/SHA256SUMS.txt'
+          )
+          gh @ghArgs
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
+
+      - name: Summarise the release
+        if: always()
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'release')) { Write-Host 'no release/ directory'; exit 0 }
+          Get-ChildItem release -File | ForEach-Object {
+            '{0,-40} {1,12:N0} bytes' -f $_.Name, $_.Length
+          }
+          Get-Content release/SHA256SUMS.txt -ErrorAction SilentlyContinue

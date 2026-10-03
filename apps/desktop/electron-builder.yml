@@ -1,0 +1,88 @@
+# electron-builder configuration for the Windows desktop app.
+#
+# Classification that makes this file correct (electron-vite convention):
+#   dependencies    -> externalized, shipped in node_modules (camoufox-js, playwright-core:
+#                      runtime data files + a napi module, they must not be bundled)
+#   devDependencies -> bundled into out/** (everything else, including the @vfox/* workspace
+#                      packages and the whole renderer stack)
+# So the packaged app is `out/**` + `package.json` + the two runtime dependencies, nothing more.
+#
+# Install behaviour is deliberately boring and per-user: no elevation, no admin, no HKLM, no
+# file associations, no protocol handlers, no auto-start, no scheduled task, no service.
+
+appId: io.github.vfox.desktop
+productName: VFox
+copyright: MIT © VFox contributors
+
+directories:
+  output: release
+  # `build/` is gitignored repo-wide, so the icons live in `resources/` instead — the same
+  # directory that extraResources ships, which keeps one icon file for builder and runtime.
+  buildResources: resources
+
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/*.ts'
+
+extraResources:
+  - from: resources
+    to: .
+    filter: ['**/*']
+
+asar: true
+# Native addons (impit, pulled in by camoufox-js) cannot be dlopen'd from inside an asar.
+asarUnpack:
+  - '**/*.node'
+
+# The UI ships zh-CN + en only. Chromium's 55 locale packs are ~46 MB of dead weight in an
+# installer that is otherwise dominated by the Electron runtime.
+electronLanguages:
+  - en-US
+  - zh-CN
+
+# The installer is ~90 % Electron runtime, so it compresses well and the download size matters
+# more than a few seconds of CI time.
+compression: maximum
+
+# Fuses are flipped by electron-builder itself, after packing and before signing, so every
+# artifact (nsis and zip alike) carries them. Without this the shipped VFox.exe is a generic
+# Node interpreter for any local process: ELECTRON_RUN_AS_NODE=1, NODE_OPTIONS and --inspect
+# all become code-execution vectors.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+
+win:
+  icon: resources/icon.png
+  requestedExecutionLevel: asInvoker
+  # The zip target reuses this name; nsis overrides it below. The CI release passes explicit
+  # targets and its own output dir, which win over these values.
+  artifactName: VFox-${version}-portable.${ext}
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  shortcutName: VFox
+  artifactName: VFox-Setup-${version}.exe
+
+# No native module is rebuilt for Electron: impit ships prebuilt napi binaries, and this
+# project must be buildable on a machine without an MSVC toolchain.
+npmRebuild: false
+nodeGypRebuild: false
+buildDependenciesFromSource: false

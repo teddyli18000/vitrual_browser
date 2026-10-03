@@ -1,0 +1,37 @@
+name: Engine smoke test
+description: >-
+  Run packages/core/scripts/smoke-launch.mjs — the only execution of the product's core
+  claim ("the Camoufox engine launches and really spoofs fingerprints") — and gate on its
+  machine-readable result. Shared by ci.yml and release.yml so a release can never ship an
+  engine integration that was never executed.
+
+inputs:
+  headless:
+    description: Run the engine headless. Windows runners have no interactive desktop.
+    required: false
+    default: '1'
+
+runs:
+  using: composite
+  steps:
+    - name: Require the smoke script
+      shell: pwsh
+      run: |
+        if (-not (Test-Path 'packages/core/scripts/smoke-launch.mjs')) {
+          throw "packages/core/scripts/smoke-launch.mjs is missing: the Camoufox engine integration cannot be verified, so this build must not pass."
+        }
+
+    - name: Launch two profiles and compare their fingerprints
+      shell: pwsh
+      env:
+        VFOX_SMOKE_HEADLESS: ${{ inputs.headless }}
+      run: |
+        # A non-zero exit from `node` is the normal failure signal here, so it must not be
+        # turned into a terminating error before we can report the smoke script's own output.
+        $PSNativeCommandUseErrorActionPreference = $false
+        $out = Join-Path $env:RUNNER_TEMP 'vfox-smoke.stdout.txt'
+        $err = Join-Path $env:RUNNER_TEMP 'vfox-smoke.stderr.txt'
+        node packages/core/scripts/smoke-launch.mjs > $out 2> $err
+        $code = $LASTEXITCODE
+        # This is the last command in the step, so its exit code decides the step result.
+        node scripts/check-smoke.mjs --stdout $out --stderr $err --exit-code $code

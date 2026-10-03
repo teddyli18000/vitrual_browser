@@ -41,6 +41,16 @@ export const API_ROUTES = {
    */
   kernelInstall: `${API_PREFIX}/kernel/install`,
 
+  /* Window synchroniser — input in the master profile is replayed into every slave profile. */
+  /** GET -> SyncSession | null */
+  sync: `${API_PREFIX}/sync`,
+  /** POST SyncStart -> SyncSession */
+  syncStart: `${API_PREFIX}/sync/start`,
+  /** POST -> { ok: true } */
+  syncStop: `${API_PREFIX}/sync/stop`,
+  /** POST TileRequest -> { ok: true } (arrange the given windows in a grid/rows/columns) */
+  syncTile: `${API_PREFIX}/sync/tile`,
+
   /** Server-sent events: runtime status transitions. */
   events: `${API_PREFIX}/events`,
 
@@ -52,3 +62,4 @@ export const API_ROUTES = {
 
 export const SSE_EVENT_RUNTIME = 'runtime'
 export const SSE_EVENT_KERNEL = 'kernel'
+export const SSE_EVENT_SYNC = 'sync'

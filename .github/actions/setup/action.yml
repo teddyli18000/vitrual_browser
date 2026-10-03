@@ -1,0 +1,33 @@
+name: Setup Node.js and pnpm
+description: >-
+  Install pnpm and Node.js, restore the pnpm store, and install workspace dependencies.
+  Shared by ci.yml and release.yml so both jobs use identical tooling.
+
+inputs:
+  node-version:
+    description: Node.js version to install.
+    required: false
+    default: '24'
+
+runs:
+  using: composite
+  steps:
+    # Third-party actions are pinned to a full commit SHA: a moved tag must never be able
+    # to run code in this repository.
+    #
+    # pnpm/action-setup reads `packageManager` from the root package.json, so the pnpm
+    # version has exactly one source of truth. Do not add a `version:` input here —
+    # specifying both makes the action fail.
+    - name: Install pnpm
+      uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+
+    - name: Install Node.js
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+        cache-dependency-path: pnpm-lock.yaml
+
+    - name: Install workspace dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile

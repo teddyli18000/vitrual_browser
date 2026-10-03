@@ -2,7 +2,6 @@ _spike/
 node_modules/
 dist/
 out/
-build/
 release/
 .cache/
 *.log
