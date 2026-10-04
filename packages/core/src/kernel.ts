@@ -237,7 +237,6 @@ async function resolveEngineUrl(
 export const installCamoufoxEngine: EngineInstaller = async emit => {
   const pkgman = await import('camoufox-js/dist/pkgman.js')
   const { DefaultAddons, maybeDownloadAddons } = await import('camoufox-js/dist/addons.js')
-  const { downloadMMDB } = await import('camoufox-js/dist/locale.js')
 
   const target = pkgman.INSTALL_DIR.toString()
 
@@ -300,9 +299,64 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
 
   if (!(await exists(path.join(target, MMDB_FILE)))) {
     emit({ phase: 'downloading', message: 'Downloading the GeoIP database' })
-    await downloadMMDB()
+    await downloadGeoIpDatabase(emit)
   }
   await maybeDownloadAddons(DefaultAddons)
+}
+
+/**
+ * Fetch the GeoIP database, and **never fail the install because of it**.
+ *
+ * Two separate defects lived here. The database was downloaded through
+ * `api.github.com/repos/P3TERX/GeoLite.mmdb/releases`, which is rate-limited to 60 anonymous
+ * requests per hour per IP — so a user behind a shared VPN exit hit the same wall as the engine
+ * download. And because the call sat *after* the engine install, the resulting throw reported
+ * "安装失败" while the engine was already correctly in place, which is both wrong and confusing.
+ *
+ * The database is optional: it is only consulted when `fingerprint.geoip` is enabled, which is off
+ * by default. So the direct CDN URL is tried first, camoufox-js's API path second, and a total
+ * failure is a warning rather than an error.
+ */
+async function downloadGeoIpDatabase(emit: ProgressReporter): Promise<boolean> {
+  const destination = path.join(await resolveEngineDir(), MMDB_FILE)
+  // `/releases/latest/download/<asset>` redirects straight to the newest asset, so it needs no API
+  // call and no pinned tag — the upstream tag is a date that changes every day.
+  const direct =
+    process.env.VFOX_MMDB_URL?.trim() ||
+    'https://github.com/P3TERX/GeoLite.mmdb/releases/latest/download/GeoLite2-City.mmdb'
+
+  try {
+    const response = await fetch(direct, { redirect: 'follow' })
+    if (response.ok) {
+      const bytes = Buffer.from(await response.arrayBuffer())
+      // A GeoIP database is tens of megabytes; anything tiny is an error page, not the database.
+      if (bytes.length > 1_000_000) {
+        await fs.mkdir(path.dirname(destination), { recursive: true })
+        await fs.writeFile(destination, bytes)
+        emit({
+          phase: 'downloading',
+          message: `GeoIP database ready (${formatBytes(bytes.length)})`,
+        })
+        return true
+      }
+    }
+  } catch {
+    // Fall through to the library's own path.
+  }
+
+  try {
+    const { downloadMMDB } = await import('camoufox-js/dist/locale.js')
+    await downloadMMDB()
+    return await exists(destination)
+  } catch (error) {
+    emit({
+      phase: 'downloading',
+      message:
+        `GeoIP database unavailable (${error instanceof Error ? error.message : String(error)}). Continuing — it is only used when a ` +
+        'profile enables fingerprint.geoip.',
+    })
+    return false
+  }
 }
 
 /** Stream the engine archive into `staging` and return its path, reporting real byte counts. */
@@ -314,10 +368,25 @@ async function downloadEngine(
 ): Promise<string> {
   const { webdl } = await import('camoufox-js/dist/pkgman.js')
   const archive = path.join(staging, 'camoufox.zip')
-  const file = createWriteStream(archive)
   const total = await contentLength(url)
   let received = 0
 
+  const file = createWriteStream(archive)
+
+  // A WriteStream 'error' is emitted asynchronously, outside any promise chain, so it would bypass
+  // the try/catch below and reach the process as an uncaught exception. That is exactly how a
+  // completed download crashed the Electron main process with a fatal dialog. Capture it instead
+  // and let the caller report a failed install.
+  let streamError: Error | null = null
+  file.on('error', error => {
+    streamError ??= error
+  })
+
+  // `webdl` is fire-and-forget: it calls `buffer.write(chunk)` and never awaits it, never ends the
+  // sink, and returns as soon as the response body is exhausted (see its `for await` loop). So its
+  // promise resolving does NOT mean the file has received everything, and closing the file at that
+  // point is what produced `ERR_STREAM_WRITE_AFTER_END` at "100% · 469 MB / 470 MB" — an unhandled
+  // stream error that reached the Electron main process as a fatal dialog.
   const sink = new Writable({
     write(chunk: Buffer, _encoding, callback) {
       received += chunk.length
@@ -328,6 +397,8 @@ async function downloadEngine(
         totalBytes: total,
         message: `Downloading Camoufox ${version}`,
       })
+      // The stream's write completes only when the file write does, which is what makes `end()`
+      // below a real flush rather than a race.
       file.write(chunk, callback)
     },
   })
@@ -341,17 +412,33 @@ async function downloadEngine(
   })
 
   try {
-    // `webdl` keeps camoufox-js's retry policy and GitHub auth handling; the Writable is how its
-    // output is observed (it writes every chunk into the buffer it is given).
     await webdl(url, '', false, sink)
+    // End it ourselves: `end()`'s callback fires on 'finish', which is only after every queued
+    // write has completed. Without this the file is closed while writes are still in flight.
+    await new Promise<void>((resolve, reject) => {
+      sink.end((error?: Error | null) => (error ? reject(error) : resolve()))
+    })
+    if (streamError) throw streamError
     await new Promise<void>((resolve, reject) => {
       file.close(error => (error ? reject(error) : resolve()))
     })
+    if (received === 0) {
+      throw new Error(`the engine download produced no data (${url})`)
+    }
+    if (total !== null && received < total) {
+      throw new Error(
+        `the engine download is incomplete: ${received} of ${total} bytes (${url}). ` +
+          'Retry, or set VFOX_ENGINE_URL to a mirror.',
+      )
+    }
   } catch (error) {
+    if (!sink.writableEnded) {
+      await new Promise<void>(resolve => sink.end(() => resolve()))
+    }
     if (!file.closed) {
       await new Promise<void>(resolve => file.close(() => resolve()))
     }
-    throw error
+    throw streamError ?? error
   }
   return archive
 }

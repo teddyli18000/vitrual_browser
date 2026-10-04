@@ -227,6 +227,29 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # The install path a brand-new user hits first, run for real on a clean machine with NO engine
+  # cache to hide behind. Two bugs reached a user exactly here and neither was catchable by a unit
+  # test, a typecheck or a build: a stream drain race that crashed the Electron main process at
+  # "100% · 469 MB / 470 MB", and a rate-limited GeoIP lookup that reported the whole install as
+  # failed after the engine was already correctly installed. This job downloads ~490 MB on purpose.
+  e2e-install:
+    name: engine install from scratch
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Node.js and pnpm
+        uses: ./.github/actions/setup
+
+      - name: Build the workspace
+        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build
+
+      # Deliberately no actions/cache for the engine: a warm cache would skip the download, and the
+      # download is where both bugs lived.
+      - name: Install the engine into an empty directory
+        run: node packages/core/scripts/verify-install.mjs
   # The only visual evidence this project has. Everything else measures fingerprints or pixels of a
   # renderer; this job opens a REAL, VISIBLE browser window on a runner and photographs the desktop,
   # so "can it be used like a normal browser window?" is answered by a picture.
