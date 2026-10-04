@@ -9,7 +9,7 @@ import {
   ProfileCreateSchema,
   ProfileUpdateSchema,
 } from '@vfox/shared'
-import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 
 import { badRequest, conflict, ok } from '../errors.js'
@@ -17,6 +17,7 @@ import { contentDisposition, removeFile, sanitizeFilename, stagingPath } from '.
 import { findProfile } from '../resolve.js'
 import type { RouteDeps } from '../types.js'
 import { parse } from '../validate.js'
+import { PROFILE_ID, profileIdOf } from './params.js'
 
 /** `{ name? }` for `POST /profiles/:id/clone`. */
 const CloneBodySchema = z.object({ name: z.string().min(1).max(120).optional() })
@@ -26,21 +27,6 @@ const CloneBodySchema = z.object({ name: z.string().min(1).max(120).optional() }
  * the one route that legitimately receives a large payload is the one that opts into it.
  */
 export const MAX_IMPORT_BYTES = 512 * 1024 * 1024
-
-/**
- * Fastify route patterns are composed from the collection route plus the parameter segment.
- * The `API_ROUTES` helpers (`profile(id)`, `launchProfile(id)`, ...) are for *clients* building a
- * concrete URL: they run the id through `encodeURIComponent`, so passing them a literal `':id'`
- * would register the path `/profiles/%3Aid/launch` and never match a real request.
- */
-export const PROFILE_ID = `${API_ROUTES.profiles}/:id`
-
-/** Fastify's router already URL-decodes params; decoding twice would turn `%2F` into a separator. */
-function idOf(request: FastifyRequest): string {
-  const { id } = request.params as { id?: string }
-  if (!id) throw badRequest('Missing profile id in the request path')
-  return id
-}
 
 export function registerProfileRoutes(app: FastifyInstance, deps: RouteDeps): void {
   const { core } = deps
@@ -65,16 +51,16 @@ export function registerProfileRoutes(app: FastifyInstance, deps: RouteDeps): vo
     return ok(profiles)
   })
 
-  app.get(PROFILE_ID, async request => ok(await findProfile(core, idOf(request))))
+  app.get(PROFILE_ID, async request => ok(await findProfile(core, profileIdOf(request))))
 
   app.patch(PROFILE_ID, async request => {
-    const profile = await findProfile(core, idOf(request))
+    const profile = await findProfile(core, profileIdOf(request))
     const patch = parse(ProfileUpdateSchema, request.body)
     return ok(await core.profiles.update(profile.id, patch))
   })
 
   app.delete(PROFILE_ID, async request => {
-    const profile = await findProfile(core, idOf(request))
+    const profile = await findProfile(core, profileIdOf(request))
     const runtime = core.runtime.get(profile.id)
     if (runtime.status === 'running' || runtime.status === 'starting') {
       throw conflict(`Profile "${profile.name}" is ${runtime.status} — stop it before removing it`)
@@ -84,7 +70,7 @@ export function registerProfileRoutes(app: FastifyInstance, deps: RouteDeps): vo
   })
 
   app.post(`${PROFILE_ID}/clone`, async (request, reply) => {
-    const profile = await findProfile(core, idOf(request))
+    const profile = await findProfile(core, profileIdOf(request))
     const body = parse(CloneBodySchema, request.body ?? {})
     const clone = await core.profiles.clone(profile.id, body.name)
     reply.code(201)
@@ -92,12 +78,12 @@ export function registerProfileRoutes(app: FastifyInstance, deps: RouteDeps): vo
   })
 
   app.post(`${PROFILE_ID}/launch`, async request => {
-    const profile = await findProfile(core, idOf(request))
+    const profile = await findProfile(core, profileIdOf(request))
     return ok(await launch(core, profile))
   })
 
   app.post(`${PROFILE_ID}/stop`, async request => {
-    const profile = await findProfile(core, idOf(request))
+    const profile = await findProfile(core, profileIdOf(request))
     const current = core.runtime.get(profile.id)
     // Stopping an already stopped profile is a no-op, not an error.
     if (current.status === 'stopped') return ok(current)
@@ -109,7 +95,7 @@ export function registerProfileRoutes(app: FastifyInstance, deps: RouteDeps): vo
    * that a browser or `curl -O` can consume directly.
    */
   app.get(`${PROFILE_ID}/export`, async (request, reply) => {
-    const profile = await findProfile(core, idOf(request))
+    const profile = await findProfile(core, profileIdOf(request))
     const file = await stagingPath(core, `export-${profile.id}`, '.zip')
     try {
       await core.profiles.exportZip(profile.id, file)

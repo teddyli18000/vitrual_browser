@@ -3,13 +3,23 @@
  */
 
 import type { Profile } from '@vfox/shared'
-import { FingerprintSchema, ProfileBatchCreateSchema } from '@vfox/shared'
+import { CookieImportResultSchema, FingerprintSchema, ProfileBatchCreateSchema } from '@vfox/shared'
 import { importProfileZip, writeProfileZip } from './archive.js'
+import { cookieDbPath, readJar, writeJar } from './cookies.js'
 import { createIdentity, identityInputs, identityIsCurrent } from './identity.js'
-import type { Core, CoreOptions, GroupsApi, KernelApi, ProfilesApi, RuntimeApi } from './index.js'
+import type {
+  CookiesApi,
+  Core,
+  CoreOptions,
+  GroupsApi,
+  KernelApi,
+  ProfilesApi,
+  RuntimeApi,
+} from './index.js'
 import { applyKernelDir, KernelManager } from './kernel.js'
 import { launchCamoufox } from './launcher.js'
 import { combineLoggers, createFileLogger } from './log.js'
+import { formatNetscape, parseNetscape } from './netscape.js'
 import { acquireDataDirLock, reconcileOrphans } from './orphans.js'
 import { RuntimeRegistry } from './runtime.js'
 import { type BatchEntry, Store } from './store.js'
@@ -174,16 +184,77 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     on: (_event, listener) => kernelManager.on('progress', listener),
   }
 
+  const cookies: CookiesApi = {
+    async export(id) {
+      const profile = store.requireProfile(id)
+      requireStoppedForCookies(registry, profile)
+      const jar = await readJar(cookieDbPath(store.userDataDir(id)))
+      return {
+        content: formatNetscape(jar.cookies),
+        cookies: jar.cookies.length,
+        skipped: jar.skipped,
+        hasCookieStore: jar.hasStore,
+      }
+    },
+
+    async import(id, content, options) {
+      const profile = store.requireProfile(id)
+      requireStoppedForCookies(registry, profile)
+
+      const mode = options?.mode ?? 'merge'
+      const parsed = parseNetscape(content)
+      if (parsed.cookies.length === 0 && parsed.skipped.length > 0) {
+        // Writing nothing and reporting success would look like a working import of an empty file.
+        throw new Error(
+          `No usable cookies in that file — ${parsed.skipped.length} line(s) could not be read ` +
+            `(line ${parsed.skipped[0]?.line ?? '?'}: ${parsed.skipped[0]?.reason ?? 'unknown'})`,
+        )
+      }
+
+      const written = await writeJar(cookieDbPath(store.userDataDir(id)), parsed.cookies, mode)
+      logger.info(
+        `profile ${id}: imported ${written.written} cookie(s) (${mode}` +
+          `${written.removed > 0 ? `, ${written.removed} removed first` : ''}), ` +
+          `${parsed.skipped.length} line(s) skipped`,
+      )
+
+      return CookieImportResultSchema.parse({
+        profileId: id,
+        mode,
+        parsed: parsed.cookies.length,
+        written: written.written,
+        updated: written.updated,
+        removed: written.removed,
+        skipped: parsed.skipped,
+      })
+    },
+  }
+
   return {
     dataDir: store.dataDir,
     profiles,
     groups,
     runtime,
     kernel,
+    cookies,
     async close() {
       await registry.closeAll()
       await dataDirLock.release()
     },
+  }
+}
+
+/**
+ * Cookie files are the on-disk jar, so the browser must not be holding it. `error` is allowed
+ * through: the registry only reaches it with no live process attached (`pid: null`), and refusing
+ * would strand a profile whose launch failed.
+ */
+function requireStoppedForCookies(registry: RuntimeRegistry, profile: Profile): void {
+  const { status } = registry.get(profile.id)
+  if (status !== 'stopped' && status !== 'error') {
+    throw new Error(
+      `Profile "${profile.name}" is ${status} — stop it before exporting or importing cookies`,
+    )
   }
 }
 

@@ -29,6 +29,14 @@ export const API_ROUTES = {
   /** POST body = raw zip bytes (Content-Type: application/zip) -> Profile. */
   importProfile: `${API_PREFIX}/profiles/import`,
 
+  /**
+   * GET -> `text/plain` Netscape `cookies.txt` (NOT the ApiResult envelope), so `curl -O` and every
+   * other tool that speaks the format can consume it directly.
+   */
+  exportCookies: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/cookies/export`,
+  /** POST CookieImportRequest (JSON) -> CookieImportResult. */
+  importCookies: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/cookies/import`,
+
   runtime: `${API_PREFIX}/runtime`,
   runtimeFor: (id: string) => `${API_PREFIX}/runtime/${encodeURIComponent(id)}`,
 

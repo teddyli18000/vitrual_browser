@@ -6,6 +6,9 @@
  */
 
 import type {
+  CookieImportMode,
+  CookieImportResult,
+  CookieSkip,
   Group,
   KernelInfo,
   KernelProgress,
@@ -79,12 +82,52 @@ export interface KernelApi {
   on(event: 'progress', cb: (progress: KernelProgress) => void): () => void
 }
 
+export interface CookieImportOptions {
+  /** `merge` (default) upserts by `(host, name, path)`; `replace` empties the jar first. */
+  mode?: CookieImportMode
+}
+
+export interface CookieExport {
+  /** Netscape `cookies.txt` content, ready to be written to a file. */
+  content: string
+  /** Cookies included in the file. */
+  cookies: number
+  /** Cookies the format cannot represent, with the reason. */
+  skipped: CookieSkip[]
+  /**
+   * `false` when the profile has no cookie store yet (it has never been launched). The export is
+   * still a valid, header-only file; callers should say so rather than report a bare "0 cookies".
+   */
+  hasCookieStore: boolean
+}
+
+export interface CookiesApi {
+  /**
+   * Render the profile's cookie jar as Netscape `cookies.txt`.
+   *
+   * The jar is read from disk, never through a browser launch, so exporting fifty profiles is fifty
+   * SQLite reads rather than fifty browsers. **The profile must be stopped**: a live browser owns
+   * the file and its in-memory jar would diverge from what is on disk. Throws when it is not.
+   */
+  export(id: string): Promise<CookieExport>
+  /**
+   * Merge or replace cookies from Netscape `cookies.txt` content.
+   *
+   * **The profile must be stopped**, for the same reason as {@link export}. `merge` (default)
+   * upserts by `(host, name, path)` and leaves the rest of the jar alone; `replace` empties it
+   * first. Throws when the profile is running, and when it has no cookie store yet — launch it once
+   * so the engine creates `cookies.sqlite`, because VFox will not fabricate a Firefox database.
+   */
+  import(id: string, content: string, options?: CookieImportOptions): Promise<CookieImportResult>
+}
+
 export interface Core {
   readonly dataDir: string
   readonly profiles: ProfilesApi
   readonly groups: GroupsApi
   readonly runtime: RuntimeApi
   readonly kernel: KernelApi
+  readonly cookies: CookiesApi
   close(): Promise<void>
 }
 

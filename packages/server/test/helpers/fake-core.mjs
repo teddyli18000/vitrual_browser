@@ -63,6 +63,16 @@ export function createFakeCore(options) {
     installError: undefined,
     installDelayMs: 0,
     installProgress: [],
+    cookieExports: [],
+    cookieImports: [],
+    cookieExportError: undefined,
+    cookieImportError: undefined,
+    cookieExport: {
+      content: '# Netscape HTTP Cookie File\n\n.shop.test\tTRUE\t/\tFALSE\t0\tsid\tabc\n',
+      cookies: 1,
+      skipped: [],
+      hasCookieStore: true,
+    },
 
     profiles: {
       list: async () => [...profilesById.values()],
@@ -217,6 +227,34 @@ export function createFakeCore(options) {
 
     close: async () => {
       core.closed = true
+    },
+
+    /**
+     * Cookie import/export. The format itself is `@vfox/core`'s business and is tested there; what
+     * the server tests need is a record of what the routes asked for, plus the ability to make an
+     * export fail or come back empty.
+     */
+    cookies: {
+      export: async id => {
+        core.cookieExports.push(id)
+        if (core.cookieExportError) throw core.cookieExportError
+        return core.cookieExport
+      },
+
+      import: async (id, content, options) => {
+        const mode = options?.mode ?? 'merge'
+        core.cookieImports.push({ id, content, mode })
+        if (core.cookieImportError) throw core.cookieImportError
+        return {
+          profileId: id,
+          mode,
+          parsed: content.split('\n').filter(line => line !== '' && !line.startsWith('#')).length,
+          written: 2,
+          updated: 1,
+          removed: mode === 'replace' ? 7 : 0,
+          skipped: [],
+        }
+      },
     },
 
     emitRuntime: emit,
