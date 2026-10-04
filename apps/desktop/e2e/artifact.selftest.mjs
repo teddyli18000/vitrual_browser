@@ -68,7 +68,9 @@ for (const testCase of cases) {
   const result = checkNoTestCode(buildArtifact(testCase.paths))
   const ok = result.ok === testCase.expect
   if (!ok) wrong += 1
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${testCase.name}  ok=${result.ok} expected=${testCase.expect}`)
+  console.log(
+    `${ok ? 'PASS' : 'FAIL'}  ${testCase.name}  ok=${result.ok} expected=${testCase.expect}`,
+  )
   if (!result.ok && result.problems[0]) console.log(`        ${result.problems[0].slice(0, 110)}`)
 }
 
@@ -86,10 +88,14 @@ const unpackedOk = unpacked.ok === true
 if (!sealedOk) wrong += 1
 if (!unpackedOk) wrong += 1
 console.log(`${sealedOk ? 'PASS' : 'FAIL'}  sealed inside the asar  ok=${sealed.ok} expected=false`)
-console.log(`${unpackedOk ? 'PASS' : 'FAIL'}  unpacked beside it      ok=${unpacked.ok} expected=true`)
+console.log(
+  `${unpackedOk ? 'PASS' : 'FAIL'}  unpacked beside it      ok=${unpacked.ok} expected=true`,
+)
 
 if (wrong > 0) {
   console.error(`\n${wrong} case(s) wrong — a guard has lost its discriminating power.`)
   process.exit(1)
 }
-console.log('\nBoth guards discriminate: they fail when they should and stay green when they should.')
+console.log(
+  '\nBoth guards discriminate: they fail when they should and stay green when they should.',
+)
