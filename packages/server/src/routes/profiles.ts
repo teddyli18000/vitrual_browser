@@ -3,7 +3,12 @@ import { stat, writeFile } from 'node:fs/promises'
 
 import type { Core } from '@vfox/core'
 import type { Profile, ProfileRuntime } from '@vfox/shared'
-import { API_ROUTES, ProfileCreateSchema, ProfileUpdateSchema } from '@vfox/shared'
+import {
+  API_ROUTES,
+  ProfileBatchCreateSchema,
+  ProfileCreateSchema,
+  ProfileUpdateSchema,
+} from '@vfox/shared'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 
@@ -47,6 +52,17 @@ export function registerProfileRoutes(app: FastifyInstance, deps: RouteDeps): vo
     const profile = await core.profiles.create(input)
     reply.code(201)
     return ok(profile)
+  })
+
+  /**
+   * Batch creation. Registered before the `/:id` routes for readability only — Fastify's router
+   * already prefers a static segment over a parameter.
+   */
+  app.post(API_ROUTES.createProfilesBatch, async (request, reply) => {
+    const input = parse(ProfileBatchCreateSchema, request.body)
+    const profiles = await core.profiles.createBatch(input)
+    reply.code(201)
+    return ok(profiles)
   })
 
   app.get(PROFILE_ID, async request => ok(await findProfile(core, idOf(request))))

@@ -42,6 +42,13 @@ ordinary tools.
   `src/identity.ts` — including why the browserforge fingerprint alone is not enough (camoufox-js
   re-rolls six CAMOU_CONFIG keys per launch, which are pinned through the raw `config` escape hatch).
   Editing `os`, `screen` or `window` drops the identity so it is re-rolled exactly once.
+- **An unknown config key never blocks a launch.** The engine's own `properties.json` decides which
+  keys exist, and `camoufox-js` throws `UnknownProperty` for anything else — which is how the
+  152 → 156 engine update turned identity pinning into a total launch failure. `src/engine-config.ts`
+  has two layers: keys we set are filtered against that schema (each drop named in a warning), and
+  keys `camoufox-js` merges by itself (`canvas:aaOffset`, `canvas:aaCapOffset`,
+  `window.history.length`) are suppressed through a scoped, prototype-chain property for the duration
+  of one call. A dropped pin costs identity stability for that value; it never costs the launch.
 - **Writes are atomic and recoverable.** Temp file → `.bak` of the previous generation → rename,
   with up to 10 retries because Windows `MoveFileEx` fails while antivirus, the search indexer or a
   sync client holds a handle. A file that fails validation is quarantined and the `.bak` is restored
@@ -75,22 +82,8 @@ node packages/core/scripts/verify-window.mjs --screenshot out/window.png
 ```
 
 `verify-window.mjs` and `smoke-launch.mjs` are CI gates. `scripts/lib/user32.mjs` holds the
-koffi/`user32.dll` + `kernel32.dll` window and CIM process layer they share; `probe-windows.mjs` is the
-pre-flight that distinguishes "this runner has no interactive desktop" from "the browser never
-appeared", and it prints every visible window with the image name of its process.
-
-The engine's window is looked up **by pid first, then by process image name** (`camoufox.exe`:
-`EnumWindows` → `GetWindowThreadProcessId` → `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` →
-`QueryFullProcessImageNameW` → basename). Both paths are needed. Playwright launches a headed Firefox
-with `-wait-for-browser` (`playwright-core/lib/coreBundle.js:44199`), so the pid it reports through
-`browserServer.process()` is a Windows **launcher stub** that owns no window — the visible window
-belongs to its child. The child would normally be found by walking the process tree, but that walk
-needs CIM, and CIM is unavailable on GitHub's `windows-latest` runner
-(`[probe] engine processes: could not enumerate (CIM unavailable)`). The image-name scan needs no CIM
-and no elevation. `VFOX_WINDOW_OK` (`windowLookup`) and the `window-lookup` step say which path
-matched, and a window-lookup failure carries `details.desktop`: every visible window with its image
-name, rect and title, so the log of a failed run is enough to tell "the engine never opened a window"
-from "the lookup is wrong".
+koffi/`user32.dll` window and CIM process layer they share; `probe-windows.mjs` is the pre-flight that
+distinguishes "this runner has no interactive desktop" from "the browser never appeared".
 
 ## Known limitations (v0.1.0)
 

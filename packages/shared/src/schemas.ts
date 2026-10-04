@@ -130,6 +130,30 @@ export type ProfileCreate = z.infer<typeof ProfileCreateSchema>
 export const ProfileUpdateSchema = ProfileCreateSchema.partial()
 export type ProfileUpdate = z.infer<typeof ProfileUpdateSchema>
 
+/**
+ * Hard cap for one batch creation. Every profile is a real browser window with its own engine
+ * process, so this is a guard against an unbounded loop rather than a target. It lives in the
+ * shared contract because the core, the HTTP API and the CLI all validate against it.
+ */
+export const MAX_BATCH_PROFILES = 50
+
+/**
+ * Create `count` profiles in one call, each with its own generated identity.
+ *
+ * Names are `<namePrefix> <index>` starting at 1. `proxy`, `launch` and `fingerprint` apply to every
+ * profile in the batch, with `fingerprint` layered on top of the generated identity — so a batch of
+ * twenty is twenty different machines that share one platform, proxy and launch preference.
+ */
+export const ProfileBatchCreateSchema = z.object({
+  count: z.number().int().min(1).max(MAX_BATCH_PROFILES),
+  namePrefix: z.string().min(1).max(80),
+  groupId: z.string().nullable().optional(),
+  proxy: ProxySchema.nullable().optional(),
+  launch: LaunchPrefsSchema.partial().optional(),
+  fingerprint: FingerprintSchema.partial().optional(),
+})
+export type ProfileBatchCreate = z.infer<typeof ProfileBatchCreateSchema>
+
 /* ---------------------------------------------------------------------- runtime */
 
 export const RuntimeStatusSchema = z.enum(['stopped', 'starting', 'running', 'stopping', 'error'])

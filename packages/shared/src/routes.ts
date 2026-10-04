@@ -17,6 +17,8 @@ export const API_ROUTES = {
   health: `${API_PREFIX}/health`,
 
   profiles: `${API_PREFIX}/profiles`,
+  /** POST ProfileBatchCreate -> Profile[] (creation order). One request, `count` profiles. */
+  createProfilesBatch: `${API_PREFIX}/profiles/batch`,
   profile: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}`,
   launchProfile: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/launch`,
   stopProfile: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/stop`,
