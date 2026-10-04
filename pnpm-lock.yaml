@@ -138,6 +138,9 @@ importers:
       '@vfox/shared':
         specifier: workspace:*
         version: link:../shared
+      '@vfox/sync':
+        specifier: workspace:*
+        version: link:../sync
       fastify:
         specifier: ^5.6.1
         version: 5.12.5

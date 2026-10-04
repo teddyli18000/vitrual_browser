@@ -31,7 +31,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { ENGINE_VERSION } from './engine-version.mjs'
+import { ENGINE_VERSION, ENGINE_VERSIONS } from './engine-version.mjs'
 
 const ENGINE_REPO = 'daijro/camoufox'
 
@@ -92,10 +92,12 @@ function candidateUrls() {
   })()
   const arches = [...new Set([platformArch, 'x86_64', 'x64', 'arm64'].filter(Boolean))]
 
-  for (const arch of arches) {
-    urls.push(
-      `https://github.com/${ENGINE_REPO}/releases/download/v${ENGINE_VERSION}/camoufox-${ENGINE_VERSION}-${osName}.${arch}.zip`,
-    )
+  for (const version of ENGINE_VERSIONS) {
+    for (const arch of arches) {
+      urls.push(
+        `https://github.com/${ENGINE_REPO}/releases/download/v${version}/camoufox-${version}-${osName}.${arch}.zip`,
+      )
+    }
   }
   return urls
 }

@@ -14,7 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { Writable } from 'node:stream'
 import type { KernelInfo, KernelPhase, KernelProgress } from '@vfox/shared'
-import { ENGINE_VERSION } from '@vfox/shared'
+import { ENGINE_VERSION, ENGINE_VERSIONS } from '@vfox/shared'
 import type { CamoufoxFetcher } from 'camoufox-js/dist/pkgman.js'
 import type { CoreLogger } from './index.js'
 
@@ -193,10 +193,17 @@ async function resolveEngineUrl(
       }
     })()
     const arches = [...new Set([platformArch, 'x86_64', 'x64', 'arm64'].filter(Boolean))]
-    for (const arch of arches) {
-      candidates.push(
-        `https://github.com/${ENGINE_REPO}/releases/download/v${ENGINE_VERSION}/camoufox-${ENGINE_VERSION}-${pkgman.OS_NAME}.${String(arch)}.zip`,
-      )
+    // Every acceptable version, most preferred first. A single pin is a single point of failure:
+    // upstream withdrew the version this project was pinned to, every URL 404ed, the API fallback
+    // resolved an engine with no canvas keys, the safety check rejected it, and the install button
+    // simply refused to install anything. Walking the list keeps canvas spoofing AND survives a
+    // withdrawal.
+    for (const version of ENGINE_VERSIONS) {
+      for (const arch of arches) {
+        candidates.push(
+          `https://github.com/${ENGINE_REPO}/releases/download/v${version}/camoufox-${version}-${pkgman.OS_NAME}.${String(arch)}.zip`,
+        )
+      }
     }
   }
 
@@ -217,10 +224,12 @@ async function resolveEngineUrl(
   const { CamoufoxFetcher } = await import('camoufox-js/dist/pkgman.js')
   const fetcher = new CamoufoxFetcher()
   await fetcher.init()
-  if (fetcher.verstr !== ENGINE_VERSION) {
+  if (!(ENGINE_VERSIONS as readonly string[]).includes(fetcher.verstr)) {
     throw new Error(
-      `the engine registry resolved ${fetcher.verstr} but VFox pins ${ENGINE_VERSION}; ` +
-        'refusing to install an engine this build was not tested against',
+      `the engine registry resolved ${fetcher.verstr}, which is not one of the versions this build ` +
+        `was tested against (${ENGINE_VERSIONS.join(', ')}); refusing to install it. Set ` +
+        'VFOX_ENGINE_URL to a mirror of a tested build, or update ENGINE_VERSIONS in ' +
+        'packages/shared/src/constants.ts after checking the smoke test passes on the new one.',
     )
   }
   return fetcher.url

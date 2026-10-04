@@ -30,16 +30,22 @@ try {
   process.exit(1)
 }
 
-const match = /export const ENGINE_VERSION = '([^']+)'/.exec(source)
-if (!match) {
+const match = /export const ENGINE_VERSIONS = \[([^\]]+)\]/.exec(source)
+const versions = match ? [...match[1].matchAll(/'([^']+)'/g)].map(found => found[1]) : []
+
+if (versions.length === 0) {
   console.error(
-    `[engine-version] no \`export const ENGINE_VERSION = '...'\` in ${constantsPath}.\n` +
-      '  The pinned engine version must live there; every other consumer reads it from this script.',
+    `[engine-version] no \`export const ENGINE_VERSIONS = ['...']\` in ${constantsPath}.\n` +
+      '  The engine version list must live there; every other consumer reads it from this script.',
   )
   process.exit(1)
 }
 
-export const ENGINE_VERSION = match[1]
+/** Every acceptable engine version, most preferred first. */
+export const ENGINE_VERSIONS = versions
+
+/** The preferred engine version. */
+export const ENGINE_VERSION = versions[0]
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   console.log(ENGINE_VERSION)

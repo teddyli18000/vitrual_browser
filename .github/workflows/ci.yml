@@ -186,7 +186,9 @@ jobs:
         uses: ./.github/actions/setup
 
       - name: Build the workspace the renderer talks to
-        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build
+        # @vfox/sync is built too: startServer imports it lazily and the screenshot harness starts a
+        # real server, so a missing sync build would kill this job with ERR_MODULE_NOT_FOUND.
+        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/sync build && pnpm --filter @vfox/server build
 
       # Keyed on the pinned Playwright version rather than the lockfile hash: the ~130 MB
       # Chromium download then survives every unrelated dependency change.

@@ -34,7 +34,19 @@ export const DEFAULT_START_URL = 'about:blank'
  * `scripts/engine-version.mjs` reads this value straight out of this file, so the CI fetch, the
  * Actions cache key and the in-app installer cannot disagree. There is exactly one place to bump.
  */
-export const ENGINE_VERSION = '152.0.4-beta.30'
+export const ENGINE_VERSIONS = ['152.0.4-beta.30', '152.0.4-beta.29', '152.0.4-beta.28'] as const
+
+/**
+ * The preferred engine version — the first entry of {@link ENGINE_VERSIONS}.
+ *
+ * The list exists because a single pin is a single point of failure: upstream withdrew
+ * `152.0.4-beta.31` while this project was pinned to it, every direct URL 404ed, the API fallback
+ * resolved 156 (which has no canvas keys), the safety check rejected it, and a user's 一键安装
+ * button simply refused to install anything. A hard failure is the wrong outcome for a withdrawn
+ * dependency. These are all non-prerelease releases of the same 152.0.4 line, so they share the
+ * canvas config surface this build depends on, and the installer walks the list in order.
+ */
+export const ENGINE_VERSION = ENGINE_VERSIONS[0]
 
 /** Camoufox-js peer range; keep in sync with packages/core/package.json. */
 export const SUPPORTED_PLAYWRIGHT_CORE = '<1.61.0'
