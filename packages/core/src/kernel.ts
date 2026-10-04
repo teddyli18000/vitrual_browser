@@ -15,7 +15,6 @@ import path from 'node:path'
 import { Writable } from 'node:stream'
 import type { KernelInfo, KernelPhase, KernelProgress } from '@vfox/shared'
 import { ENGINE_VERSION, ENGINE_VERSIONS } from '@vfox/shared'
-import type { CamoufoxFetcher } from 'camoufox-js/dist/pkgman.js'
 import type { CoreLogger } from './index.js'
 
 export type KernelProgressListener = (progress: KernelProgress) => void
@@ -283,19 +282,16 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
     try {
       const archive = await downloadEngine(url, ENGINE_VERSION, staging, emit)
       emit({ phase: 'extracting', message: `Extracting Camoufox ${ENGINE_VERSION}` })
-      pkgman.CamoufoxFetcher.cleanup()
-      await fs.mkdir(target, { recursive: true })
-      await fetcher.extractZip(archive)
-      // setVersion() writes version.json from the fetcher's resolved release; we resolved the URL
-      // ourselves, so write the same shape directly.
-      await fs.writeFile(
-        path.join(target, 'version.json'),
-        JSON.stringify(splitEngineVersion(ENGINE_VERSION)),
-        'utf8',
-      )
-      if (process.platform !== 'win32') {
-        execFileSync('chmod', ['-R', '755', target])
-      }
+      // Extract beside the target and swap directories in, rather than deleting the old engine
+      // first. Destructive-first is what made a failed *extraction* cost the user their working
+      // engine — reachable through a truncated archive, ENOSPC (extraction is when disk usage peaks:
+      // the archive is still staged while ~1 GB is written) or a crash mid-extract.
+      await swapInEngine({
+        archive,
+        target,
+        extract: (from, into) => extractArchive(pkgman, from, into),
+        warn: message => emit({ phase: 'extracting', message }),
+      })
     } finally {
       await fs.rm(staging, { recursive: true, force: true })
     }
@@ -363,6 +359,97 @@ async function downloadGeoIpDatabase(target: string, emit: ProgressReporter): Pr
         `GeoIP database unavailable (${error instanceof Error ? error.message : String(error)}). Continuing — it is only used when a ` +
         'profile enables fingerprint.geoip.',
     })
+  }
+}
+
+export interface EngineSwapOptions {
+  archive: string
+  target: string
+  /** Extraction is injected so a test can fail it without a 490 MB archive. */
+  extract: (archive: string, into: string) => Promise<void>
+  warn?: (message: string) => void
+}
+
+/**
+ * Extract into `<target>.new`, then swap it into place.
+ *
+ * Sequence, and exactly what happens at each failure point:
+ *
+ *  1. extract into `<target>.new` — a *sibling* of the target, so the renames below never cross a
+ *     volume. Fails → `.new` is removed and `target` is untouched, so the user keeps the engine they
+ *     already had. This is the case the old destructive-first order got wrong.
+ *  2. rename `target` → `<target>.old`. Fails → `.new` is removed, `target` untouched.
+ *  3. rename `<target>.new` → `target`. Fails → `.old` is renamed back and `.new` removed, so the
+ *     user is never left with neither engine.
+ *  4. remove `<target>.old`. Fails → warned about only: the new engine is already in place, so a
+ *     leftover `.old` is cosmetic rather than fatal.
+ */
+export async function swapInEngine({
+  archive,
+  target,
+  extract,
+  warn,
+}: EngineSwapOptions): Promise<void> {
+  const incoming = `${target}.new`
+  const previous = `${target}.old`
+
+  await fs.rm(incoming, { recursive: true, force: true })
+  await fs.mkdir(incoming, { recursive: true })
+  try {
+    await extract(archive, incoming)
+  } catch (error) {
+    await fs.rm(incoming, { recursive: true, force: true })
+    throw error
+  }
+
+  await fs.rm(previous, { recursive: true, force: true })
+  const hadPrevious = await exists(target)
+  if (hadPrevious) {
+    await fs.rename(target, previous)
+  }
+  try {
+    await fs.rename(incoming, target)
+  } catch (error) {
+    if (hadPrevious) {
+      await fs.rename(previous, target).catch(restoreError => {
+        warn?.(`could not restore ${target} from ${previous}: ${errorMessage(restoreError)}`)
+      })
+    }
+    await fs.rm(incoming, { recursive: true, force: true })
+    throw error
+  }
+  await fs.rm(previous, { recursive: true, force: true }).catch(error => {
+    warn?.(`the previous engine is still at ${previous}: ${errorMessage(error)}`)
+  })
+}
+
+/**
+ * Extract an engine archive into `into` and write the version marker it needs to be launchable.
+ *
+ * `unzip` is declared as taking a `Buffer` but hands its argument straight to `new AdmZip(...)`,
+ * which accepts a path — and reading ~490 MB into memory to satisfy the declaration would defeat the
+ * point of staging it on disk (verified against camoufox-js 0.12.0). `version.json` is what
+ * `installedVerStr()` reads; the fetcher's own `setVersion()` writes it into the frozen
+ * `INSTALL_DIR`, so the same shape is written here, into the directory being prepared.
+ */
+async function extractArchive(
+  pkgman: typeof import('camoufox-js/dist/pkgman.js'),
+  archive: string,
+  into: string,
+): Promise<void> {
+  await pkgman.unzip(
+    archive as unknown as Buffer,
+    into,
+    `Extracting Camoufox ${ENGINE_VERSION}`,
+    false,
+  )
+  await fs.writeFile(
+    path.join(into, 'version.json'),
+    JSON.stringify(splitEngineVersion(ENGINE_VERSION)),
+    'utf8',
+  )
+  if (process.platform !== 'win32') {
+    execFileSync('chmod', ['-R', '755', into])
   }
 }
 
