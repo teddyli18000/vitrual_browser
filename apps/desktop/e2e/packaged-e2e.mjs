@@ -597,6 +597,27 @@ for (let left = 0; left < identities.length; left += 1) {
     )
   }
 }
+
+// A property, not a threshold. The comparison above can pass while two profiles still share a GPU,
+// and a shared WebGL vendor and renderer is one of the first values a fingerprinting script reads:
+// it links two accounts even when four unrelated dimensions happen to differ.
+//
+// This is the assertion the real defect was caught by. The engine draws GPUs from a table of 32
+// pairs with a **weighted** draw in which one NVIDIA row alone is 45%, so three profiles collided
+// 61% of the time in measurement. `packages/core` now draws only from the pairs no other profile
+// holds, keeping the weights where they can be kept. Asserting it as a property rather than as a
+// threshold is deliberate: "no two share a GPU" cannot pass by luck.
+const gpuCounts = new Map()
+for (const identity of identities) {
+  const pair = String(identity.webglVendor) + ' | ' + String(identity.webglRenderer)
+  gpuCounts.set(pair, (gpuCounts.get(pair) ?? 0) + 1)
+}
+const sharedGpus = [...gpuCounts.entries()].filter(([, count]) => count > 1)
+assert(
+  sharedGpus.length === 0,
+  `no two profiles report the same WebGL vendor and renderer (shared pairs: ${sharedGpus.length})`,
+)
+executed.push('asserting that no two profiles report the same WebGL vendor and renderer')
 executed.push(
   'comparing 11 fingerprint dimensions pairwise across the profiles and requiring 4 to differ',
 )

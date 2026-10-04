@@ -36,6 +36,14 @@ const PER_LAUNCH_RANDOM_KEYS = [
 ] as const
 
 /** Our OS names are the product's; the WebGL database is keyed by the engine's. */
+/** One row of the engine's WebGL table, with the weight it gives that GPU on this platform. */
+interface WebglRow extends WebglPair {
+  weight: number
+}
+
+/** The engine's WebGL table, read once per platform: it cannot change while we run. */
+const rowsCache = new Map<string, WebglRow[]>()
+
 const ENGINE_OS = { windows: 'win', macos: 'mac', linux: 'lin' } as const
 
 export interface CreatedIdentity {
@@ -63,6 +71,8 @@ export function identityInputs(fingerprint: FingerprintConfig): string {
 export async function createIdentity(
   fingerprint: FingerprintConfig,
   engine: string | null,
+  /** WebGL pairs other profiles already report, so a new profile does not repeat one. */
+  takenWebgl: ReadonlySet<string> = new Set(),
 ): Promise<CreatedIdentity> {
   const { fromBrowserforge, generateFingerprint } = await import(
     camoufoxModule('dist/fingerprints.js')
@@ -92,7 +102,7 @@ export async function createIdentity(
       fingerprint: { ...generated },
     },
     config: pinPerLaunchRandomness(fingerprint.config, mapped['window.screenY']),
-    webgl: fingerprint.webgl ?? (await pinWebgl(fingerprint.os)),
+    webgl: fingerprint.webgl ?? (await pinWebgl(fingerprint.os, takenWebgl)),
   }
 }
 
@@ -142,17 +152,107 @@ function pinPerLaunchRandomness(
   return pinned
 }
 
-/** Choose the WebGL pair this profile will report forever. */
-async function pinWebgl(os: FingerprintConfig['os']): Promise<WebglPair | undefined> {
-  const { sampleWebGL } = await import(camoufoxModule('dist/webgl/sample.js'))
-  // `sampleWebGL` is declared as returning `WebGLData`, but it actually resolves the parsed `data`
-  // column of the chosen row — the CAMOU_CONFIG fragment (`webGl:vendor`, `webGl:renderer`,
-  // `webGl:parameters`, …). Verified against camoufox-js 0.12.0 at runtime.
-  const sample = (await sampleWebGL(ENGINE_OS[os])) as unknown as Record<string, unknown>
-  const vendor = sample['webGl:vendor']
-  const renderer = sample['webGl:renderer']
-  if (typeof vendor !== 'string' || typeof renderer !== 'string') {
+/** A stable key for a WebGL pair, so callers can ask which pairs are already in use. */
+export function webglPairKey(pair: { vendor: string; renderer: string }): string {
+  return pair.vendor + '\u0000' + pair.renderer
+}
+
+/**
+ * Every WebGL pair the engine offers for one platform, with the weight it gives it.
+ *
+ * The `win` / `mac` / `lin` columns are **floats, not flags** — they are the engine's own idea of how
+ * common each GPU is (`mac: 0.819` for Apple, `win: 0.225` for the GTX 980). `sampleWebGL` draws from
+ * them with `Math.random()`, which is why a third of the rows are effectively unreachable and one row
+ * dominates. The weights are kept here deliberately: the distribution of GPUs across machines is
+ * itself a fingerprint, and replacing it with a flat one would trade a link between two profiles for
+ * an implausible population.
+ */
+async function webglRows(os: FingerprintConfig['os']): Promise<WebglRow[]> {
+  const engineOs = ENGINE_OS[os]
+  const cached = rowsCache.get(engineOs)
+  if (cached) {
+    return cached
+  }
+
+  const { createRequire } = await import('node:module')
+  const { fileURLToPath } = await import('node:url')
+  const resolved = camoufoxModule('dist/data-files/webgl_data.db')
+  const path = resolved.startsWith('file:')
+    ? fileURLToPath(resolved)
+    : createRequire(import.meta.url).resolve(resolved)
+
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
+    const rows = db
+      .prepare(
+        'select vendor, renderer, ' +
+          engineOs +
+          ' as weight from webgl_fingerprints where ' +
+          engineOs +
+          ' > 0',
+      )
+      .all() as { vendor: unknown; renderer: unknown; weight: unknown }[]
+    const parsed = rows
+      .filter(
+        row =>
+          typeof row.vendor === 'string' &&
+          typeof row.renderer === 'string' &&
+          typeof row.weight === 'number' &&
+          row.weight > 0,
+      )
+      .map(row => ({
+        vendor: row.vendor as string,
+        renderer: row.renderer as string,
+        weight: row.weight as number,
+      }))
+    rowsCache.set(engineOs, parsed)
+    return parsed
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * Choose the WebGL pair this profile will report forever, avoiding the pairs already handed out.
+ *
+ * The engine's own sampler is **biased by design** (see `webglRows`), and the bias is severe enough to
+ * matter here: measured over 2000 draws against this build, only **15 of the 32 pairs are ever
+ * produced**, the top three cover **81%**, and a single NVIDIA GTX 980 row is **45%**. Two profiles
+ * drawn from it therefore report the same GPU most of the time, and a shared WebGL vendor and renderer
+ * is among the first values a fingerprinting script reads. For an anti-detect browser that is not an
+ * overlap, it is a link between accounts.
+ *
+ * Re-drawing does not fix it: with the popular pairs taken, what is left is rare, and a bounded number
+ * of draws frequently fails to land on a survivor — which is exactly how a ten-profile run still ended
+ * with a repeat.
+ *
+ * So the draw is still weighted, but only over the pairs nobody holds yet. Realism is preserved where
+ * it can be, and the clustering disappears where it matters. The engine still supplies the row's own
+ * parameters at launch: camoufox-js resolves `webgl_config: [vendor, renderer]` back to the full `data`
+ * fragment, so only the pair is chosen here.
+ *
+ * When every pair is taken the pool widens back to the whole table, because at that point a repeat is
+ * unavoidable and refusing to make a profile would be worse.
+ */
+async function pinWebgl(
+  os: FingerprintConfig['os'],
+  taken: ReadonlySet<string> = new Set(),
+): Promise<WebglPair | undefined> {
+  const rows = await webglRows(os)
+  if (rows.length === 0) {
     return undefined
   }
-  return { vendor, renderer }
+  const free = rows.filter(row => !taken.has(webglPairKey(row)))
+  const pool = free.length > 0 ? free : rows
+
+  let roll = Math.random() * pool.reduce((sum, row) => sum + row.weight, 0)
+  for (const row of pool) {
+    roll -= row.weight
+    if (roll <= 0) {
+      return { vendor: row.vendor, renderer: row.renderer }
+    }
+  }
+  const last = pool[pool.length - 1]
+  return last ? { vendor: last.vendor, renderer: last.renderer } : undefined
 }
