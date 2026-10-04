@@ -367,3 +367,79 @@ jobs:
           path: .cache/window-shots/*.png
           if-no-files-found: error
           retention-days: 30
+
+  # The only job that runs the application users actually install. Every other job launches the
+  # engine from source, which is how v0.2.0 shipped with `camoufox-js/dist/data-files/webgl_data.db`
+  # sealed inside app.asar: better-sqlite3 is a native module, native code does not go through
+  # Electron's asar shim, and every profile creation failed with SQLITE_CANTOPEN where no CI job
+  # could see it.
+  #
+  # Deliberately NOT path-filtered, even though it is the slowest job here. The v0.2.0 defect came
+  # from a *dependency's* data file being packed differently, not from a change under apps/desktop —
+  # a `paths:` filter would have skipped exactly the commit that shipped the bug. What this job
+  # guards is the shape of the artifact, and that can change from any package in the workspace.
+  e2e-packaged:
+    name: packaged app end-to-end
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Node.js and pnpm
+        uses: ./.github/actions/setup
+
+      # Same cache key as e2e-engine and e2e-window: the packaged app launches a real browser, so it
+      # needs the engine, and it must not download another 550 MB to get it.
+      - name: Resolve the Camoufox engine version
+        id: engine
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $version = (node scripts/kernel-version.mjs).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
+            throw 'Could not resolve the Camoufox engine version.'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Camoufox engine version: $version"
+
+      - name: Restore the Camoufox engine
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ steps.engine.outputs.version }}
+
+      - name: Fetch the Camoufox engine
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/fetch-kernel.mjs
+
+      # Builds packages, the renderer, the NSIS installer and the portable zip, and leaves the
+      # packaged application at release/win-unpacked — which is exactly what the test launches.
+      - name: Build and package the application
+        run: node scripts/build-installer.mjs
+
+      # Fails on the structural guard (WebGL database unpacked) before it ever starts Electron, then
+      # launches the packaged VFox.exe, drives the real UI, and asserts a real browser window, real
+      # identity, and cookies + localStorage surviving a restart.
+      - name: Run the packaged end-to-end test
+        env:
+          CAMOUFOX_INSTALL_DIR: ${{ github.workspace }}/.cache/camoufox
+        run: node apps/desktop/e2e/packaged-e2e.mjs --app release/win-unpacked
+
+      # When it fails, the first question is always "what actually got packed?" — answer it in the log
+      # rather than making someone download a 130 MB artifact to find out.
+      - name: List the packaged resources on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'release/win-unpacked/resources')) {
+            Write-Host 'no resources directory — packaging did not get that far'
+            exit 0
+          }
+          Write-Host '--- resources ---'
+          Get-ChildItem 'release/win-unpacked/resources' | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+          Write-Host '--- app.asar.unpacked/node_modules/camoufox-js ---'
+          Get-ChildItem 'release/win-unpacked/resources/app.asar.unpacked/node_modules/camoufox-js' -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 40 FullName | Out-String | Write-Host
