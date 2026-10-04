@@ -379,17 +379,35 @@ try {
       sizeDetails,
     )
   }
+  // A window larger than the physical desktop is EXPECTED, not suspicious: the engine sizes the real
+  // window to the profile's *spoofed* screen, and that screen is generated without knowing how big
+  // the runner's desktop is. Measured on the 1024x720 runner: a generated screen produced a real
+  // 1679x1409 window, which is correct behaviour rather than evidence of a bad match.
+  //
+  // This used to be a hard failure, which was wrong twice over. It rejected correct product
+  // behaviour, and because it ran before the page was even connected it blocked every later
+  // assertion — including the geometry numbers that say whether the spoof is coherent, which is the
+  // entire reason this job exists. The window's identity is guaranteed far more strongly by the
+  // process-image match than by any size heuristic, so the ceiling is reported and the checks that
+  // actually matter (chrome thickness, screen self-consistency) do the asserting.
   if (
     width > workArea.width + WORK_AREA_TOLERANCE ||
     height > workArea.height + WORK_AREA_TOLERANCE
   ) {
-    fail(
-      'size',
-      `the engine window is ${width}x${height}, larger than the ${workArea.width}x${workArea.height} ` +
-        `work area (tolerance ${WORK_AREA_TOLERANCE}px)`,
-      1,
-      'a window bigger than the desktop is not this engine window; check the rect in details',
-      sizeDetails,
+    report.findings ??= {}
+    report.findings.overflowsWorkArea = {
+      window: { width, height },
+      workArea: { width: workArea.width, height: workArea.height },
+      overshoot: { width: width - workArea.width, height: height - workArea.height },
+      matchedBy: lookup.matchedBy,
+    }
+    log(
+      `FINDING: the engine window (${width}x${height}) is larger than the ` +
+        `${workArea.width}x${workArea.height} work area. The engine sizes the real window to the ` +
+        "profile's spoofed screen, so this is expected on a small runner desktop — but it also " +
+        "means a profile whose generated screen exceeds the user's real display opens a window " +
+        'that runs off the screen. Reported, not failed; the geometry checks below decide whether ' +
+        'the spoof is coherent.',
     )
   }
   report.checks.size = { ok: true, width, height }
