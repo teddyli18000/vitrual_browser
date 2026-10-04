@@ -123,7 +123,14 @@ jobs:
           path: .cache/camoufox
           key: camoufox-${{ runner.os }}-${{ steps.engine.outputs.version }}
 
+      # GITHUB_TOKEN is not optional: `camoufox-js` authenticates its api.github.com release lookup
+      # with it when present (dist/pkgman.js `getAuthorizationHeaders`). Without it the lookup
+      # shares the unauthenticated 60-per-hour per-IP budget, and whichever job runs second is the
+      # one that gets rate-limited — which is how `e2e-window` failed on 2026-10-04 with
+      # "Failed to fetch releases from api.github.com/repos/daijro/camoufox/releases after 5 attempts".
       - name: Fetch the Camoufox engine
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/fetch-kernel.mjs
 
       - name: Build the workspace
@@ -239,7 +246,12 @@ jobs:
           path: .cache/camoufox
           key: camoufox-${{ runner.os }}-${{ steps.engine.outputs.version }}
 
+      # Same authentication requirement as e2e-engine's fetch step above: without GITHUB_TOKEN the
+      # `camoufox-js` release lookup shares the unauthenticated per-IP budget and this job — the
+      # second one to run — is the one that gets rate-limited.
       - name: Fetch the Camoufox engine
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/fetch-kernel.mjs
 
       - name: Build the workspace
