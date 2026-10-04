@@ -13,9 +13,13 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Writable } from 'node:stream'
+import { Worker } from 'node:worker_threads'
 import type { KernelInfo, KernelPhase, KernelProgress } from '@vfox/shared'
 import { ENGINE_VERSION, ENGINE_VERSIONS } from '@vfox/shared'
 import type { CoreLogger } from './index.js'
+// TYPE-ONLY, and it must stay that way: a value import would execute the worker script in the main
+// process, where `workerData` is null and the extraction would throw at import time.
+import type { UnzipWorkerData, UnzipWorkerMessage } from './unzip-worker.js'
 
 export type KernelProgressListener = (progress: KernelProgress) => void
 
@@ -289,7 +293,14 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
       await swapInEngine({
         archive,
         target,
-        extract: (from, into) => extractArchive(pkgman, from, into),
+        extract: (from, into) =>
+          extractArchive(from, into, (fraction, bytes) =>
+            emit({
+              phase: 'extracting',
+              message: `Extracting Camoufox ${ENGINE_VERSION} — ${Math.round(bytes / 1048576)} MB`,
+              percent: Math.round(fraction * 100),
+            }),
+          ),
         warn: message => emit({ phase: 'extracting', message }),
       })
     } finally {
@@ -424,25 +435,49 @@ export async function swapInEngine({
 }
 
 /**
- * Extract an engine archive into `into` and write the version marker it needs to be launchable.
+ * Extract an engine archive into `into`, **off the main thread**, then write the version marker that
+ * makes the result launchable.
  *
- * `unzip` is declared as taking a `Buffer` but hands its argument straight to `new AdmZip(...)`,
- * which accepts a path — and reading ~490 MB into memory to satisfy the declaration would defeat the
- * point of staging it on disk (verified against camoufox-js 0.12.0). `version.json` is what
- * `installedVerStr()` reads; the fetcher's own `setVersion()` writes it into the frozen
- * `INSTALL_DIR`, so the same shape is written here, into the directory being prepared.
+ * The extraction runs in a `worker_threads` worker — see `src/unzip-worker.ts` for the measurement
+ * behind that. In the desktop app the installer runs in the Electron main process, and a synchronous
+ * ~1 GB extraction there is ~20 seconds of a frozen window (Windows: "not responding"). Moving it out
+ * keeps the UI painting and lets the progress bar advance, which is why the worker reports per entry.
  */
 async function extractArchive(
-  pkgman: typeof import('camoufox-js/dist/pkgman.js'),
   archive: string,
   into: string,
+  onProgress: (fraction: number, bytes: number) => void,
 ): Promise<void> {
-  await pkgman.unzip(
-    archive as unknown as Buffer,
-    into,
-    `Extracting Camoufox ${ENGINE_VERSION}`,
-    false,
-  )
+  const worker = new Worker(new URL('./unzip-worker.js', import.meta.url), {
+    workerData: {
+      archive,
+      into,
+      desc: `Extracting Camoufox ${ENGINE_VERSION}`,
+    } satisfies UnzipWorkerData,
+  })
+  try {
+    await new Promise<void>((resolve, reject) => {
+      worker.on('message', (message: UnzipWorkerMessage) => {
+        if (message.type === 'progress') {
+          onProgress(message.total === 0 ? 1 : message.done / message.total, message.bytes)
+        } else if (message.type === 'done') {
+          resolve()
+        } else {
+          reject(new Error(`extracting the engine archive failed: ${message.message}`))
+        }
+      })
+      worker.on('error', reject)
+      worker.on('exit', code => {
+        if (code !== 0) {
+          reject(new Error(`the extraction worker exited with code ${code}`))
+        }
+      })
+    })
+  } finally {
+    await worker.terminate()
+  }
+  // version.json is what `installedVerStr()` reads; the fetcher's own `setVersion()` writes it into
+  // the frozen `INSTALL_DIR`, so the same shape is written here, into the directory being prepared.
   await fs.writeFile(
     path.join(into, 'version.json'),
     JSON.stringify(splitEngineVersion(ENGINE_VERSION)),

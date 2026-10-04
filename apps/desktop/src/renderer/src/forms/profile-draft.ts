@@ -57,8 +57,6 @@ export interface ProfileDraft {
   locale: string
   hardwareConcurrencyAuto: boolean
   hardwareConcurrency: number
-  deviceMemoryAuto: boolean
-  deviceMemory: number
   userAgentAuto: boolean
   userAgent: string
 
@@ -110,8 +108,6 @@ export function emptyDraft(): ProfileDraft {
     locale: '',
     hardwareConcurrencyAuto: true,
     hardwareConcurrency: 8,
-    deviceMemoryAuto: true,
-    deviceMemory: 8,
     userAgentAuto: true,
     userAgent: '',
     geoip: true,
@@ -152,8 +148,6 @@ export function draftFrom(profile: Profile): ProfileDraft {
   draft.locale = text(fp.locale)
   draft.hardwareConcurrencyAuto = fp.hardwareConcurrency === null
   draft.hardwareConcurrency = fp.hardwareConcurrency ?? 8
-  draft.deviceMemoryAuto = fp.deviceMemory === null
-  draft.deviceMemory = fp.deviceMemory ?? 8
   draft.userAgentAuto = fp.userAgent === null
   draft.userAgent = text(fp.userAgent)
 
@@ -227,9 +221,12 @@ export function payloadFrom(draft: ProfileDraft): DraftConversion {
     blockWebgl: draft.blockWebgl,
     disableCoop: draft.disableCoop,
     hardwareConcurrency: draft.hardwareConcurrencyAuto ? null : draft.hardwareConcurrency,
-    // Always null, never a value: the Firefox engine has no `navigator.deviceMemory`, and passing
-    // it throws UnknownProperty and aborts every launch. The field stays in the shared schema for
-    // contract stability, but the GUI must not be able to set it.
+    // Hard-coded null, and the GUI has no control for it: Firefox does not implement
+    // `navigator.deviceMemory`, so the engine has no property to spoof and camoufox-js's own
+    // mapping says "deviceMemory not in Firefox". The key is absent from the installed engine's
+    // `properties.json`, and passing it makes camoufox-js throw `UnknownProperty`, which aborts the
+    // launch. The field stays in the shared schema for contract stability, so it is always sent
+    // empty rather than omitted.
     deviceMemory: null,
     userAgent:
       draft.userAgentAuto || draft.userAgent.trim().length === 0 ? null : draft.userAgent.trim(),
@@ -272,7 +269,6 @@ export function autoCount(draft: ProfileDraft): number {
     draft.fontsAuto,
     draft.localeAuto,
     draft.hardwareConcurrencyAuto,
-    draft.deviceMemoryAuto,
     draft.userAgentAuto,
   ].filter(Boolean).length
 }
