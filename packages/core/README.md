@@ -75,8 +75,22 @@ node packages/core/scripts/verify-window.mjs --screenshot out/window.png
 ```
 
 `verify-window.mjs` and `smoke-launch.mjs` are CI gates. `scripts/lib/user32.mjs` holds the
-koffi/`user32.dll` window and CIM process layer they share; `probe-windows.mjs` is the pre-flight that
-distinguishes "this runner has no interactive desktop" from "the browser never appeared".
+koffi/`user32.dll` + `kernel32.dll` window and CIM process layer they share; `probe-windows.mjs` is the
+pre-flight that distinguishes "this runner has no interactive desktop" from "the browser never
+appeared", and it prints every visible window with the image name of its process.
+
+The engine's window is looked up **by pid first, then by process image name** (`camoufox.exe`:
+`EnumWindows` → `GetWindowThreadProcessId` → `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` →
+`QueryFullProcessImageNameW` → basename). Both paths are needed. Playwright launches a headed Firefox
+with `-wait-for-browser` (`playwright-core/lib/coreBundle.js:44199`), so the pid it reports through
+`browserServer.process()` is a Windows **launcher stub** that owns no window — the visible window
+belongs to its child. The child would normally be found by walking the process tree, but that walk
+needs CIM, and CIM is unavailable on GitHub's `windows-latest` runner
+(`[probe] engine processes: could not enumerate (CIM unavailable)`). The image-name scan needs no CIM
+and no elevation. `VFOX_WINDOW_OK` (`windowLookup`) and the `window-lookup` step say which path
+matched, and a window-lookup failure carries `details.desktop`: every visible window with its image
+name, rect and title, so the log of a failed run is enough to tell "the engine never opened a window"
+from "the lookup is wrong".
 
 ## Known limitations (v0.1.0)
 
