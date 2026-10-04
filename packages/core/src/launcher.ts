@@ -43,6 +43,7 @@ import { spawnSync } from 'node:child_process'
 import type { Profile } from '@vfox/shared'
 import type { LaunchOptions } from 'camoufox-js'
 import { firefox } from 'playwright-core'
+import { camoufoxModule } from './camoufox.js'
 import { acceptedKeys, dropUnacceptedKeys, withUnknownKeyTolerance } from './engine-config.js'
 import { type FingerprintWarning, toEngineOptions } from './fingerprint.js'
 import { resolveEngineDir } from './kernel.js'
@@ -87,7 +88,7 @@ export async function toServerOptions(
 ): Promise<ServerOptions> {
   // Imported lazily: camoufox-js resolves its install directory at module load time, and
   // `createCore({ kernelDir })` sets CAMOUFOX_INSTALL_DIR before the first launch.
-  const { launchOptions } = await import('camoufox-js')
+  const { launchOptions } = (await import(camoufoxModule())) as typeof import('camoufox-js')
   const engine = toEngineOptions(profile.fingerprint, profile.proxy, warn)
 
   // Layer 1: never hand the engine a config key it does not accept. The engine's own
