@@ -1,5 +1,5 @@
 import type { Profile, ProfileRuntime } from '@vfox/shared'
-import { OsTargetSchema } from '@vfox/shared'
+import { MAX_BATCH_PROFILES, OsTargetSchema } from '@vfox/shared'
 
 import { parseArgs, requirePositional, UsageError } from '../args.js'
 import type { Command } from '../command.js'
@@ -60,23 +60,29 @@ export const listCommand: Command = {
 
 export const createCommand: Command = {
   name: 'create',
-  summary: 'Create a profile',
-  usage: 'vfox create <name> [--os windows|macos|linux] [--proxy <url>] [--group <group>]',
+  summary: 'Create a profile, or a whole batch of them',
+  usage:
+    'vfox create <name> [--os windows|macos|linux] [--proxy <url>] [--group <group>]\n' +
+    '       vfox create --count <n> --prefix <prefix> [--os …] [--proxy …] [--group …]',
   details:
     '--proxy accepts http://, https:// or socks5:// with optional credentials, e.g. ' +
     'socks5://user:pass@127.0.0.1:1080. --group takes a group id or name and is created on ' +
-    'demand.',
+    'demand.\n' +
+    `--count creates that many profiles in one go, named "<prefix> 1".."<prefix> n", each with its ` +
+    `own generated identity; the cap is ${MAX_BATCH_PROFILES} per batch. The batch is all or ` +
+    'nothing: if anything fails, no profile is created.',
   flags: [
     ...GLOBAL_FLAGS,
     { name: 'os', kind: 'string', description: 'Spoofed platform: windows, macos or linux' },
     { name: 'proxy', kind: 'string', description: 'Upstream proxy URL' },
     { name: 'group', kind: 'string', description: 'Group id or name (created if missing)' },
     { name: 'note', kind: 'string', description: 'Free-form note' },
+    { name: 'count', kind: 'string', description: 'Create this many profiles in one batch' },
+    { name: 'prefix', kind: 'string', description: 'Name prefix for --count, e.g. 工作号' },
   ],
   run: async ({ argv, dataDir }) => {
     const parsed = parseArgs(argv, createCommand.flags)
     const output = createOutput(parsed.has('json'))
-    const name = requirePositional(parsed, 0, 'profile name')
 
     const osRaw = parsed.get('os')
     const os = OsTargetSchema.safeParse(osRaw ?? 'windows')
@@ -87,16 +93,53 @@ export const createCommand: Command = {
     const proxyRaw = parsed.get('proxy')
     const groupRaw = parsed.get('group')
     const note = parsed.get('note')
+    const countRaw = parsed.get('count')
 
     const core = await openCore(dataDir)
     try {
       const group =
         groupRaw === undefined ? undefined : await resolveGroup(core, groupRaw, { create: true })
+      const shared = {
+        ...(group !== undefined ? { groupId: group.id } : {}),
+        ...(proxyRaw !== undefined ? { proxy: parseProxyUrl(proxyRaw) } : {}),
+      }
+
+      if (countRaw !== undefined) {
+        const prefix = parsed.get('prefix')
+        if (prefix === undefined) {
+          throw new UsageError('--prefix is required with --count, e.g. --count 20 --prefix 工作号')
+        }
+        const count = Number(countRaw)
+        if (!Number.isInteger(count) || count < 1) {
+          throw new UsageError(`--count must be a positive whole number (got "${countRaw}")`)
+        }
+        if (count > MAX_BATCH_PROFILES) {
+          throw new UsageError(
+            `--count is capped at ${MAX_BATCH_PROFILES} profiles per batch (got ${count})`,
+          )
+        }
+
+        const profiles = await core.profiles.createBatch({
+          count,
+          namePrefix: prefix,
+          fingerprint: { os: os.data },
+          ...shared,
+        })
+        output.result(profiles, () => {
+          output.line(`Created ${profiles.length} profiles`)
+          for (const profile of profiles) {
+            output.line(`  ${profile.name} (${profile.id})`)
+          }
+          if (group !== undefined) output.line(`group: ${group.name}`)
+        })
+        return 0
+      }
+
+      const name = requirePositional(parsed, 0, 'profile name')
       const profile = await core.profiles.create({
         name,
         fingerprint: { os: os.data },
-        ...(group !== undefined ? { groupId: group.id } : {}),
-        ...(proxyRaw !== undefined ? { proxy: parseProxyUrl(proxyRaw) } : {}),
+        ...shared,
         ...(note !== undefined ? { notes: note } : {}),
       })
       output.result(profile, () => {

@@ -10,6 +10,7 @@ import type {
   KernelInfo,
   KernelProgress,
   Profile,
+  ProfileBatchCreate,
   ProfileCreate,
   ProfileRuntime,
   ProfileUpdate,
@@ -44,6 +45,12 @@ export interface ProfilesApi {
   exportZip(id: string, destFile: string): Promise<void>
   /** Create a new profile from a zip produced by {@link exportZip}. */
   importZip(zipFile: string, name?: string): Promise<Profile>
+  /**
+   * Create `count` profiles in one call, each with its own generated identity, named
+   * `<namePrefix> <index>`. All or nothing: a failure leaves the store exactly as it was. The result
+   * is in creation order.
+   */
+  createBatch(input: ProfileBatchCreate): Promise<Profile[]>
 }
 
 export interface GroupsApi {

@@ -3,6 +3,7 @@
  */
 
 import type { Profile } from '@vfox/shared'
+import { FingerprintSchema, ProfileBatchCreateSchema } from '@vfox/shared'
 import { importProfileZip, writeProfileZip } from './archive.js'
 import { createIdentity, identityInputs, identityIsCurrent } from './identity.js'
 import type { Core, CoreOptions, GroupsApi, KernelApi, ProfilesApi, RuntimeApi } from './index.js'
@@ -11,7 +12,7 @@ import { launchCamoufox } from './launcher.js'
 import { combineLoggers, createFileLogger } from './log.js'
 import { acquireDataDirLock, reconcileOrphans } from './orphans.js'
 import { RuntimeRegistry } from './runtime.js'
-import { Store } from './store.js'
+import { type BatchEntry, Store } from './store.js'
 
 export async function createCoreImpl(options: CoreOptions): Promise<Core> {
   // Must happen before any camoufox-js import: it resolves its install directory at module load.
@@ -88,6 +89,35 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
         config: created.config,
         webgl: created.webgl,
       })
+    },
+    async createBatch(input) {
+      const batch = ProfileBatchCreateSchema.parse(input)
+      const engine = (await kernelManager.info()).version
+      // The fingerprint constraints are shared, the *device* is not: `createIdentity` runs
+      // browserforge's generator once per profile, so twenty profiles on the same platform and proxy
+      // are twenty different machines rather than twenty copies of one.
+      const fingerprint = FingerprintSchema.parse(batch.fingerprint ?? {})
+      const entries: BatchEntry[] = []
+      for (let index = 0; index < batch.count; index += 1) {
+        const created = await createIdentity(fingerprint, engine)
+        entries.push({
+          input: {
+            name: `${batch.namePrefix} ${index + 1}`,
+            ...(batch.groupId === undefined ? {} : { groupId: batch.groupId }),
+            ...(batch.proxy === undefined ? {} : { proxy: batch.proxy }),
+            ...(batch.launch === undefined ? {} : { launch: batch.launch }),
+            ...(batch.fingerprint === undefined ? {} : { fingerprint: batch.fingerprint }),
+          },
+          identity: created.identity,
+          config: created.config,
+          webgl: created.webgl,
+        })
+      }
+      const profiles = await store.createProfiles(entries)
+      logger.info(
+        `created ${profiles.length} profiles in one batch ("${batch.namePrefix} 1".."${batch.namePrefix} ${batch.count}")`,
+      )
+      return profiles
     },
     async update(id, patch) {
       const before = store.requireProfile(id)

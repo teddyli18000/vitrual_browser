@@ -45,6 +45,15 @@ interface Parser<T> {
   ): { success: true; data: T } | { success: false; error: { message: string } }
 }
 
+/** One profile of a batch: the caller's input plus the identity generated for it. */
+export interface BatchEntry {
+  input: ProfileCreate
+  identity: FingerprintIdentity
+  /** The identity's pinned config keys, merged into `fingerprint.config`. */
+  config: Record<string, unknown>
+  webgl: WebglPair | undefined
+}
+
 const RENAME_ATTEMPTS = 10
 const RENAME_RETRY_MS = 20
 const RETRYABLE_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY'])
@@ -115,6 +124,76 @@ export class Store {
       this.#profiles.push(profile)
       await this.#persistProfiles()
       return clone(profile)
+    })
+  }
+
+  /**
+   * Create a whole batch of profiles, all or nothing.
+   *
+   * Strategy: every entry is validated and built into a `Profile` **before any I/O**, so a bad entry
+   * at position 7 of 20 cannot leave six profiles behind — it fails before a single directory exists.
+   * The directories are then created, and the table is written exactly **once**, through the same
+   * atomic temp-file-plus-rename path a single profile uses. If the write fails, the profiles are
+   * removed from memory and their directories deleted, so the store is byte-for-byte what it was.
+   *
+   * The alternative — writing each profile through `createProfile` and deleting the earlier ones on
+   * failure — was rejected: it would need N atomic writes and N compensating deletes, and every one of
+   * those is a place where a crash leaves the user with part of a batch and no record of which part.
+   */
+  async createProfiles(entries: BatchEntry[]): Promise<Profile[]> {
+    return this.#enqueue(async () => {
+      const now = new Date().toISOString()
+      const profiles = entries.map(entry => {
+        const draft = ProfileCreateSchema.parse(entry.input)
+        return ProfileSchema.parse({
+          id: randomUUID(),
+          name: draft.name,
+          groupId: draft.groupId ?? null,
+          notes: draft.notes ?? '',
+          color: draft.color ?? null,
+          proxy: draft.proxy ?? null,
+          fingerprint: {
+            ...(draft.fingerprint ?? {}),
+            config: entry.config,
+            webgl: entry.webgl ?? null,
+          },
+          identity: entry.identity,
+          launch: draft.launch ?? {},
+          createdAt: now,
+          updatedAt: now,
+        })
+      })
+
+      const directories: string[] = []
+      const removeDirectories = async () => {
+        await Promise.all(
+          directories.map(directory =>
+            fs.rm(directory, { recursive: true, force: true }).catch(() => undefined),
+          ),
+        )
+      }
+
+      try {
+        for (const profile of profiles) {
+          const directory = this.profileDir(profile.id)
+          await fs.mkdir(directory, { recursive: true })
+          directories.push(directory)
+        }
+      } catch (error) {
+        await removeDirectories()
+        throw error
+      }
+
+      this.#profiles.push(...profiles)
+      try {
+        await this.#persistProfiles()
+      } catch (error) {
+        const ids = new Set(profiles.map(profile => profile.id))
+        this.#profiles = this.#profiles.filter(profile => !ids.has(profile.id))
+        await removeDirectories()
+        throw error
+      }
+      return profiles.map(clone)
     })
   }
 
