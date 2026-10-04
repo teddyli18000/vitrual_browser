@@ -32,7 +32,17 @@ export function registerKernelRoutes(app: FastifyInstance, deps: RouteDeps): voi
       try {
         fallback?.(progress('downloading', 'installing engine'))
         const info = await core.kernel.install()
-        fallback?.(progress('done', info.version ? `kernel ${info.version} ready` : 'kernel ready'))
+        fallback?.(progress(
+    'done',
+    // `info.installed` is the authority: `#runInstall` returns without throwing when it finds no
+    // launcher, so reporting 'ready' on `version` alone announced a successful install that had
+    // installed nothing. Same shape as the GeoIP bug — a success signal never checked against reality.
+    info.installed
+      ? info.version
+        ? `kernel ${info.version} ready`
+        : 'kernel ready'
+      : 'kernel install finished, but no engine was found — check the log',
+  ))
         logger.info('kernel install finished', info)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
