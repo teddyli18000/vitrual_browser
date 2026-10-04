@@ -6,7 +6,7 @@
  * renderer from `out/renderer` is served over loopback and driven by headless Chromium, talking to
  * the **real** `@vfox/server` over the **real** HTTP/SSE contract. Only the handful of bridge
  * capabilities that genuinely need Electron (`openPath`, `revealPath`, `openHomepage`, `pickImport`,
- * `saveExport`, `restartService`) are stubbed; everything else is production code.
+ * `saveExport`, `saveText`, `restartService`) are stubbed; everything else is production code.
  *
  *   pnpm --filter @vfox/desktop build
  *   node scripts/screenshot-ui.mjs
@@ -52,6 +52,7 @@ const SHOT_NAMES = [
   '4-no-core',
   '5-sync',
   '6-batch-create',
+  '7-cookies',
 ]
 
 if (!existsSync(join(rendererDir, 'index.html'))) {
@@ -109,6 +110,7 @@ function installBridge(bridge) {
     profileDir: async () => bridge.profileDir,
     profileUsage: async () => bridge.usage,
     saveExport: async () => ({ saved: false, path: null }),
+    saveText: async () => ({ saved: false, path: null }),
     pickImport: async () => null,
   }
 }
@@ -244,7 +246,7 @@ async function capture(page, name) {
 
 await rm(dataDir, { recursive: true, force: true })
 await mkdir(shotDir, { recursive: true })
-// Remove only the five files this run owns: `.cache/shots` may hold someone else's capture.
+// Remove only the files this run owns: `.cache/shots` may hold someone else's capture.
 for (const name of SHOT_NAMES) await rm(join(shotDir, `${name}.png`), { force: true })
 
 console.log(`seeding  ${dataDir}`)
@@ -388,6 +390,40 @@ try {
   })
   await sleep(600)
   await capture(page, '6-batch-create')
+
+  /*
+   * 7 — the cookie import dialog, reached the way a user reaches it: the row's 更多 menu, not a
+   * direct URL. This harness has no cookies.txt to pick and launches no profile, so the honest
+   * state is what gets photographed: the three facts (format, must-be-stopped, what the format
+   * cannot carry), the merge/replace choice, and an 导入 button that is disabled until a file is
+   * chosen. The shot is only taken once the facts block is on screen — the dialog box alone would
+   * prove nothing about the part users have to read.
+   */
+  await page.keyboard.press('Escape')
+  await waitFor(
+    page.locator('.el-dialog', { hasText: '批量创建环境' }),
+    'the batch dialog to close',
+    pageWatch,
+    { state: 'hidden', timeoutMs: 15_000 },
+  )
+  await page
+    .locator('.el-table__row')
+    .first()
+    .locator('button', { hasText: '更多' })
+    .first()
+    .click()
+  // Element Plus teleports each row's dropdown to <body>, so every row has one and the first match is
+  // usually a closed menu from another row: the click then waits forever for an element that is
+  // never visible. :visible selects the open one.
+  await page.locator('.el-dropdown-menu__item:visible', { hasText: '导入 Cookie' }).first().click()
+  await waitFor(page.getByText('导入前请确认').first(), 'the cookie import dialog', pageWatch, {
+    timeoutMs: 15_000,
+  })
+  await waitFor(page.getByText('Netscape cookies.txt').first(), 'the format note', pageWatch, {
+    timeoutMs: 15_000,
+  })
+  await sleep(600)
+  await capture(page, '7-cookies')
 } catch (error) {
   failure = error
 } finally {
@@ -417,8 +453,8 @@ for (const file of shots) {
   console.log(`${file}  ${info.size} bytes`)
 }
 
-if (shots.length !== 6) {
-  console.error(`FAILED: expected 6 screenshots, produced ${shots.length}`)
+if (shots.length !== 7) {
+  console.error(`FAILED: expected 7 screenshots, produced ${shots.length}`)
   process.exit(1)
 }
 

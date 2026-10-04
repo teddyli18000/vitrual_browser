@@ -1,17 +1,19 @@
 /**
- * The three silent-blank-UI failure classes, checked without a bundler.
+ * The four silent-blank-UI failure classes, checked without a bundler.
  *
  * The renderer cannot be built in this sandbox (`pnpm --filter @vfox/desktop build` dies on
  * esbuild's service, which needs a piped child process), and Electron cannot start either. So a
  * broken component would otherwise be discovered only by a human looking at a screenshot in CI.
- * These three checks catch exactly the faults that `tsc`/`vue-tsc` cannot see, using the real Vue
+ * These four checks catch exactly the faults that `tsc`/`vue-tsc` cannot see, using the real Vue
  * compiler rather than a hand-rolled approximation:
  *
  *  1. Every `.vue` file parses and compiles — template and `<script setup>` — with
  *     `@vue/compiler-sfc`, the same compiler the build uses.
  *  2. Every `<ElXxx>` used anywhere is actually registered in `plugins/element-plus.ts`. An
  *     unregistered component renders as nothing and only logs a console warning.
- *  3. Every i18n key exists in **both** locales, and no key is dead copy.
+ *  3. Every `<ElTableColumn>` can actually render something — a `prop`, a `type` or a `#default`
+ *     slot. A bare column is an empty cell: no error, no warning, nothing on screen.
+ *  4. Every i18n key exists in **both** locales, and no key is dead copy.
  *
  *   node scripts/check-ui.mjs
  */
@@ -122,7 +124,37 @@ if (unusedRegistrations.length > 0) {
   )
 }
 
-/* ------------------------------------------------------------------- 3. i18n integrity */
+/* ------------------------------------------- 3. every table column can actually render something */
+
+/*
+ * `<ElTableColumn :label="…" />` with no `prop`, no `type` and no default slot renders an **empty
+ * cell** — no error, no warning, and both `tsc` and the template compiler are happy with it. It is
+ * the same silent-blank-UI class as an unregistered component, and it is exactly what a table of
+ * import warnings must not do: the user would see the row count and nothing else.
+ */
+let columns = 0
+for (const file of vueFiles) {
+  const source = await readFile(file, 'utf8')
+  const label = relative(appRoot, file)
+  for (const match of source.matchAll(/<ElTableColumn\b([^>]*?)(\/?)>/g)) {
+    const attributes = match[1]
+    const selfClosing = match[2] === '/'
+    columns += 1
+    if (/\b(?:prop|type)=|:(?:prop|type)=/.test(attributes)) continue
+    if (!selfClosing) {
+      const content = source.slice(match.index + match[0].length)
+      const close = content.indexOf('</ElTableColumn>')
+      if (close !== -1 && content.slice(0, close).includes('#default')) continue
+    }
+    const line = source.slice(0, match.index).split('\n').length
+    failures.push(
+      `${label}:${line}: <ElTableColumn> has no prop, no type and no #default slot — it would render an empty column`,
+    )
+  }
+}
+console.log(`table columns with content             : ${columns}`)
+
+/* ------------------------------------------------------------------- 4. i18n integrity */
 
 const zh = (await loadTsModule(join(rendererSrc, 'i18n', 'zh-CN.ts'))).zhCN
 const en = (await loadTsModule(join(rendererSrc, 'i18n', 'en.ts'))).en

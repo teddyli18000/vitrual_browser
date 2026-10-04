@@ -233,6 +233,65 @@ export const en: Messages = {
   'tile.recheck': 'Check again',
   'tile.targets': 'Will arrange: {names}',
 
+  'cookies.export': 'Export cookies',
+  'cookies.export.working': 'Exporting cookies…',
+  'cookies.export.done': 'Exported {n} cookie(s) to {path}',
+  'cookies.export.empty': 'This profile has no cookies yet — {path} is header only.',
+  'cookies.export.failed': 'Cookie export failed: {reason}',
+  'cookies.import': 'Import cookies…',
+  'cookies.import.title': 'Import cookies',
+  'cookies.import.facts': 'Before you import',
+  'cookies.import.fact.format':
+    'The format is Netscape cookies.txt — files exported by curl, wget or yt-dlp work as they are.',
+  'cookies.import.fact.stopped':
+    'The profile must be stopped: the cookie store (cookies.sqlite) is owned by the running browser.',
+  'cookies.import.fact.lossy':
+    'Format limits: SameSite cannot be written (imports land as "unspecified", which Firefox treats as Lax), and container / partitioned cookies cannot be expressed — they are skipped and listed in the result.',
+  'cookies.import.choose': 'Choose a cookies.txt file',
+  'cookies.import.rechoose': 'Choose another file',
+  'cookies.import.noFile': 'No file chosen yet',
+  'cookies.import.pickFirst': 'Choose a cookies.txt file first',
+  'cookies.import.tooLarge': 'The file is larger than {max} and cannot be imported.',
+  'cookies.import.emptyFile': 'The file is empty — there is nothing to import.',
+  'cookies.import.readFailed': 'Could not read the file: {reason}',
+  'cookies.import.mode': 'How to write',
+  'cookies.import.mode.merge': 'Merge (recommended)',
+  'cookies.import.mode.mergeHint':
+    'Updates cookies that already exist (matched on host + name + path) and writes the new ones; every other cookie in the profile is left alone.',
+  'cookies.import.mode.replace': 'Replace',
+  'cookies.import.mode.replaceHint':
+    'Deletes every cookie the profile has first, then writes the file — the profile ends up with exactly these cookies.',
+  'cookies.import.replaceConfirm.title': 'Confirm replace',
+  'cookies.import.replaceConfirm.body':
+    'Replace deletes every cookie "{name}" has first, including sessions that are not in the file, and cannot be undone. Continue?',
+  'cookies.import.replaceConfirm.ok': 'Replace and import',
+  'cookies.import.submit': 'Import',
+  'cookies.import.submitting': 'Importing…',
+  'cookies.import.again': 'Import another file',
+  'cookies.import.done': 'Import finished',
+  'cookies.import.donePartial': 'Import finished, but {n} line(s) were skipped',
+  'cookies.import.next': 'They take effect the next time the profile starts.',
+  'cookies.import.failed': 'Cookie import failed: {reason}',
+  'cookies.import.noStore.title': 'This profile has no cookie store yet',
+  'cookies.import.noStore.body':
+    'The engine creates cookies.sqlite the first time the profile is launched; until then the server refuses an import.',
+  'cookies.result.parsed': 'parsed',
+  'cookies.result.written': 'written',
+  'cookies.result.updated': 'updated',
+  'cookies.result.removed': 'deleted',
+  'cookies.skip.title': 'Skipped lines',
+  'cookies.skip.hint':
+    'These lines were not written into the profile — check that none of them is a cookie you need.',
+  'cookies.skip.line': 'Line',
+  'cookies.skip.detail': 'Content',
+  'cookies.skip.reason': 'Reason',
+  'cookies.skip.unknownLine': '—',
+  'cookies.running.title': 'The profile is running',
+  'cookies.running.body':
+    '"{name}" is running, so the browser owns the cookie store; both import and export are refused.',
+  'cookies.running.stop': 'Stop the profile',
+  'cookies.running.blocked': 'The profile is running — stop it first',
+
   'error.kernelMissing':
     'The engine is not installed, so profiles cannot start. Download it in Settings (about 550 MB).',
   'error.goSettings': 'Open settings',

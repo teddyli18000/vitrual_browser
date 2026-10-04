@@ -3,8 +3,10 @@ import type { OsTarget, Profile } from '@vfox/shared'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { errorMessage } from '../api/http'
+import { exportCookies } from '../api/endpoints'
+import { ApiError, errorMessage } from '../api/http'
 import BatchCreateDialog from '../components/BatchCreateDialog.vue'
+import CookieDialog from '../components/CookieDialog.vue'
 import ProfileDetail from '../components/ProfileDetail.vue'
 import ProfileDialog from '../components/ProfileDialog.vue'
 import StatusDot from '../components/StatusDot.vue'
@@ -14,6 +16,8 @@ import { useKernelStore } from '../stores/kernel'
 import { usePrefsStore } from '../stores/prefs'
 import { useProfilesStore } from '../stores/profiles'
 import { useRuntimeStore } from '../stores/runtime'
+import { countCookies } from '../utils/cookies'
+import { saveTextFile } from '../utils/download'
 import { formatRelative, proxyLabel } from '../utils/format'
 
 const store = useProfilesStore()
@@ -30,6 +34,8 @@ const currentRow = ref<Profile | null>(null)
 const dialogOpen = ref(false)
 const batchOpen = ref(false)
 const editing = ref<Profile | null>(null)
+const cookieOpen = ref(false)
+const cookieProfile = ref<Profile | null>(null)
 const searchInput = ref<{ focus: () => void } | null>(null)
 
 const OS_KEY: Record<OsTarget, MessageKey> = {
@@ -171,6 +177,70 @@ async function importOne(): Promise<void> {
     if (profile) ElMessage.success(t('profiles.import.done', { name: profile.name }))
   } catch (err) {
     ElMessage.error(t('error.importFailed', { reason: errorMessage(err) }))
+  } finally {
+    hide.close()
+  }
+}
+
+/* ---------------------------------------------------------------------- cookies */
+
+function openCookies(profile: Profile): void {
+  cookieProfile.value = profile
+  cookieOpen.value = true
+}
+
+/**
+ * Both cookie routes answer 409 while the profile runs, and a running profile is the common case.
+ * So the stop happens here, behind one confirmation that says why — a red toast would leave the
+ * user to work out the next step themselves.
+ */
+async function ensureStoppedForCookies(profile: Profile): Promise<boolean> {
+  if (!runtime.isActive(profile.id)) return true
+  try {
+    await ElMessageBox.confirm(
+      t('cookies.running.body', { name: profile.name }),
+      t('cookies.running.title'),
+      {
+        confirmButtonText: t('cookies.running.stop'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning',
+      },
+    )
+  } catch {
+    return false
+  }
+  try {
+    await store.stop(profile.id)
+    ElMessage.success(t('profiles.stopped', { name: profile.name }))
+    return true
+  } catch (err) {
+    ElMessage.error(t('error.stopFailed', { name: profile.name, reason: errorMessage(err) }))
+    return false
+  }
+}
+
+/**
+ * Export is fetch-then-save: the server owns the filename (it sends a `Content-Disposition`), and
+ * the count comes from the file itself, so "0 cookies" is reported instead of a silent empty save.
+ * Cancelling the save dialog is a normal outcome and produces no message at all.
+ */
+async function exportCookiesOne(profile: Profile): Promise<void> {
+  if (!(await ensureStoppedForCookies(profile))) return
+  const hide = ElMessage.info({ message: t('cookies.export.working'), duration: 0 })
+  try {
+    const file = await exportCookies(profile.id)
+    const path = await saveTextFile(file.filename ?? `${profile.name}.cookies.txt`, file.text)
+    if (!path) return
+    const count = countCookies(file.text)
+    if (count > 0) ElMessage.success(t('cookies.export.done', { n: count, path }))
+    else ElMessage.warning(t('cookies.export.empty', { path }))
+  } catch (err) {
+    // A 409 here means the profile started between the check and the call; name the next step.
+    if (err instanceof ApiError && err.code === 'conflict') {
+      ElMessage.error(t('cookies.running.blocked'))
+    } else {
+      ElMessage.error(t('cookies.export.failed', { reason: errorMessage(err) }))
+    }
   } finally {
     hide.close()
   }
@@ -462,6 +532,10 @@ onUnmounted(() => {
                 <ElDropdownMenu>
                   <ElDropdownItem @click="cloneOne(row)">{{ t('profiles.action.clone') }}</ElDropdownItem>
                   <ElDropdownItem @click="exportOne(row)">{{ t('profiles.action.export') }}</ElDropdownItem>
+                  <ElDropdownItem divided @click="exportCookiesOne(row)">
+                    {{ t('cookies.export') }}
+                  </ElDropdownItem>
+                  <ElDropdownItem @click="openCookies(row)">{{ t('cookies.import') }}</ElDropdownItem>
                   <ElDropdownItem divided @click="removeOne(row)">
                     {{ t('profiles.action.delete') }}
                   </ElDropdownItem>
@@ -491,6 +565,7 @@ onUnmounted(() => {
 
     <ProfileDialog v-model="dialogOpen" :profile="editing" :groups="store.groups" />
     <BatchCreateDialog v-model="batchOpen" :groups="store.groups" />
+    <CookieDialog v-model="cookieOpen" :profile="cookieProfile" />
   </section>
 </template>
 
