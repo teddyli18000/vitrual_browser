@@ -403,6 +403,12 @@ jobs:
       # Fails on the structural guard (WebGL database unpacked) before it ever starts Electron, then
       # installs the kernel through the app, creates three profiles, launches all three and asserts
       # each one loads a real page. It downloads ~490 MB and extracts ~1 GB, so it is slow on purpose.
+      # A guard that has only ever been green has not been shown to test anything. This asserts both
+      # structural guards still FAIL when they should, and still stay green on the legitimate test
+      # files that production dependencies ship. It runs before the slow job so a broken guard is
+      # reported in seconds rather than after a 490 MB download.
+      - name: Prove the structural guards can fail
+        run: node apps/desktop/e2e/artifact.selftest.mjs
       - name: Run the packaged end-to-end test
         run: node apps/desktop/e2e/packaged-e2e.mjs --app release/win-unpacked
 
