@@ -6,7 +6,8 @@ import type { Profile } from '@vfox/shared'
 import { CookieImportResultSchema, FingerprintSchema, ProfileBatchCreateSchema } from '@vfox/shared'
 import { importProfileZip, writeProfileZip } from './archive.js'
 import { cookieDbPath, readJar, writeJar } from './cookies.js'
-import { createIdentity, identityInputs, identityIsCurrent } from './identity.js'
+import { createIdentity, identityInputs, identityIsCurrent, webglPairKey } from './identity.js'
+
 import type {
   CookiesApi,
   Core,
@@ -34,6 +35,25 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
   const logger = combineLoggers(createFileLogger(dataDir), options.logger)
 
   const store = new Store(dataDir, logger)
+
+  /**
+   * The WebGL pairs the stored profiles already report.
+   *
+   * `createIdentity` draws from a table of 32 pairs with a weighted draw in which one NVIDIA row is
+   * 45%, so without this two profiles are handed the same GPU often enough to matter — see the
+   * comment on `pinWebgl`. Reading the store is cheap and it is the only place that knows what has
+   * already been given out.
+   */
+  async function takenWebglPairs(): Promise<Set<string>> {
+    const taken = new Set<string>()
+    for (const profile of await store.listProfiles()) {
+      const webgl = profile.fingerprint.webgl
+      if (webgl) {
+        taken.add(webglPairKey(webgl))
+      }
+    }
+    return taken
+  }
   await store.load()
 
   // Engine processes from a previous run still hold their profile's parent.lock, which would make
@@ -79,7 +99,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
           `regenerating the device identity of profile ${id} against the new engine`,
       )
     }
-    const created = await createIdentity(profile.fingerprint, engine)
+    const created = await createIdentity(profile.fingerprint, engine, await takenWebglPairs())
     logger.info(`profile ${id}: generated a device identity (engine ${engine ?? 'unknown'})`)
     return store.applyIdentity(id, created.identity, {
       config: created.config,
@@ -93,7 +113,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     async create(input) {
       const profile = await store.createProfile(input)
       const engine = (await kernelManager.info()).version
-      const created = await createIdentity(profile.fingerprint, engine)
+      const created = await createIdentity(profile.fingerprint, engine, await takenWebglPairs())
       logger.info(`profile ${profile.id}: created with a generated device identity`)
       return store.applyIdentity(profile.id, created.identity, {
         config: created.config,
@@ -107,9 +127,16 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
       // browserforge's generator once per profile, so twenty profiles on the same platform and proxy
       // are twenty different machines rather than twenty copies of one.
       const fingerprint = FingerprintSchema.parse(batch.fingerprint ?? {})
+      // One set for the whole batch, added to as it goes. De-duplicating against the store alone
+      // would still let the profiles of this batch collide with each other — which is precisely the
+      // case a user creating twenty accounts hits.
+      const taken = await takenWebglPairs()
       const entries: BatchEntry[] = []
       for (let index = 0; index < batch.count; index += 1) {
-        const created = await createIdentity(fingerprint, engine)
+        const created = await createIdentity(fingerprint, engine, taken)
+        if (created.webgl) {
+          taken.add(webglPairKey(created.webgl))
+        }
         entries.push({
           input: {
             name: `${batch.namePrefix} ${index + 1}`,
