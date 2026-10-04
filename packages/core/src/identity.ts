@@ -64,7 +64,9 @@ export async function createIdentity(
   fingerprint: FingerprintConfig,
   engine: string | null,
 ): Promise<CreatedIdentity> {
-  const { fromBrowserforge, generateFingerprint } = await import(camoufoxModule('dist/fingerprints.js'))
+  const { fromBrowserforge, generateFingerprint } = await import(
+    camoufoxModule('dist/fingerprints.js')
+  )
 
   // Mirrors what `launchOptions()` does when it is not given a fingerprint (dist/utils.js:400-406):
   // same generator, same inputs, so a stored identity is exactly what a fresh launch would produce.
