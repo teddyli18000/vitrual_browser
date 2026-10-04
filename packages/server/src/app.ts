@@ -100,6 +100,35 @@ export async function createApp(options: CreateAppOptions): Promise<AppContext> 
     })
   }
 
+  // A write with NO body is legitimate — `POST /kernel/install`, `POST /profiles/:id/launch` and
+  // `POST /profiles/:id/stop` are actions, not documents. Fastify's built-in JSON parser rejects
+  // that combination outright:
+  //
+  //     Body cannot be empty when content-type is set to 'application/json'
+  //
+  // which is exactly what broke the GUI's 一键安装 button on first run: every profile and kernel
+  // action was unreachable, and first run could never install the engine. Treating an empty payload
+  // as `{}` fixes it for every client at once — the GUI, the CLI and a hand-written curl — rather
+  // than relying on each caller to omit the header. A route that genuinely requires fields still
+  // fails, with a schema error that names them instead of a parser error that names nothing.
+  app.removeContentTypeParser('application/json')
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_request, body, done) => {
+    const text = typeof body === 'string' ? body.trim() : ''
+    if (text === '') {
+      done(null, {})
+      return
+    }
+    try {
+      done(null, JSON.parse(text))
+    } catch (error) {
+      // Fastify's built-in parser tags a malformed body as 400; a plain Error would surface as a
+      // 500 through our error handler, which would tell the caller nothing useful.
+      const malformed = error as Error & { statusCode?: number }
+      malformed.statusCode = 400
+      done(malformed, undefined)
+    }
+  })
+
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof HttpError) {
       if (error.statusCode >= 500) {

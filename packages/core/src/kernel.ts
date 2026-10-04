@@ -60,7 +60,7 @@ export class KernelManager {
   }
 
   async info(): Promise<KernelInfo> {
-    const dir = await installDir()
+    const dir = await resolveEngineDir()
     if (!(await exists(path.join(dir, LAUNCH_FILE)))) {
       return { installed: false, version: null, path: null, source: 'missing' }
     }
@@ -98,7 +98,7 @@ export class KernelManager {
   async #runInstall(): Promise<KernelInfo> {
     // A user-supplied engine directory is honoured, but it is validated first: pointing VFox at a
     // folder that holds something else must not silently fill it with a 1 GB browser.
-    const dir = await installDir()
+    const dir = await resolveEngineDir()
     if (await looksLikeSomethingElse(dir)) {
       this.#options.logger.warn(
         `the configured engine directory ${dir} exists but contains no ${LAUNCH_FILE}; ` +
@@ -257,7 +257,7 @@ async function contentLength(url: string): Promise<number | null> {
   }
 }
 
-async function installDir(): Promise<string> {
+export async function resolveEngineDir(): Promise<string> {
   // `CAMOUFOX_INSTALL_DIR` is the documented switch (see `applyKernelDir`) and is read on every
   // call rather than once: camoufox-js freezes its own copy at import time, and a caller that
   // redirects the engine directory after that import must still be honoured.

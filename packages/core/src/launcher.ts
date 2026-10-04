@@ -43,7 +43,9 @@ import { spawnSync } from 'node:child_process'
 import type { Profile } from '@vfox/shared'
 import type { LaunchOptions } from 'camoufox-js'
 import { firefox } from 'playwright-core'
+import { acceptedKeys, dropUnacceptedKeys, withUnknownKeyTolerance } from './engine-config.js'
 import { type FingerprintWarning, toEngineOptions } from './fingerprint.js'
+import { resolveEngineDir } from './kernel.js'
 
 export interface BrowserExit {
   exitCode: number | null
@@ -88,15 +90,36 @@ export async function toServerOptions(
   const { launchOptions } = await import('camoufox-js')
   const engine = toEngineOptions(profile.fingerprint, profile.proxy, warn)
 
-  const options = (await launchOptions({
-    ...engine,
-    // The profile's stored device identity, re-injected verbatim. Without it the engine generates a
-    // brand new device on every launch (see src/identity.ts), which is the one thing this product
-    // must never do. `identity.fingerprint` is an open record in the shared schema because it is
-    // whatever the engine's generator produced, hence the cast back to the engine's own type.
-    fingerprint: profile.identity?.fingerprint as LaunchOptions['fingerprint'],
-    headless: profile.launch.headless,
-  })) as ServerOptions
+  // Layer 1: never hand the engine a config key it does not accept. The engine's own
+  // `properties.json` is the authority, and this covers both our pinned identity values and the
+  // user's raw `fingerprint.config` escape hatch. Unreadable schema → launch as-is.
+  const { config } = dropUnacceptedKeys(
+    engine.config,
+    await acceptedKeys(await resolveEngineDir()),
+    warn,
+  )
+
+  // Layer 2: `canvas:aaOffset`, `canvas:aaCapOffset` and `window.history.length` are merged by
+  // camoufox-js itself (`dist/utils.js:424-433`, `:531-534`), so no config we pass can prevent them
+  // from reaching its validator. Retry with each rejected key suppressed, and warn by name.
+  //
+  // Every attempt gets a FRESH copy of the config: a failed attempt has already had the rejected key
+  // written into the object it was given as an own enumerable property, and reusing that object would
+  // carry the key straight past the suppression into the next attempt's validator.
+  const options = (await withUnknownKeyTolerance(
+    async () =>
+      (await launchOptions({
+        ...engine,
+        config: { ...config },
+        // The profile's stored device identity, re-injected verbatim. Without it the engine
+        // generates a brand new device on every launch (see src/identity.ts), which is the one thing
+        // this product must never do. `identity.fingerprint` is an open record in the shared schema
+        // because it is whatever the engine's generator produced, hence the cast.
+        fingerprint: profile.identity?.fingerprint as LaunchOptions['fingerprint'],
+        headless: profile.launch.headless,
+      })) as ServerOptions,
+    warn,
+  )) as ServerOptions
 
   // 1. Proxy. camoufox-js rebuilds the proxy as `{ server: new URL(server).origin, ... }`
   //    (dist/utils.js:310-334 and :563-568). Per the WHATWG URL spec `origin` is the literal

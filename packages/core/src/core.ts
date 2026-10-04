@@ -59,6 +59,15 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     if (identityIsCurrent(profile, engine)) {
       return profile
     }
+    if (profile.identity) {
+      // One clear line so an engine swap is diagnosable from the log alone: which version moved, and
+      // that this profile's device identity was re-rolled because of it. Any config key the new
+      // engine no longer accepts is named separately by the launcher when the profile launches.
+      logger.warn(
+        `engine changed ${profile.identity.engine ?? '(unknown)'} -> ${engine ?? '(unknown)'}; ` +
+          `regenerating the device identity of profile ${id} against the new engine`,
+      )
+    }
     const created = await createIdentity(profile.fingerprint, engine)
     logger.info(`profile ${id}: generated a device identity (engine ${engine ?? 'unknown'})`)
     return store.applyIdentity(id, created.identity, {
