@@ -70,7 +70,7 @@ if (rootVersion !== desktopVersion) {
 if (rootVersion !== cliVersion) {
   fail(
     `package.json is ${rootVersion} but packages/cli/package.json is ${cliVersion}.\n` +
-      '  They must be bumped together — `vfox --version` and the CLI help header print the CLI\'s\n' +
+      "  They must be bumped together — `vfox --version` and the CLI help header print the CLI's\n" +
       '  own package version, so a stale one tells the user a version that was never released.',
   )
 }
