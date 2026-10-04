@@ -639,7 +639,7 @@ if (after) {
 }
 executed.push('stopping every profile and asserting no engine process is orphaned')
 
-await app.close()
+app.kill()
 if (!keepData) {
   rmSync(dataDir, { recursive: true, force: true })
   rmSync(engineDir, { recursive: true, force: true })
