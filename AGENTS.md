@@ -212,6 +212,51 @@ Verified on this machine: Node 24.14, pnpm 10.33, `camoufox-js` 0.12.0,
   and an empty `data/`, and nothing may persist an absolute path that would break after the folder is
   moved.
 
+## Review process — non-negotiable
+
+The owner's rule, and the reason it exists: **every change is reviewed by someone other than its
+author, and every technical proposal is reviewed before it is implemented.** This is what a
+professional shop does, and skipping it is how a defect reached a user.
+
+### 1. Every pull request gets an independent review
+
+Before a PR is merged, an agent that did **not** write it reviews it and reports:
+
+- **what it verified**, with the command and its raw output;
+- **what it did not verify**, named explicitly — "reviewed and clean" must be distinguishable from
+  "not reviewed";
+- **what it believes is still wrong**, ranked by how likely a user is to hit it.
+
+A review that only agrees is not a review. The reviewer's job is to find the third bug, not to
+confirm the first two are fixed.
+
+### 2. Technical proposals are reviewed before implementation
+
+A design that has not been challenged is a guess with a plan attached. For anything non-trivial —
+a new subsystem, a contract change, a change to how state is stored, a new dependency, a change to
+the release or packaging model — write the proposal down (an issue is fine: the options, the
+trade-offs, the recommendation, and what would falsify it) and have it reviewed **before** the code
+exists. Cheap to change on paper; expensive to change in a shipped installer.
+
+### 3. A test that has never failed has not been shown to test anything
+
+When a change adds or relies on a test, prove the test **can** fail: reintroduce the defect, watch it
+go red, and show the message names the cause. A guard that is always green is worse than no guard,
+because it is believed. `apps/desktop/e2e/lib/artifact.mjs` does this properly — it fails on the real
+shipped v0.2.0 artifact and passes on a synthetic correct layout, so it is known to discriminate.
+
+### 4. Evidence, not confidence
+
+Claims in a PR description must be backed by something the reviewer can re-run. "Should work",
+"probably fine" and "the types check" are not evidence. Where something can only be verified in CI,
+say so in the PR and let CI settle it; where it was verified locally, paste the output.
+
+### 5. The Lead owns git, and verifies before merging
+
+Teammates edit files and report; the Lead creates branches, pushes, opens PRs, and merges only after
+CI is green on the same commit. The Lead independently re-runs the relevant gate before merging
+rather than trusting a summary — a summary is a claim, and claims are what reviews are for.
+
 ## License
 
 MIT for this repository's own code. Camoufox (MPL-2.0) and camoufox-js (MPL-2.0) are consumed as
