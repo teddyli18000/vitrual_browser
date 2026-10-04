@@ -8,6 +8,7 @@
 
 import type { Core, CoreLogger } from '@vfox/core'
 import { API_PREFIX, API_TOKEN_HEADER, DEFAULT_API_HOST, DEFAULT_API_PORT, ENV } from '@vfox/shared'
+import type { SyncHandle } from '@vfox/sync'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import Fastify from 'fastify'
 import { answerPreflight, applyCors, assertOriginAllowed, isAllowedHost } from './cors.js'
@@ -28,6 +29,11 @@ export { MAX_IMPORT_BYTES } from './routes/profiles.js'
 export interface CreateAppOptions {
   core: Core
   token: string
+  /**
+   * The window synchroniser the sync routes drive. `startServer` constructs the real one; the
+   * tests inject a fake handle so no route ever needs a browser.
+   */
+  sync: SyncHandle
   logger?: CoreLogger
   /** SSE keepalive interval in ms; 0 disables it. */
   heartbeatMs?: number
@@ -37,11 +43,12 @@ export async function createApp(options: CreateAppOptions): Promise<AppContext> 
   const logger = options.logger ?? silentLogger
   const core = options.core
   const token = options.token
+  const sync = options.sync
 
   // No request logging: this is a local loopback API, and the product ships no telemetry.
   const app = Fastify({ logger: false })
 
-  const hub = new EventHub({ core, logger, heartbeatMs: options.heartbeatMs })
+  const hub = new EventHub({ core, sync, logger, heartbeatMs: options.heartbeatMs })
   hub.start()
 
   // 1. Loopback `Host` allowlist. This — not CORS — is the DNS-rebinding defence: an attacker's
@@ -156,7 +163,7 @@ export async function createApp(options: CreateAppOptions): Promise<AppContext> 
     )
   })
 
-  registerRoutes(app, { core, hub, logger })
+  registerRoutes(app, { core, sync, hub, logger })
   registerMcpRoute(app, core, logger)
 
   await app.ready()
@@ -189,8 +196,11 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   )
   const { token, generated, source } = await resolveToken({ dataDir, token: options.token })
   const core = options.core ?? (await loadCore(dataDir, logger))
+  // Exactly one synchroniser for the whole process: it owns the master/slave links and the session
+  // state, so a second instance would fight this one for the same windows.
+  const sync = await loadSync(core, logger)
 
-  let context = await createApp({ core, token, logger })
+  let context = await createApp({ core, token, sync, logger })
 
   const envPort = envApiPort()
   const explicitPort = options.port !== undefined || envPort !== undefined
@@ -203,6 +213,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     if (explicitPort || !isAddrInUse(error)) {
       logger.error(`failed to bind ${host}:${wanted}`, error)
       await context.close()
+      await sync.close()
       await core.close()
       throw error
     }
@@ -210,7 +221,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     // Bind an ephemeral port instead of crashing; the real port is reported in this handle.
     logger.warn(`port ${wanted} is in use — falling back to an ephemeral port`)
     await context.close()
-    context = await createApp({ core, token, logger })
+    context = await createApp({ core, token, sync, logger })
     port = 0
     await context.app.listen({ host, port })
   }
@@ -230,12 +241,39 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     port: actualPort,
     token,
     url,
-    // Frozen contract: the handle owns both the HTTP server and the core.
+    // Frozen contract: the handle owns the HTTP server, the synchroniser and the core. Order
+    // matters — the HTTP server stops first so no new sync request can arrive, then the
+    // synchroniser detaches from the browsers, and only then does the core stop them.
     close: async () => {
       await context.close()
+      await sync.close()
       await core.close()
     },
   }
+}
+
+/**
+ * Loaded lazily so that embedding or testing this package never pulls the synchroniser (and
+ * Playwright behind it) in: the tests inject a fake handle through `createApp`, and a package that
+ * is installed without `@vfox/sync` built must still be able to import this one.
+ */
+async function loadSync(core: Core, logger: CoreLogger): Promise<SyncHandle> {
+  const { createSync } = await import('@vfox/sync')
+  return createSync({
+    /**
+     * The runtime registry is the only place that knows a profile's live `wsEndpoint` and pid.
+     * `runtime.get()` answers with a synthetic `stopped` runtime for an id the store does not
+     * know, so membership is decided by `runtime.list()` instead: an unknown profile has to
+     * resolve to `undefined` (-> SyncError `unknown_profile`, 404) rather than to "not running"
+     * (409), which is a different failure the user fixes differently.
+     */
+    resolve: profileId => {
+      const runtime = core.runtime.list().find(entry => entry.profileId === profileId)
+      if (!runtime) return undefined
+      return { wsEndpoint: runtime.wsEndpoint, pid: runtime.pid }
+    },
+    logger,
+  })
 }
 
 /**

@@ -14,6 +14,7 @@ import { mcpCommand } from './commands/mcp.js'
 import { cloneCommand, createCommand, listCommand, rmCommand } from './commands/profiles.js'
 import { openCommand, startCommand, stopCommand } from './commands/runtime.js'
 import { serveCommand } from './commands/serve.js'
+import { syncCommand } from './commands/sync.js'
 import { exportCommand, importCommand } from './commands/transfer.js'
 import { CliError } from './core.js'
 import { packageVersion } from './version.js'
@@ -30,6 +31,7 @@ export const COMMANDS: readonly Command[] = [
   exportCommand,
   importCommand,
   kernelCommand,
+  syncCommand,
   mcpCommand,
 ]
 
