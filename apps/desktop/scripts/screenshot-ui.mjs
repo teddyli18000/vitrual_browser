@@ -412,7 +412,10 @@ try {
     .locator('button', { hasText: '更多' })
     .first()
     .click()
-  await page.locator('.el-dropdown-menu__item', { hasText: '导入 Cookie' }).first().click()
+  // Element Plus teleports each row's dropdown to <body>, so every row has one and the first match is
+    // usually a closed menu from another row: the click then waits forever for an element that is
+    // never visible. :visible selects the open one.
+    await page.locator('.el-dropdown-menu__item:visible', { hasText: '导入 Cookie' }).first().click()
   await waitFor(page.getByText('导入前请确认').first(), 'the cookie import dialog', pageWatch, {
     timeoutMs: 15_000,
   })
