@@ -86,9 +86,12 @@ VFox 使用 **Firefox 内核**（Camoufox），这是刻意的选择：Camoufox 
 - **多环境隔离**：每个环境独立的 cookie、localStorage、扩展与缓存目录
 - **一键"自动"**：留空的指纹项由引擎按真实世界分布生成，保证同一环境内部自洽
 - **代理**：HTTP / HTTPS / SOCKS5，逐环境绑定，支持用户名密码
+- **批量建号**：一次创建最多 50 个环境，每个环境独立生成设备身份，可共用分组/代理/启动选项；**全或无**，失败不会留下半个批次
 - **批量操作**：批量启动（错峰拉起，不会瞬间打满 CPU）、批量停止、分组、搜索
 - **虚拟机式管理**：克隆、导出 zip、导入 zip、打开数据目录、查看占用空间
 - **窗口同步器**：主窗口操作一次，同步到所有从窗口；支持窗口平铺
+  > 同步是**页面级**的：鼠标、滚轮、键盘会回放到从窗口的网页内容里。浏览器界面本身
+  > （地址栏、标签页、原生下拉框、文件选择框、权限弹窗）不在同步范围内，同类工具也一样。
 - **本地 API + MCP + CLI**：给脚本和 AI Agent 用的同一套接口，全部免费
 - **轻量**：一个 Electron 窗口 + 一个 Node 核心进程，无后台守护、无轮询
 
@@ -110,7 +113,7 @@ VFox 使用 **Firefox 内核**（Camoufox），这是刻意的选择：Camoufox 
 解压后目录结构如下，**所有数据都在自己的文件夹里**，整个目录可以拷到 U 盘或另一台机器继续用：
 
 ```
-VFox-0.1.0-portable/
+VFox-0.2.0-portable/
 ├─ VFox.exe
 ├─ portable            ← 便携模式标记
 ├─ data/               ← 所有数据：环境、内核、日志、设置
@@ -136,11 +139,13 @@ Windows 10 1809+ / Windows 11，x64。无需预装 Node、Python 或任何运行
 ```bash
 vfox list                     # 环境列表与运行状态
 vfox create "账号A" --os windows --proxy socks5://127.0.0.1:1080
+vfox create --count 20 --prefix 工作号 --group 注册   # 批量建号，上限 50
 vfox start <id|名称>           # 启动并等待窗口就绪
 vfox stop <id|名称>
 vfox clone <id|名称> --name "账号A-2"
 vfox export <id|名称> a.zip
 vfox import a.zip
+vfox sync status | vfox sync start <主控> <受控...> | vfox sync stop | vfox sync tile
 vfox kernel info | vfox kernel install
 vfox serve                    # 仅启动本地 API 服务（默认 127.0.0.1:9000）
 vfox mcp                      # 以 stdio 方式启动 MCP 服务，供 AI Agent 调用
