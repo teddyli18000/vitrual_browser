@@ -8,6 +8,7 @@ import { registerHealthRoutes } from './health.js'
 import { registerKernelRoutes } from './kernel.js'
 import { registerProfileRoutes } from './profiles.js'
 import { registerRuntimeRoutes } from './runtime.js'
+import { registerSyncRoutes } from './sync.js'
 
 /**
  * Registers every route in `API_ROUTES` plus the VirtualBrowser-compatible aliases.
@@ -19,6 +20,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
   registerRuntimeRoutes(app, deps)
   registerGroupRoutes(app, deps)
   registerKernelRoutes(app, deps)
+  registerSyncRoutes(app, deps)
   registerCompatRoutes(app, deps)
   registerEventRoutes(app, deps)
 }

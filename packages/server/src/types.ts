@@ -6,6 +6,7 @@
  */
 
 import type { Core, CoreLogger } from '@vfox/core'
+import type { SyncHandle } from '@vfox/sync'
 import type { FastifyInstance } from 'fastify'
 
 import type { EventHub } from './events.js'
@@ -39,6 +40,12 @@ export interface ServerHandle {
 /** Everything a route needs. Assembled once by `createApp`. */
 export interface RouteDeps {
   core: Core
+  /**
+   * The window synchroniser. Constructed **once** by `startServer` over the core's runtime
+   * registry; injected here so the tests can drive every route with a fake handle and never touch
+   * a browser.
+   */
+  sync: SyncHandle
   /** SSE fan-out. Runtime changes are wired in `EventHub.start()`; routes publish kernel progress. */
   hub: EventHub
   logger: CoreLogger

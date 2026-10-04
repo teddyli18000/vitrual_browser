@@ -2,6 +2,7 @@ import { API_ROUTES, SSE_EVENT_KERNEL, SSE_EVENT_RUNTIME } from '@vfox/shared'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { createHarness, tick } from './helpers/harness.mjs'
+import { openStream } from './helpers/sse.mjs'
 
 let h
 
@@ -12,47 +13,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await h.dispose()
 })
-
-/** Parses `event:`/`data:` pairs out of the raw stream, ignoring `retry:` and `:` comments. */
-function parseFrames(raw) {
-  const frames = []
-  for (const block of raw.split('\n\n')) {
-    const event = block
-      .split('\n')
-      .find(line => line.startsWith('event: '))
-      ?.slice('event: '.length)
-    const data = block
-      .split('\n')
-      .find(line => line.startsWith('data: '))
-      ?.slice('data: '.length)
-    if (event && data !== undefined) frames.push({ event, data: JSON.parse(data) })
-  }
-  return frames
-}
-
-async function openStream() {
-  // `payloadAsStream` resolves as soon as the headers are written, which is what makes an endless
-  // SSE response testable through `fastify.inject()`.
-  const res = await h.app.inject({
-    method: 'GET',
-    url: API_ROUTES.events,
-    headers: h.auth,
-    payloadAsStream: true,
-  })
-  const chunks = []
-  const stream = res.stream()
-  stream.on('data', chunk => chunks.push(chunk.toString('utf8')))
-  const text = () => chunks.join('')
-  return {
-    statusCode: res.statusCode,
-    headers: res.headers,
-    frames: () => parseFrames(text()),
-    text,
-    close: () => {
-      res.raw.res.destroy()
-    },
-  }
-}
 
 async function createProfile(name = 'Streamed') {
   const res = await h.app.inject({
@@ -66,7 +26,7 @@ async function createProfile(name = 'Streamed') {
 
 describe('GET /api/v1/events', () => {
   it('opens an event stream with the right headers', async () => {
-    const stream = await openStream()
+    const stream = await openStream(h)
     expect(stream.statusCode).toBe(200)
     expect(String(stream.headers['content-type'])).toContain('text/event-stream')
     expect(String(stream.headers['cache-control'])).toContain('no-cache')
@@ -80,7 +40,7 @@ describe('GET /api/v1/events', () => {
 
   it('snapshots current runtime state on connect', async () => {
     const profile = await createProfile()
-    const stream = await openStream()
+    const stream = await openStream(h)
     await tick()
 
     const frames = stream.frames()
@@ -92,7 +52,7 @@ describe('GET /api/v1/events', () => {
 
   it('pushes runtime transitions from core events', async () => {
     const profile = await createProfile()
-    const stream = await openStream()
+    const stream = await openStream(h)
     await tick()
 
     h.core.setRuntime(profile.id, {
@@ -114,7 +74,7 @@ describe('GET /api/v1/events', () => {
   })
 
   it('pushes kernel progress from core events', async () => {
-    const stream = await openStream()
+    const stream = await openStream(h)
     await tick()
 
     h.core.installProgress = [
@@ -141,7 +101,7 @@ describe('GET /api/v1/events', () => {
     await h.app.inject({ method: 'POST', url: API_ROUTES.kernelInstall, headers: h.auth })
     await tick()
 
-    const stream = await openStream()
+    const stream = await openStream(h)
     await tick()
     const kernel = stream.frames().filter(frame => frame.event === SSE_EVENT_KERNEL)
     expect(kernel).toHaveLength(1)
@@ -151,8 +111,8 @@ describe('GET /api/v1/events', () => {
 
   it('broadcasts one transition to every connected client', async () => {
     const profile = await createProfile()
-    const first = await openStream()
-    const second = await openStream()
+    const first = await openStream(h)
+    const second = await openStream(h)
     await tick()
 
     h.core.setRuntime(profile.id, { status: 'starting' })
@@ -169,7 +129,7 @@ describe('GET /api/v1/events', () => {
 
   it('stops delivering after the hub is shut down', async () => {
     const profile = await createProfile()
-    const stream = await openStream()
+    const stream = await openStream(h)
     await tick()
     expect(h.context.hub.clientCount).toBe(1)
 
