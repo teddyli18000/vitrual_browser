@@ -34,7 +34,7 @@ export const DEFAULT_START_URL = 'about:blank'
  * `scripts/engine-version.mjs` reads this value straight out of this file, so the CI fetch, the
  * Actions cache key and the in-app installer cannot disagree. There is exactly one place to bump.
  */
-export const ENGINE_VERSION = '152.0.4-beta.31'
+export const ENGINE_VERSION = '152.0.4-beta.30'
 
 /** Camoufox-js peer range; keep in sync with packages/core/package.json. */
 export const SUPPORTED_PLAYWRIGHT_CORE = '<1.61.0'
