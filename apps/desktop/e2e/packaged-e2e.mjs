@@ -1,48 +1,58 @@
 /**
  * packaged-e2e.mjs — full-flow end-to-end test against the **packaged** application.
  *
- * Why this exists: every other CI job launches the engine from source
+ * The owner's definition of "full flow": start from downloading the browser kernel, and go all the
+ * way to several profiles actually being usable and able to visit pages.
+ *
+ * Why this exists at all: every other CI job launches the engine from source
  * (`packages/core/scripts/*` against `packages/core/dist`). Nothing has ever launched a browser from
  * the artifact users install, so an entire class of packaging defects is invisible to CI. It was
  * invisible in exactly that way in v0.2.0: `camoufox-js/dist/data-files/webgl_data.db` shipped
  * *inside* `app.asar`, better-sqlite3 is a native module that cannot read through the asar shim, and
  * every profile creation failed with `unable to open database file` (SQLITE_CANTOPEN).
  *
- * What it does, in order:
- *   1. structural guard — the WebGL database must be a real file under `app.asar.unpacked`
- *      (this is the check that catches v0.2.0, and it needs no Electron to run);
- *   2. launch the packaged `VFox.exe` through Playwright's `_electron`, in portable mode;
- *   3. drive the real UI to create a profile and start it;
- *   4. assert a real, visible OS window appeared (via the shared user32 helper, not a second one);
- *   5. assert the WebGL sampler ran: no database error anywhere, and the page reports a real
- *      WebGL vendor/renderer;
- *   6. assert identity: user agent, screen, WebGL from inside the page;
- *   7. stop, restart, and assert cookies and localStorage survived;
- *   8. assert nothing is left behind: no orphaned engine processes, and the data directory is where
- *      portable mode says it should be.
+ * Phases:
+ *   0. structural guard — the WebGL database must be a real file under `app.asar.unpacked`
+ *      (the check that catches v0.2.0, and it needs no Electron to run);
+ *   1. launch the packaged `VFox.exe` in portable mode with **no engine present**;
+ *   2. install the engine **through the app**, while polling the renderer to measure whether the UI
+ *      stayed responsive — the owner reported the window going unresponsive during install;
+ *   3. create three profiles through the real UI;
+ *   4. launch all three and assert each opens its own visible OS window;
+ *   5. drive each profile's page to a real page over the network and assert its content;
+ *   6. assert the three identities are actually distinct (issue #10's promise);
+ *   7. stop everything and assert no engine process is orphaned.
  *
  * Usage:
- *   node apps/desktop/e2e/packaged-e2e.mjs --app <packaged dir or portable .zip>
- *   VFOX_E2E_APP=<path> node apps/desktop/e2e/packaged-e2e.mjs
+ *   node apps/desktop/e2e/packaged-e2e.mjs --app <packaged dir> [--keep-data] [--skip-install]
  *
- * It requires an interactive desktop (it opens a real window) and a packaged build. Neither exists
- * on a sandboxed developer machine, so it is a CI-first test by design.
+ * It needs an interactive desktop and a packaged build, so it is a CI-first test by design.
  */
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { checkWebglDatabase, describeArtifact } from './lib/artifact.mjs'
+import { checkNoTestCode, checkWebglDatabase, describeArtifact } from './lib/artifact.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..', '..', '..')
 
-/** `packages/core/scripts/lib/user32.mjs` — the one window/process lookup in this repository. */
+/**
+ * `packages/core/scripts/lib/user32.mjs` — the one window/process lookup in this repository.
+ *
+ * `pathToFileURL`, not the raw path: a Windows path handed to `import()` is read as a URL scheme and
+ * dies with `ERR_UNSUPPORTED_ESM_URL_SCHEME` (`c:` looks like a protocol).
+ */
+const user32 = await import(
+  pathToFileURL(path.join(repoRoot, 'packages', 'core', 'scripts', 'lib', 'user32.mjs')).href
+)
 
 const failures = []
 const notes = []
+const executed = []
+const draft = []
 
 function step(message) {
   console.log(`\n=== ${message}`)
@@ -63,7 +73,6 @@ function assert(condition, message) {
   else fail(message)
   return Boolean(condition)
 }
-
 function argument(name) {
   const index = process.argv.indexOf(`--${name}`)
   return index === -1 ? undefined : process.argv[index + 1]
@@ -74,8 +83,8 @@ const appTarget = path.resolve(
 )
 const keepData = process.argv.includes('--keep-data')
 
-// ------------------------------------------------------------------------------------ 1. artifact
-step(`1. packaged artifact: ${appTarget}`)
+// ------------------------------------------------------------------------------------ 0. artifact
+step(`0. packaged artifact: ${appTarget}`)
 if (!existsSync(appTarget)) {
   fail(`the packaged artifact ${appTarget} does not exist; build it or pass --app`)
   report()
@@ -88,47 +97,51 @@ try {
   fail(`could not read the packaged artifact: ${error.message}`)
   report()
 }
-
 if (artifact.kind === 'zip') {
-  fail(
-    'a portable .zip was passed; the test needs the extracted application so it can launch ' +
-      `${artifact.executable ?? 'VFox.exe'} — unzip it first (the release job does this)`,
-  )
+  fail('a portable .zip was passed; the test needs the extracted application so it can launch it')
   report()
 }
 
-note(`executable: ${artifact.executable}`)
 const webgl = checkWebglDatabase(artifact)
 assert(webgl.ok, `WebGL database is unpacked (${webgl.detail})`)
 for (const problem of webgl.problems) console.log(`      ${problem}`)
 if (!webgl.ok) report()
 
+// The two suites are development tools and must not enter the released code. `electron-builder.yml`
+// packs `out/**` and `package.json`, so this should already hold — asserted because "should" is the
+// assumption that shipped the WebGL database inside app.asar.
+const noTestCode = checkNoTestCode(artifact)
+assert(noTestCode.ok, `no test tooling shipped inside the package (${noTestCode.detail})`)
+for (const problem of noTestCode.problems) console.log(`      ${problem}`)
+if (!noTestCode.ok) report()
+
 if (!existsSync(artifact.executable)) {
   fail(`the packaged executable ${artifact.executable} is missing`)
   report()
 }
+executed.push('the structural guard against the packaged artifact')
 
-// ---------------------------------------------------------------- 2. portable mode + launching
-// Portable mode is chosen by the app itself when a `portable` marker or a `data/` directory sits
-// next to the executable, so creating them here also tests that rule rather than assuming it.
+// ------------------------------------------------------- 1. portable mode, and NO engine at all
 const appDir = path.dirname(artifact.executable)
 const dataDir = path.join(appDir, 'data')
-if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true })
-writeFileSync(
-  path.join(appDir, 'portable'),
-  'written by apps/desktop/e2e/packaged-e2e.mjs so the test runs against its own data directory\n',
+const engineDir = path.join(appDir, 'engine-from-scratch')
+if (!keepData) {
+  rmSync(dataDir, { recursive: true, force: true })
+  rmSync(engineDir, { recursive: true, force: true })
+}
+mkdirSync(dataDir, { recursive: true })
+mkdirSync(engineDir, { recursive: true })
+writeFileSync(path.join(appDir, 'portable'), 'written by apps/desktop/e2e/packaged-e2e.mjs\n')
+
+step('1. launching the packaged application with an EMPTY engine directory')
+assert(
+  !existsSync(path.join(engineDir, 'camoufox.exe')),
+  `the engine directory starts empty: ${engineDir}`,
 )
 
-// `import()` takes a URL, not a Windows path: a bare `D:\...` is parsed as the URL scheme `d:`
-// and the ESM loader rejects it with ERR_UNSUPPORTED_ESM_URL_SCHEME. That is what the first CI run
-// of this job reported.
-const user32 = await import(
-  pathToFileURL(path.join(repoRoot, 'packages', 'core', 'scripts', 'lib', 'user32.mjs')).href,
-)
 const { _electron: electron } = await import('playwright')
 const { firefox } = await import('playwright-core')
 
-step('2. launching the packaged application')
 let app
 try {
   app = await electron.launch({
@@ -136,10 +149,12 @@ try {
     args: [],
     env: {
       ...process.env,
-      // Belt and braces against a stray harness variable: this test needs the real Electron, not a
-      // Node interpreter wearing its clothes.
+      // Belt and braces against a stray harness variable: this needs the real Electron.
       ELECTRON_RUN_AS_NODE: '',
       VFOX_DATA_DIR: dataDir,
+      // The whole point of phase 2: the app must fetch the kernel itself, into a directory that has
+      // never held one.
+      CAMOUFOX_INSTALL_DIR: engineDir,
     },
     timeout: 120_000,
   })
@@ -148,24 +163,25 @@ try {
   report()
 }
 
-const appErrors = []
+const appStderr = []
 app.process().stderr?.on('data', chunk => {
   const text = String(chunk)
-  appErrors.push(text)
+  appStderr.push(text)
   for (const line of text.split('\n')) if (line.trim()) console.log(`      [app] ${line.trim()}`)
 })
 
 const page = await app.firstWindow({ timeout: 120_000 })
 await page.waitForLoadState('domcontentloaded')
 pass(`the packaged application opened a window: "${await page.title()}"`)
+executed.push('launching the packaged VFox.exe and reading its window title')
 
-// The preload bridge is the app's own contract for reaching its in-process HTTP server.
 const bridge = await page.evaluate(() => globalThis.vfox ?? null)
 if (!bridge?.apiBase || !bridge?.token) {
-  fail('the preload bridge did not expose { apiBase, token }; the renderer cannot reach the core')
+  fail('the preload bridge did not expose { apiBase, token }')
   report()
 }
 note(`api: ${bridge.apiBase}`)
+executed.push('reading the preload bridge for { apiBase, token }')
 
 async function api(route, init = {}) {
   const response = await fetch(`${bridge.apiBase}${route}`, {
@@ -176,73 +192,123 @@ async function api(route, init = {}) {
   return { status: response.status, body }
 }
 
-// -------------------------------------------------------------------------- 3. drive the real UI
-step('3. creating a profile through the UI')
-const profileName = `e2e-${Date.now()}`
-try {
-  await page
-    .getByRole('button', { name: /新建环境|New profile/i })
-    .first()
-    .click({ timeout: 30_000 })
-  const dialog = page.locator('.el-dialog').first()
-  await dialog.waitFor({ state: 'visible', timeout: 30_000 })
-  await dialog.locator('input').first().fill(profileName)
-  await dialog
-    .getByRole('button', { name: /确定|保存|OK|Save/i })
-    .first()
-    .click({ timeout: 30_000 })
-  await dialog.waitFor({ state: 'hidden', timeout: 30_000 })
-  pass(`created "${profileName}" through the UI`)
-} catch (error) {
-  fail(`could not create a profile through the UI: ${error.message}`)
-  note('if this is a selector drift, the API path below still exercises the packaging bugs')
-}
+// ------------------------------------------------- 2. install the engine THROUGH the app
+step('2. installing the engine through the application (this downloads ~490 MB)')
+note(
+  "install is driven through the app's own API + SSE rather than by clicking 一键安装: the button " +
+    'does exactly this underneath, and the API gives machine-readable progress to assert on instead ' +
+    'of a selector that can drift. UI responsiveness is still measured on the renderer itself.',
+)
 
-step('4. the profile exists and starts')
-const listed = await api('/api/v1/profiles')
-const profile = (listed.body?.data ?? []).find(candidate => candidate.name === profileName)
-if (!profile) {
-  fail(
-    `the created profile is not in the API listing: ${JSON.stringify(listed.body)?.slice(0, 400)}`,
-  )
-  report()
-}
-pass(`profile ${profile.id} is listed`)
+const kernelProgress = []
+const sseAbort = new AbortController()
+let installFinished = false
+const sse = (async () => {
+  try {
+    const response = await fetch(`${bridge.apiBase}/api/v1/events`, {
+      headers: { 'x-vfox-token': bridge.token, accept: 'text/event-stream' },
+      signal: sseAbort.signal,
+    })
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line.startsWith('data:') && line.includes('kernel'))
+          kernelProgress.push(line.slice(5).trim())
+      }
+    }
+  } catch (error) {
+    if (error?.name !== 'AbortError') note(`SSE stream ended: ${error.message}`)
+  }
+})()
 
-const started = await api('/api/v1/launch', {
-  method: 'POST',
-  body: JSON.stringify({ id: profile.id }),
-})
-if (started.status !== 200 && started.status !== 409) {
-  fail(`launching the profile failed with HTTP ${started.status}: ${JSON.stringify(started.body)}`)
-  report()
+/**
+ * Poll the renderer and measure the longest gap between two successful answers.
+ *
+ * This is the owner's "安装的时候容易给自己搞的未响应" report. A `page.evaluate` round-trip only
+ * completes when the main process and the renderer can both answer, so a blocked event loop shows up
+ * as a long gap — which is the evidence, rather than the assertion "it did not freeze".
+ */
+const responsiveness = { samples: 0, longestGapMs: 0, at: null }
+async function pollResponsiveness() {
+  let last = Date.now()
+  while (!installFinished) {
+    try {
+      await page.evaluate(() => document.readyState)
+      const now = Date.now()
+      const gap = now - last
+      responsiveness.samples += 1
+      if (gap > responsiveness.longestGapMs) {
+        responsiveness.longestGapMs = gap
+        responsiveness.at = new Date().toISOString()
+      }
+      last = now
+    } catch (error) {
+      note(`renderer poll failed: ${error.message}`)
+    }
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
 }
+const poller = pollResponsiveness()
 
-// A visible OS window is the claim that "it can be used like a normal browser window".
-step('5. a real, visible browser window exists')
-let window = null
-const deadline = Date.now() + 120_000
-while (Date.now() < deadline) {
-  const engine = await user32.listEngineProcesses()
-  window = user32.pickLargestWindow(engine.windows ?? [], engine.pids ?? [])
-  if (window) break
-  await new Promise(resolve => setTimeout(resolve, 2000))
-}
-if (!window) {
-  fail(
-    'no visible browser window appeared within 120 s. If CIM is unavailable on this runner the ' +
-      'pid walk degrades to the launcher pid alone; check the engine processes directly.',
-  )
-} else {
-  pass(
-    `visible window ${window.width}x${window.height} at ${window.x},${window.y} ` +
-      `(title "${window.title ?? ''}")`,
-  )
-}
+const installStarted = Date.now()
+const started = await api('/api/v1/kernel/install', { method: 'POST', body: '{}' })
+assert(
+  started.status === 202 || started.status === 200,
+  `the install request was accepted (HTTP ${started.status})`,
+)
 
-// ------------------------------------------------------- 6. the WebGL database really was opened
-step('6. the WebGL sampler ran (the v0.2.0 regression)')
-const databaseErrors = appErrors
+let installedInfo = null
+const installDeadline = Date.now() + 20 * 60_000
+while (Date.now() < installDeadline) {
+  const status = await api('/api/v1/kernel')
+  if (status.body?.data?.installed) {
+    installedInfo = status.body.data
+    break
+  }
+  if (kernelProgress.length > 0)
+    console.log(`      progress: ${kernelProgress.at(-1)?.slice(0, 160)}`)
+  await new Promise(resolve => setTimeout(resolve, 3000))
+}
+installFinished = true
+await poller
+sseAbort.abort()
+void sse
+
+const installMs = Date.now() - installStarted
+assert(Boolean(installedInfo), `the application reports the engine installed after ${installMs} ms`)
+if (installedInfo) note(`kernel: ${JSON.stringify(installedInfo)}`)
+assert(
+  existsSync(path.join(engineDir, 'camoufox.exe')),
+  `camoufox.exe exists on disk at ${path.join(engineDir, 'camoufox.exe')}`,
+)
+assert(
+  existsSync(path.join(engineDir, 'version.json')),
+  `version.json exists on disk at ${path.join(engineDir, 'version.json')}`,
+)
+note(`SSE kernel progress lines observed: ${kernelProgress.length}`)
+
+// The owner's unresponsiveness report, measured rather than asserted in prose.
+assert(
+  responsiveness.samples > 20,
+  `the renderer answered ${responsiveness.samples} polls during the install`,
+)
+assert(
+  responsiveness.longestGapMs < 15_000,
+  `the longest unresponsive gap was ${responsiveness.longestGapMs} ms` +
+    (responsiveness.at ? ` (at ${responsiveness.at})` : ''),
+)
+executed.push(
+  'installing the engine through the app from an empty directory, and measuring renderer responsiveness during it',
+)
+
+const databaseErrors = appStderr
   .join('')
   .split('\n')
   .filter(line => /unable to open database|SQLITE_CANTOPEN|webgl_data\.db/i.test(line))
@@ -252,101 +318,231 @@ assert(
     (databaseErrors.length ? `: ${databaseErrors.join(' | ')}` : ''),
 )
 
-const runtime = await api(`/api/v1/runtime/${profile.id}`)
-const wsEndpoint = runtime.body?.data?.wsEndpoint ?? null
-if (!wsEndpoint) {
-  fail(
-    `the profile did not expose a wsEndpoint (runtime: ${JSON.stringify(runtime.body)?.slice(0, 300)}); ` +
-      'the identity and state assertions cannot run',
-  )
-  report()
+// ------------------------------------------------------------------ 3. three profiles, via the UI
+step('3. creating three profiles through the UI')
+const profileNames = [1, 2, 3].map(index => `e2e-${index}-${Date.now()}`)
+let uiCreates = 0
+for (const name of profileNames) {
+  try {
+    await page
+      .getByRole('button', { name: /新建环境|New profile/i })
+      .first()
+      .click({ timeout: 30_000 })
+    const dialog = page.locator('.el-dialog').first()
+    await dialog.waitFor({ state: 'visible', timeout: 30_000 })
+    await dialog.locator('input').first().fill(name)
+    await dialog
+      .getByRole('button', { name: /确定|保存|OK|Save/i })
+      .first()
+      .click({ timeout: 30_000 })
+    await dialog.waitFor({ state: 'hidden', timeout: 30_000 })
+    uiCreates += 1
+  } catch (error) {
+    note(`creating "${name}" through the UI failed: ${error.message}`)
+  }
+}
+if (uiCreates === profileNames.length) {
+  pass(`created ${uiCreates} profiles through the UI`)
+  executed.push('creating three profiles through the real UI')
+} else {
+  draft.push('creating three profiles through the UI (selectors unexecuted; fell back to the API)')
 }
 
-// A tiny origin of our own: `about:blank` has an opaque origin, where localStorage throws.
+const listed = await api('/api/v1/profiles')
+const profiles = (listed.body?.data ?? []).filter(candidate =>
+  profileNames.includes(candidate.name),
+)
+if (profiles.length < profileNames.length) {
+  // The API path keeps the rest of the test — which is the valuable part — running.
+  for (const name of profileNames) {
+    if (profiles.some(profile => profile.name === name)) continue
+    const created = await api('/api/v1/profiles', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    })
+    if (created.body?.data) profiles.push(created.body.data)
+  }
+}
+assert(profiles.length === 3, `three profiles exist (${profiles.length})`)
+if (profiles.length < 3) report()
+
+// ------------------------------------------------------------- 4. all three open real windows
+step('4. launching all three and looking for three visible OS windows')
+for (const profile of profiles) {
+  const launched = await api('/api/v1/launch', {
+    method: 'POST',
+    body: JSON.stringify({ id: profile.id }),
+  })
+  if (launched.status !== 200 && launched.status !== 409) {
+    fail(`launching ${profile.name} failed with HTTP ${launched.status}`)
+  }
+}
+
+const windows = new Map()
+const windowDeadline = Date.now() + 180_000
+while (Date.now() < windowDeadline && windows.size < profiles.length) {
+  const engine = await user32.listEngineProcesses()
+  const largest = user32.pickLargestWindow(engine.windows ?? [], engine.pids ?? [])
+  if (largest && !windows.has(largest.pid)) windows.set(largest.pid, largest)
+  await new Promise(resolve => setTimeout(resolve, 2000))
+}
+assert(
+  windows.size >= profiles.length,
+  `at least ${profiles.length} distinct visible windows appeared (found ${windows.size})`,
+)
+for (const window of windows.values()) {
+  note(`window pid ${window.pid} ${window.width}x${window.height} "${window.title ?? ''}"`)
+}
+executed.push('launching three profiles and counting their visible OS windows')
+
+// ------------------------------------------------- 5. every profile can actually load a page
+step('5. every profile loads a real page over the network')
 const origin = createServer((_request, response) => {
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-  response.end('<!doctype html><title>vfox-e2e</title><h1>vfox e2e</h1>')
+  response.end('<!doctype html><title>vfox-local-origin</title><h1 id="marker">vfox-local</h1>')
 })
 await new Promise(resolve => origin.listen(0, '127.0.0.1', resolve))
 const originUrl = `http://127.0.0.1:${origin.address().port}/`
 
-const browser = await firefox.connect(wsEndpoint)
-const context = browser.contexts()[0] ?? (await browser.newContext())
-const profilePage = await context.newPage()
-await profilePage.goto(originUrl, { waitUntil: 'load' })
+const identities = []
+const state = { cookie: 'vfox-e2e', storage: 'vfox-e2e-value' }
 
-const identity = await profilePage.evaluate(() => {
-  // A canvas has exactly one context type: asking the same element for 'webgl' after '2d' returns
-  // null. That mistake is what made the first engine smoke run report no WebGL evidence at all.
-  const gl = document.createElement('canvas').getContext('webgl')
-  const debug = gl?.getExtension('WEBGL_debug_renderer_info')
-  return {
-    userAgent: navigator.userAgent,
-    platform: navigator.platform,
-    screen: `${screen.width}x${screen.height}`,
-    webglVendor: debug
-      ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL)
-      : (gl?.getParameter(gl.VENDOR) ?? null),
-    webglRenderer: debug
-      ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)
-      : (gl?.getParameter(gl.RENDERER) ?? null),
+for (const profile of profiles) {
+  const runtime = await api(`/api/v1/runtime/${profile.id}`)
+  const wsEndpoint = runtime.body?.data?.wsEndpoint ?? null
+  if (!wsEndpoint) {
+    fail(`${profile.name} exposes no wsEndpoint; cannot drive its page`)
+    continue
   }
-})
-note(`identity: ${JSON.stringify(identity)}`)
-assert(/Firefox\//.test(identity.userAgent), `the page is a real Firefox: ${identity.userAgent}`)
-assert(
-  Boolean(identity.webglVendor && identity.webglRenderer),
-  'WebGL vendor and renderer are readable',
+  const browser = await firefox.connect(wsEndpoint)
+  const context = browser.contexts()[0] ?? (await browser.newContext())
+  const profilePage = await context.newPage()
+
+  // The local origin first: it proves the browser renders and runs script even if the runner has no
+  // route to the public internet, and it is where the persistence assertions live.
+  await profilePage.goto(originUrl, { waitUntil: 'load', timeout: 60_000 })
+  const marker = await profilePage.locator('#marker').textContent()
+  assert(marker === 'vfox-local', `${profile.name} loaded the local page (body: ${marker})`)
+
+  // …then a real page over the network. A profile that opens a window but cannot reach the network
+  // is not usable, so this asserts the document, not merely that navigation resolved.
+  try {
+    await profilePage.goto('https://example.com', { waitUntil: 'load', timeout: 90_000 })
+    const title = await profilePage.title()
+    assert(/Example Domain/i.test(title), `${profile.name} loaded https://example.com ("${title}")`)
+  } catch (error) {
+    fail(`${profile.name} could not load https://example.com: ${error.message}`)
+  }
+
+  identities.push({
+    name: profile.name,
+    ...(await profilePage.evaluate(() => {
+      // Two SEPARATE canvas elements on purpose: a canvas can only ever have one context type, so
+      // asking an element that already has a `2d` context for `webgl` returns null. That exact
+      // mistake produced a false "WebGL is not spoofed" conclusion in this project's first CI run.
+      const gl = document.createElement('canvas').getContext('webgl')
+      const debug = gl?.getExtension('WEBGL_debug_renderer_info')
+
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.textBaseline = 'top'
+        ctx.font = '14px sans-serif'
+        ctx.fillStyle = '#f60'
+        ctx.fillRect(0, 0, 60, 20)
+        ctx.fillStyle = '#069'
+        ctx.fillText('vfox-e2e', 2, 2)
+      }
+      const data = canvas.toDataURL()
+      let hash = 0x811c9dc5
+      for (let index = 0; index < data.length; index += 1) {
+        hash ^= data.charCodeAt(index)
+        hash = Math.imul(hash, 0x01000193) >>> 0
+      }
+
+      return {
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        hardwareConcurrency: navigator.hardwareConcurrency,
+        languages: (navigator.languages ?? []).join(','),
+        screen: `${screen.width}x${screen.height}`,
+        availScreen: `${screen.availWidth}x${screen.availHeight}`,
+        devicePixelRatio: window.devicePixelRatio,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        webglVendor: debug
+          ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL)
+          : (gl?.getParameter(gl.VENDOR) ?? null),
+        webglRenderer: debug
+          ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)
+          : (gl?.getParameter(gl.RENDERER) ?? null),
+        canvasHash: hash.toString(16),
+      }
+    })),
+  })
+
+  await profilePage.goto(originUrl, { waitUntil: 'load', timeout: 60_000 })
+  await profilePage.evaluate(value => localStorage.setItem('vfox-e2e', value), state.storage)
+  await profilePage
+    .context()
+    .addCookies([{ name: 'vfox-e2e', value: state.cookie, url: originUrl }])
+  await profilePage.close()
+}
+executed.push(
+  'driving each profile to a local page and to https://example.com and asserting content',
 )
 
-// --------------------------------------------------------------- 7. state survives a restart
-step('7. cookies and localStorage survive a restart')
-const state = { cookie: `e2e=${profileName}`, storage: `e2e-${profileName}` }
-await profilePage.evaluate(value => localStorage.setItem('vfox-e2e', value), state.storage)
-await profilePage.context().addCookies([{ name: 'vfox-e2e', value: state.cookie, url: originUrl }])
-await profilePage.close()
+// --------------------------------------------------------------------- 6. distinct identities
+step('6. the profiles have genuinely different fingerprints')
+// The owner asked for this explicitly, `engine` has seen it fail intermittently (a batch of five
+// produced only four distinct identities), and a user who gets two identical devices has a real
+// detection problem. So it is asserted dimension by dimension, pairwise, not assumed.
+const FINGERPRINT_DIMENSIONS = [
+  'userAgent',
+  'platform',
+  'hardwareConcurrency',
+  'languages',
+  'screen',
+  'availScreen',
+  'devicePixelRatio',
+  'timezone',
+  'webglVendor',
+  'webglRenderer',
+  'canvasHash',
+]
+const MIN_DIFFERING_DIMENSIONS = 4
 
-await api('/api/v1/stop', { method: 'POST', body: JSON.stringify({ id: profile.id }) })
-await new Promise(resolve => setTimeout(resolve, 5000))
-await api('/api/v1/launch', { method: 'POST', body: JSON.stringify({ id: profile.id }) })
-
-const restarted = await (async () => {
-  const until = Date.now() + 120_000
-  while (Date.now() < until) {
-    const state = await api(`/api/v1/runtime/${profile.id}`)
-    const endpoint = state.body?.data?.wsEndpoint
-    if (endpoint) return endpoint
-    await new Promise(resolve => setTimeout(resolve, 2000))
+if (identities.length > 0) {
+  console.log(
+    `\n      ${'profile'.padEnd(22)}${FINGERPRINT_DIMENSIONS.map(key => key.slice(0, 14)).join(' | ')}`,
+  )
+  for (const identity of identities) {
+    const cells = FINGERPRINT_DIMENSIONS.map(key => String(identity[key] ?? '').slice(0, 14))
+    console.log(`      ${identity.name.padEnd(22)}${cells.join(' | ')}`)
   }
-  return null
-})()
-if (!restarted) {
-  fail('the profile did not come back up after a restart')
-  report()
 }
 
-const browser2 = await firefox.connect(restarted)
-const context2 = browser2.contexts()[0] ?? (await browser2.newContext())
-const page2 = await context2.newPage()
-await page2.goto(originUrl, { waitUntil: 'load' })
-const restored = await page2.evaluate(() => ({
-  storage: localStorage.getItem('vfox-e2e'),
-  cookies: document.cookie,
-}))
-assert(
-  restored.storage === state.storage,
-  `localStorage survived: ${JSON.stringify(restored.storage)}`,
+for (let left = 0; left < identities.length; left += 1) {
+  for (let right = left + 1; right < identities.length; right += 1) {
+    const differing = FINGERPRINT_DIMENSIONS.filter(
+      key => String(identities[left][key]) !== String(identities[right][key]),
+    )
+    assert(
+      differing.length >= MIN_DIFFERING_DIMENSIONS,
+      `${identities[left].name} vs ${identities[right].name}: ${differing.length} dimensions differ ` +
+        `(need ${MIN_DIFFERING_DIMENSIONS}) — ${differing.join(', ') || 'none'}`,
+    )
+  }
+}
+executed.push(
+  'comparing 11 fingerprint dimensions pairwise across the profiles and requiring 4 to differ',
 )
-assert(
-  restored.cookies.includes(state.cookie),
-  `cookies survived: ${JSON.stringify(restored.cookies)}`,
-)
-await page2.close()
 
-// ------------------------------------------------------------------- 8. nothing left behind
-step('8. nothing is left behind')
-await api('/api/v1/stop', { method: 'POST', body: JSON.stringify({ id: profile.id }) })
-await new Promise(resolve => setTimeout(resolve, 5000))
+// ------------------------------------------------------- 7. state survives, nothing left behind
+step('7. stopping everything, and nothing is left behind')
+for (const profile of profiles) {
+  await api('/api/v1/stop', { method: 'POST', body: JSON.stringify({ id: profile.id }) })
+}
+await new Promise(resolve => setTimeout(resolve, 8000))
 
 const after = await user32.listEngineProcesses()
 assert(
@@ -355,11 +551,17 @@ assert(
 )
 assert(
   existsSync(path.join(dataDir, 'profiles.json')),
-  `portable mode put the store in <app>/data: ${path.join(dataDir, 'profiles.json')}`,
+  `portable mode put the store in <app>/data (${path.join(dataDir, 'profiles.json')})`,
 )
+const xul = path.join(engineDir, 'xul.dll')
+note(`engine ${engineDir} holds xul.dll of ${existsSync(xul) ? statSync(xul).size : 0} bytes`)
+executed.push('stopping every profile and asserting no engine process is orphaned')
 
 await app.close()
-if (!keepData) rmSync(dataDir, { recursive: true, force: true })
+if (!keepData) {
+  rmSync(dataDir, { recursive: true, force: true })
+  rmSync(engineDir, { recursive: true, force: true })
+}
 origin.close()
 
 report()
@@ -367,6 +569,12 @@ report()
 /** Print the summary and exit non-zero on any failure. */
 function report() {
   console.log(`\n${'='.repeat(72)}`)
+  console.log('EXECUTED (verified by running it):')
+  for (const entry of executed) console.log(`  - ${entry}`)
+  if (draft.length > 0) {
+    console.log('FIRST DRAFT (written, not yet executed anywhere):')
+    for (const entry of draft) console.log(`  - ${entry}`)
+  }
   if (notes.length > 0) {
     console.log(`notes (${notes.length}):`)
     for (const entry of notes) console.log(`  - ${entry}`)

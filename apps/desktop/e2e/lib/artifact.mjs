@@ -259,3 +259,59 @@ export function checkWebglDatabase(artifact) {
     problems,
   }
 }
+
+/**
+ * Paths that must never ship inside the packaged application.
+ *
+ * The two end-to-end suites are development tools; the owner was explicit that neither may enter the
+ * released code. `electron-builder.yml` packs `out/**` and `package.json`, so `apps/desktop/e2e/**`
+ * *should* be excluded — but "should be" is the assumption that shipped the last bug, so it is
+ * asserted here instead.
+ *
+ * Scoping is deliberate: our own paths are matched exactly, while the generic `e2e/` directory and
+ * `*.test.*` / `*.spec.*` patterns are applied only outside `node_modules`. Production dependencies
+ * legitimately contain test files, and a guard that fails on those would be switched off within a
+ * week — which would be worse than not having it.
+ */
+const FORBIDDEN_OWN_PATHS = [
+  { pattern: /(^|\/)apps\/desktop\/e2e\//, why: 'the packaged end-to-end suite directory' },
+  { pattern: /(^|\/)packaged-e2e\.mjs$/, why: 'the packaged end-to-end assertion suite' },
+  { pattern: /(^|\/)collect-evidence\.mjs$/, why: 'the evidence collector' },
+  { pattern: /e2e\/lib\/artifact\.mjs$/, why: "the suite's structural guard" },
+]
+const FORBIDDEN_OUTSIDE_DEPENDENCIES = [
+  { pattern: /(^|\/)e2e\//, why: 'an end-to-end directory' },
+  { pattern: /\.test\.[cm]?js$/, why: 'a test file' },
+  { pattern: /\.spec\.[cm]?js$/, why: 'a test file' },
+]
+
+/**
+ * Assert that no development tooling was packed into the release.
+ *
+ * @param {ReturnType<typeof describeArtifact>} artifact
+ * @returns {{ ok: boolean, detail: string, problems: string[] }}
+ */
+export function checkNoTestCode(artifact) {
+  const packaged = [...asarPaths(artifact.asarHeader), ...artifact.unpackedEntries]
+  const problems = []
+
+  for (const entry of packaged) {
+    const rules = entry.includes('node_modules/')
+      ? FORBIDDEN_OWN_PATHS
+      : [...FORBIDDEN_OWN_PATHS, ...FORBIDDEN_OUTSIDE_DEPENDENCIES]
+    for (const { pattern, why } of rules) {
+      if (!pattern.test(entry)) continue
+      problems.push(
+        `${entry} is ${why} and must not be inside the package. Narrow the \`files:\` glob in ` +
+          'apps/desktop/electron-builder.yml so development tooling stays out of the release.',
+      )
+      break
+    }
+  }
+
+  return {
+    ok: problems.length === 0,
+    detail: `${packaged.length} packaged paths scanned for test tooling`,
+    problems,
+  }
+}

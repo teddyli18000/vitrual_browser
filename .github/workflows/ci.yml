@@ -389,31 +389,11 @@ jobs:
       - name: Set up Node.js and pnpm
         uses: ./.github/actions/setup
 
-      # Same cache key as e2e-engine and e2e-window: the packaged app launches a real browser, so it
-      # needs the engine, and it must not download another 550 MB to get it.
-      - name: Resolve the Camoufox engine version
-        id: engine
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          $version = (node scripts/kernel-version.mjs).Trim()
-          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
-            throw 'Could not resolve the Camoufox engine version.'
-          }
-          "version=$version" >> $env:GITHUB_OUTPUT
-          Write-Host "Camoufox engine version: $version"
-
-      - name: Restore the Camoufox engine
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: .cache/camoufox
-          key: camoufox-${{ runner.os }}-${{ steps.engine.outputs.version }}
-
-      - name: Fetch the Camoufox engine
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/fetch-kernel.mjs
+      # Deliberately NO engine cache and NO `fetch-kernel.mjs` here, unlike e2e-engine and e2e-window.
+      # The test points the app at an empty directory and makes it download the kernel itself, because
+      # that first-run install is where two separate crashes have already shipped: the stream drain
+      # crash at 100%, and a rate-limited GeoIP lookup that failed the whole install. Caching the
+      # engine here would hide exactly the path this job exists to exercise.
 
       # Builds packages, the renderer, the NSIS installer and the portable zip, and leaves the
       # packaged application at release/win-unpacked — which is exactly what the test launches.
@@ -421,11 +401,9 @@ jobs:
         run: node scripts/build-installer.mjs
 
       # Fails on the structural guard (WebGL database unpacked) before it ever starts Electron, then
-      # launches the packaged VFox.exe, drives the real UI, and asserts a real browser window, real
-      # identity, and cookies + localStorage surviving a restart.
+      # installs the kernel through the app, creates three profiles, launches all three and asserts
+      # each one loads a real page. It downloads ~490 MB and extracts ~1 GB, so it is slow on purpose.
       - name: Run the packaged end-to-end test
-        env:
-          CAMOUFOX_INSTALL_DIR: ${{ github.workspace }}/.cache/camoufox
         run: node apps/desktop/e2e/packaged-e2e.mjs --app release/win-unpacked
 
       # When it fails, the first question is always "what actually got packed?" — answer it in the log
