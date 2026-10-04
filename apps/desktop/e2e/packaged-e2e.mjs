@@ -413,9 +413,12 @@ if (profiles.length < 3) report()
 // ------------------------------------------------------------- 4. all three open real windows
 step('4. launching all three and looking for three visible OS windows')
 for (const profile of profiles) {
-  const launched = await api('/api/v1/launch', {
+  // The per-profile routes, which is what the frozen contract actually declares. `/api/v1/launch`
+  // does not exist — the compatibility aliases are `launchBrowser` and `closeBrowser` — and asking
+  // for it returned 404, which the gate reported as "launching … failed with HTTP 404".
+  const launched = await api(`/api/v1/profiles/${profile.id}/launch`, {
     method: 'POST',
-    body: JSON.stringify({ id: profile.id }),
+    body: '{}',
   })
   if (launched.status !== 200 && launched.status !== 409) {
     fail(`launching ${profile.name} failed with HTTP ${launched.status}`)
@@ -584,7 +587,7 @@ executed.push(
 // ------------------------------------------------------- 7. state survives, nothing left behind
 step('7. stopping everything, and nothing is left behind')
 for (const profile of profiles) {
-  await api('/api/v1/stop', { method: 'POST', body: JSON.stringify({ id: profile.id }) })
+  await api(`/api/v1/profiles/${profile.id}/stop`, { method: 'POST', body: '{}' })
 }
 await new Promise(resolve => setTimeout(resolve, 8000))
 
