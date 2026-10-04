@@ -14,6 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { Writable } from 'node:stream'
 import type { KernelInfo, KernelPhase, KernelProgress } from '@vfox/shared'
+import { ENGINE_VERSION } from '@vfox/shared'
 import type { CamoufoxFetcher } from 'camoufox-js/dist/pkgman.js'
 import type { CoreLogger } from './index.js'
 
@@ -157,8 +158,32 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
   const { downloadMMDB } = await import('camoufox-js/dist/locale.js')
 
   const target = pkgman.INSTALL_DIR.toString()
-  const fetcher = new pkgman.CamoufoxFetcher()
+
+  // The engine is PINNED, not "newest". `camoufox fetch` always takes the latest release in range,
+  // which is how 156.0.1-beta.34 arrived and broke launching: it dropped every `canvas:*` config key
+  // (82 properties, none of them canvas), so a profile's canvas hash changed between launches and
+  // the stored identity could no longer be reproduced. Newest is not best for a fingerprint browser.
+  // `checkAsset` is camoufox-js's own extension point — it is handed each release asset and returns
+  // the one to use — so overriding it keeps the download, extraction and version bookkeeping inside
+  // the library and only changes *which* release we ask for.
+  class PinnedFetcher extends pkgman.CamoufoxFetcher {
+    override checkAsset(asset: unknown) {
+      const found = super.checkAsset(asset)
+      if (!found) return null
+      const [version] = found
+      return version.fullString === ENGINE_VERSION ? found : null
+    }
+  }
+
+  const fetcher = new PinnedFetcher()
   await fetcher.init()
+
+  if (fetcher.verstr !== ENGINE_VERSION) {
+    throw new Error(
+      `the engine registry resolved ${fetcher.verstr} but VFox pins ${ENGINE_VERSION}; ` +
+        'refusing to install an engine this build was not tested against',
+    )
+  }
 
   let current: string | null = null
   try {

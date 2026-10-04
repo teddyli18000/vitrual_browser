@@ -1,99 +1,123 @@
 #!/usr/bin/env node
 /**
- * fetch-kernel.mjs — download (or verify) the Camoufox engine used by VFox.
+ * fetch-kernel.mjs — install the PINNED Camoufox engine used by VFox.
  *
- * This is the wrapper CI uses instead of a bare `camoufox-js fetch`, because it:
- *   1. pins `CAMOUFOX_INSTALL_DIR` into the repo-local `.cache/camoufox` when the caller
- *      did not set it, so `actions/cache` and `scripts/kernel-path.mjs` agree on one path;
- *   2. retries the whole fetch once (camoufox-js already retries each HTTP request 5x, but
- *      a dropped connection mid-download still aborts the run);
- *   3. re-reads `version.json` afterwards and prints the resolved engine version, and
- *      fails loudly if the engine is not actually launchable.
+ * Why this is not a bare `camoufox-js fetch`:
  *
- * `stdio: 'inherit'` is deliberate: it keeps camoufox-js's progress bar live in the CI log
- * and avoids named pipes, which this project's local sandbox denies to child processes.
+ *   1. **The version is pinned.** `camoufox fetch` always takes the newest release in range, which
+ *      is how engine 156.0.1-beta.34 arrived and broke launching: it removed every `canvas:*`
+ *      config key, so a profile's canvas hash changed between launches and its stored identity
+ *      could no longer be reproduced. The pinned version lives in
+ *      `packages/shared/src/constants.ts` and is read here through `scripts/engine-version.mjs`.
+ *   2. `CAMOUFOX_INSTALL_DIR` is pinned into the repo-local `.cache/camoufox` when unset, so
+ *      `actions/cache`, `scripts/kernel-path.mjs` and the application agree on one path.
+ *   3. It re-reads `version.json` afterwards and fails loudly if the engine is not actually there.
+ *
+ * The pin uses `CamoufoxFetcher.checkAsset`, the library's own extension point: it is handed every
+ * release asset and returns the one to use. Overriding it to accept only the pinned
+ * `Version.fullString` keeps the download, extraction and version bookkeeping inside camoufox-js —
+ * we only say *which* release.
+ *
+ * `GITHUB_TOKEN` is honoured automatically by camoufox-js for api.github.com; CI passes
+ * `${{ github.token }}` so the lookup is authenticated instead of sharing the anonymous budget.
  *
  * Usage:
  *   node scripts/fetch-kernel.mjs
  */
-import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import process from 'node:process'
-import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { ENGINE_VERSION } from './engine-version.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-
-// Same default as scripts/dev-env.ps1: keep the ~550 MB engine inside the checkout, which
-// is the only location this project's local sandbox and actions/cache can both reach.
 const defaultDir = path.join(repoRoot, '.cache', 'camoufox')
 const installDir = path.resolve(process.env.CAMOUFOX_INSTALL_DIR ?? defaultDir)
 process.env.CAMOUFOX_INSTALL_DIR = installDir
 mkdirSync(installDir, { recursive: true })
 
-console.error(
-  `[fetch-kernel] install dir: ${installDir}` +
-    (process.env.CAMOUFOX_INSTALL_DIR === defaultDir ? ' (repo-local default)' : ''),
-)
+console.error(`[fetch-kernel] install dir: ${installDir}`)
+console.error(`[fetch-kernel] pinned engine: ${ENGINE_VERSION}`)
 
-const require = createRequire(import.meta.url)
-let cli
+const readInstalledVersion = () => {
+  try {
+    const raw = JSON.parse(readFileSync(path.join(installDir, 'version.json'), 'utf8'))
+    return raw.version && raw.release ? `${raw.version}-${raw.release}` : null
+  } catch {
+    return null
+  }
+}
+
+const already = readInstalledVersion()
+if (already === ENGINE_VERSION && existsSync(path.join(installDir, 'camoufox.exe'))) {
+  console.error(`[fetch-kernel] already installed: ${already}`)
+  console.log(already)
+  process.exit(0)
+}
+if (already && already !== ENGINE_VERSION) {
+  console.error(`[fetch-kernel] replacing ${already} with the pinned ${ENGINE_VERSION}`)
+}
+
+let pkgman
 try {
-  cli = require.resolve('camoufox-js/dist/__main__.js')
+  pkgman = await import('camoufox-js/dist/pkgman.js')
+} catch (error) {
+  console.error(`[fetch-kernel] cannot load camoufox-js (${error.message}). Run \`pnpm install\`.`)
+  process.exit(1)
+}
+
+let fetcher
+try {
+  /** Accept only the pinned release; every other asset is rejected and the library keeps looking. */
+  class PinnedFetcher extends pkgman.CamoufoxFetcher {
+    checkAsset(asset) {
+      const found = super.checkAsset(asset)
+      if (!found) return null
+      const [version] = found
+      return version.fullString === ENGINE_VERSION ? found : null
+    }
+  }
+  fetcher = new PinnedFetcher()
+  await fetcher.init()
 } catch (error) {
   console.error(
-    `[fetch-kernel] cannot resolve camoufox-js (${error.message}). Run \`pnpm install\` first.`,
+    `[fetch-kernel] could not resolve the pinned engine ${ENGINE_VERSION}: ${error.message}\n` +
+      '  This is the same GitHub release lookup `camoufox fetch` performs.\n' +
+      '  Check network access to api.github.com and that GITHUB_TOKEN is set to avoid the\n' +
+      '  unauthenticated rate limit. If the release was withdrawn, bump ENGINE_VERSION in\n' +
+      '  packages/shared/src/constants.ts after checking the smoke test still passes on the new one.',
   )
   process.exit(1)
 }
 
-/** @returns {Promise<number>} the child's exit code (never throws for a non-zero exit). */
-function runFetch() {
-  return new Promise(resolve => {
-    const child = spawn(process.execPath, [cli, 'fetch'], {
-      cwd: repoRoot,
-      env: process.env,
-      stdio: 'inherit',
-    })
-    child.on('error', error => {
-      console.error(`[fetch-kernel] failed to start camoufox-js: ${error.message}`)
-      resolve(1)
-    })
-    child.on('close', code => resolve(code ?? 1))
-  })
-}
-
-let code = await runFetch()
-if (code !== 0) {
-  console.error(`[fetch-kernel] fetch failed (exit ${code}); retrying once in 15s...`)
-  await delay(15_000)
-  code = await runFetch()
-}
-if (code !== 0) {
+if (fetcher.verstr !== ENGINE_VERSION) {
   console.error(
-    `[fetch-kernel] the Camoufox engine could not be fetched after 2 attempts (exit ${code}).`,
+    `[fetch-kernel] resolved ${fetcher.verstr} but ${ENGINE_VERSION} was pinned — refusing to continue`,
   )
-  process.exit(code)
+  process.exit(1)
 }
 
-const versionFile = path.join(installDir, 'version.json')
-if (!existsSync(versionFile)) {
+try {
+  const archive = await pkgman.CamoufoxFetcher.downloadFile(fetcher.url)
+  pkgman.CamoufoxFetcher.cleanup()
+  await fetcher.extractZip(archive)
+  fetcher.setVersion()
+} catch (error) {
+  console.error(`[fetch-kernel] install failed: ${error.message}`)
+  process.exit(1)
+}
+
+const installed = readInstalledVersion()
+console.error(`[fetch-kernel] installed: ${installed ?? 'unknown'}`)
+if (installed !== ENGINE_VERSION) {
   console.error(
-    `[fetch-kernel] camoufox-js reported success but ${versionFile} is missing — ` +
-      'the engine is not installed.',
+    `[fetch-kernel] expected ${ENGINE_VERSION} after install but found ${installed ?? 'nothing'}`,
   )
   process.exit(1)
 }
-
-const { version, release } = JSON.parse(readFileSync(versionFile, 'utf8'))
-const resolved = `${version}-${release}`
-
-const launcherName = process.platform === 'win32' ? 'camoufox.exe' : 'camoufox-bin'
-if (!existsSync(path.join(installDir, launcherName))) {
-  console.error(`[fetch-kernel] ${launcherName} is missing from ${installDir}.`)
+if (!existsSync(path.join(installDir, 'camoufox.exe'))) {
+  console.error('[fetch-kernel] camoufox.exe is missing after install')
   process.exit(1)
 }
 
-console.error(`[fetch-kernel] camoufox ${resolved} installed at ${installDir}`)
+console.log(installed)

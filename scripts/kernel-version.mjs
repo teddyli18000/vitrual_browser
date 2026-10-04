@@ -1,51 +1,33 @@
 #!/usr/bin/env node
 /**
- * kernel-version.mjs — print the Camoufox engine version that `camoufox-js` would install.
+ * kernel-version.mjs — print the PINNED Camoufox engine version.
  *
  * Used by `.github/workflows/{ci,release}.yml` as the `actions/cache` key component for
- * `.cache/camoufox`, so the 550 MB engine is re-downloaded only when the engine itself
- * changes — not on every push, and not on every unrelated lockfile edit.
+ * `.cache/camoufox`, so the 550 MB engine is re-downloaded only when the pinned engine changes.
  *
- * The version is resolved by `camoufox-js`'s own fetcher (same code path `camoufox fetch`
- * uses), never re-implemented here: it is the latest non-prerelease `daijro/camoufox`
- * release inside the version range the installed `camoufox-js` supports, for this
- * platform/arch.
- *
- * `GITHUB_TOKEN` is honoured automatically by camoufox-js for api.github.com; CI passes
- * `${{ github.token }}` so the release lookup is authenticated instead of sharing the
- * unauthenticated 60 req/h per-IP budget.
+ * This used to ask `camoufox-js` which release was newest, which made the cache key — and therefore
+ * what CI tested — move whenever upstream published anything. That is exactly how engine 156 reached
+ * a green build and then broke launching: it removed every `canvas:*` config key, so a profile's
+ * canvas hash changed between launches. The version is now pinned in
+ * `packages/shared/src/constants.ts`, read through `scripts/engine-version.mjs`, and this script
+ * needs neither the network nor a GitHub token. Determinism is the point: the same commit always
+ * means the same engine.
  *
  * Contract:
  *   stdout — exactly one line: the engine version (e.g. `152.0.4-beta.31`).
  *   stderr — diagnostics.
- *   exit 1 with a clear reason when the version cannot be resolved.
+ *   exit 1 when the pinned version cannot be read.
  *
  * Usage:
  *   node scripts/kernel-version.mjs
  */
 import process from 'node:process'
+import { ENGINE_VERSION } from './engine-version.mjs'
 
-let CamoufoxFetcher
-try {
-  ;({ CamoufoxFetcher } = await import('camoufox-js/dist/pkgman.js'))
-} catch (error) {
-  console.error(
-    `[kernel-version] cannot load camoufox-js (${error.message}). Run \`pnpm install\` first.`,
-  )
+if (typeof ENGINE_VERSION !== 'string' || ENGINE_VERSION === '') {
+  console.error('[kernel-version] the pinned engine version is empty')
   process.exit(1)
 }
 
-try {
-  const fetcher = new CamoufoxFetcher()
-  await fetcher.init()
-  console.log(fetcher.verstr)
-} catch (error) {
-  console.error(
-    `[kernel-version] could not resolve the Camoufox engine version: ${error.message}\n` +
-      '  This is the same GitHub release lookup `camoufox fetch` performs, so the fetch ' +
-      'would fail too.\n' +
-      '  Check network access to api.github.com and set GITHUB_TOKEN to avoid the ' +
-      'unauthenticated rate limit.',
-  )
-  process.exit(1)
-}
+console.error(`[kernel-version] pinned engine: ${ENGINE_VERSION}`)
+console.log(ENGINE_VERSION)
