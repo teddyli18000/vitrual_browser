@@ -16,6 +16,7 @@ import { Writable } from 'node:stream'
 import { Worker } from 'node:worker_threads'
 import type { KernelInfo, KernelPhase, KernelProgress } from '@vfox/shared'
 import { ENGINE_VERSION, ENGINE_VERSIONS } from '@vfox/shared'
+import { camoufoxModule } from './camoufox.js'
 import type { CoreLogger } from './index.js'
 // TYPE-ONLY, and it must stay that way: a value import would execute the worker script in the main
 // process, where `workerData` is null and the extraction would throw at import time.
@@ -224,7 +225,9 @@ async function resolveEngineUrl(
   }
 
   emit({ phase: 'checking', message: 'Falling back to the GitHub API to resolve the engine' })
-  const { CamoufoxFetcher } = await import('camoufox-js/dist/pkgman.js')
+  const { CamoufoxFetcher } = (await import(
+    camoufoxModule('dist/pkgman.js')
+  )) as typeof import('camoufox-js/dist/pkgman.js')
   const fetcher = new CamoufoxFetcher()
   await fetcher.init()
   if (!(ENGINE_VERSIONS as readonly string[]).includes(fetcher.verstr)) {
@@ -238,8 +241,11 @@ async function resolveEngineUrl(
   return fetcher.url
 }
 export const installCamoufoxEngine: EngineInstaller = async emit => {
-  const pkgman = await import('camoufox-js/dist/pkgman.js')
-  const { DefaultAddons, maybeDownloadAddons } = await import('camoufox-js/dist/addons.js')
+  // The specifier is dynamic, so the type has to be named explicitly.
+  const pkgman = (await import(
+    camoufoxModule('dist/pkgman.js')
+  )) as typeof import('camoufox-js/dist/pkgman.js')
+  const { DefaultAddons, maybeDownloadAddons } = await import(camoufoxModule('dist/addons.js'))
 
   const target = pkgman.INSTALL_DIR.toString()
 
@@ -360,7 +366,7 @@ async function downloadGeoIpDatabase(target: string, emit: ProgressReporter): Pr
   }
 
   try {
-    const { downloadMMDB } = await import('camoufox-js/dist/locale.js')
+    const { downloadMMDB } = await import(camoufoxModule('dist/locale.js'))
     await downloadMMDB()
     return
   } catch (error) {
@@ -495,7 +501,7 @@ async function downloadEngine(
   staging: string,
   emit: ProgressReporter,
 ): Promise<string> {
-  const { webdl } = await import('camoufox-js/dist/pkgman.js')
+  const { webdl } = await import(camoufoxModule('dist/pkgman.js'))
   const archive = path.join(staging, 'camoufox.zip')
   const total = await contentLength(url)
   let received = 0
@@ -605,7 +611,7 @@ export async function resolveEngineDir(): Promise<string> {
   if (configured) {
     return path.resolve(configured)
   }
-  const { INSTALL_DIR } = await import('camoufox-js/dist/pkgman.js')
+  const { INSTALL_DIR } = await import(camoufoxModule('dist/pkgman.js'))
   return INSTALL_DIR.toString()
 }
 

@@ -45,7 +45,11 @@ asarUnpack:
   # `app.asar` (the header names it) and `app.asar.unpacked` held only better-sqlite3's own files,
   # so every profile creation died with SQLITE_CANTOPEN "unable to open database file". No CI job
   # had ever launched a browser from the packaged artifact, which is why it reached a user.
-  - '**/camoufox-js/dist/data-files/**'
+  # The WHOLE package, not just its data files: `dist/webgl/sample.js` computes its SQLite path
+  # from its own module URL, so it must be LOADED from a real directory, not merely have its data
+  # file unpacked beside the archive. `packages/core/src/camoufox.ts` redirects every import of this
+  # package to this unpacked copy for exactly that reason.
+  - '**/node_modules/camoufox-js/**'
 
 # The UI ships zh-CN + en only. Chromium's 55 locale packs are ~46 MB of dead weight in an
 # installer that is otherwise dominated by the Electron runtime.
