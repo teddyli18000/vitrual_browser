@@ -611,7 +611,15 @@ await new Promise(resolve => setTimeout(resolve, 8000))
 // `listEngineProcesses()` needs CIM, which the runner does not have, so this can be unavailable.
 // When it is, the honest substitute is the window list: an engine process that survived the stop
 // would still own a visible window. Asserting on a null would have crashed instead.
-const after = await user32.listEngineProcesses().catch(() => null)
+// Not .catch(): this helper returns null *synchronously* when CIM is unavailable, so there is no
+// promise to catch and the previous version died with Cannot read properties of null (reading
+// catch). A try/catch is correct for both shapes.
+let after = null
+try {
+  after = await user32.listEngineProcesses()
+} catch {
+  after = null
+}
 if (after) {
   assert(
     (after.pids ?? []).length === 0,
