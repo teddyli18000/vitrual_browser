@@ -88,6 +88,7 @@ VFox 使用 **Firefox 内核**（Camoufox），这是刻意的选择：Camoufox 
 - **代理**：HTTP / HTTPS / SOCKS5，逐环境绑定，支持用户名密码
 - **批量建号**：一次创建最多 50 个环境，每个环境独立生成设备身份，可共用分组/代理/启动选项；**全或无**，失败不会留下半个批次
 - **批量操作**：批量启动（错峰拉起，不会瞬间打满 CPU）、批量停止、分组、搜索
+- **登录状态搬家**：把某个环境的 Cookie 导出成 Netscape cookies.txt（curl / wget / yt-dlp 都认这个格式），再导入到另一个环境。导入导出都要求环境**已停止**——运行中的浏览器独占那个数据库，写进去会丢
 - **虚拟机式管理**：克隆、导出 zip、导入 zip、打开数据目录、查看占用空间
 - **窗口同步器**：主窗口操作一次，同步到所有从窗口；支持窗口平铺
   > 同步是**页面级**的：鼠标、滚轮、键盘会回放到从窗口的网页内容里。浏览器界面本身
@@ -146,6 +147,8 @@ vfox clone <id|名称> --name "账号A-2"
 vfox export <id|名称> a.zip
 vfox import a.zip
 vfox sync status | vfox sync start <主控> <受控...> | vfox sync stop | vfox sync tile
+vfox cookies export <id|名称> --out cookies.txt   # 导出登录状态（Netscape cookies.txt）
+vfox cookies import <id|名称> --in cookies.txt [--replace]
 vfox kernel info | vfox kernel install
 vfox serve                    # 仅启动本地 API 服务（默认 127.0.0.1:9000）
 vfox mcp                      # 以 stdio 方式启动 MCP 服务，供 AI Agent 调用
