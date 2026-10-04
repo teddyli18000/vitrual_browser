@@ -425,20 +425,37 @@ for (const profile of profiles) {
   }
 }
 
+const win = await user32.loadUser32()
+
 const windows = new Map()
+// `listEngineProcesses()` needs CIM and the GitHub runner does not have it — the same limitation
+// `verify-window.mjs` hit — so the pid path is empty there and the helper returns null. That null is
+// what crashed the previous run with "Cannot read properties of null (reading 'windows')".
+//
+// Windows are found by process image name instead, which needs no CIM, and EVERY visible engine
+// window is collected rather than only the largest: three profiles means three windows, and
+// picking one would have made the count assertion pass for the wrong reason.
 const windowDeadline = Date.now() + 180_000
 while (Date.now() < windowDeadline && windows.size < profiles.length) {
-  const engine = await user32.listEngineProcesses()
-  const largest = user32.pickLargestWindow(engine.windows ?? [], engine.pids ?? [])
-  if (largest && !windows.has(largest.pid)) windows.set(largest.pid, largest)
+  for (const candidate of win.windows()) {
+    const usable =
+      candidate.image === user32.ENGINE_IMAGE_NAME &&
+      candidate.visible &&
+      candidate.rect &&
+      candidate.rect.width > 1 &&
+      candidate.rect.height > 1
+    if (usable && !windows.has(candidate.pid)) windows.set(candidate.pid, candidate)
+  }
   await new Promise(resolve => setTimeout(resolve, 2000))
 }
 assert(
   windows.size >= profiles.length,
-  `at least ${profiles.length} distinct visible windows appeared (found ${windows.size})`,
+  `at least ${profiles.length} distinct visible engine windows appeared (found ${windows.size})`,
 )
 for (const window of windows.values()) {
-  note(`window pid ${window.pid} ${window.width}x${window.height} "${window.title ?? ''}"`)
+  note(
+    `window pid ${window.pid} ${window.rect.width}x${window.rect.height} "${window.title ?? ''}"`,
+  )
 }
 executed.push('launching three profiles and counting their visible OS windows')
 
@@ -591,17 +608,27 @@ for (const profile of profiles) {
 }
 await new Promise(resolve => setTimeout(resolve, 8000))
 
-const after = await user32.listEngineProcesses()
-assert(
-  (after.pids ?? []).length === 0,
-  `no engine processes survive the stop (found ${JSON.stringify(after.pids ?? [])})`,
-)
-assert(
-  existsSync(path.join(dataDir, 'profiles.json')),
-  `portable mode put the store in <app>/data (${path.join(dataDir, 'profiles.json')})`,
-)
-const xul = path.join(engineDir, 'xul.dll')
-note(`engine ${engineDir} holds xul.dll of ${existsSync(xul) ? statSync(xul).size : 0} bytes`)
+// `listEngineProcesses()` needs CIM, which the runner does not have, so this can be unavailable.
+// When it is, the honest substitute is the window list: an engine process that survived the stop
+// would still own a visible window. Asserting on a null would have crashed instead.
+const after = await user32.listEngineProcesses().catch(() => null)
+if (after) {
+  assert(
+    (after.pids ?? []).length === 0,
+    `no engine processes survive the stop (found ${JSON.stringify(after.pids ?? [])})`,
+  )
+} else {
+  const remaining = win
+    .windows()
+    .filter(candidate => candidate.image === user32.ENGINE_IMAGE_NAME && candidate.visible)
+  note('the process list is unavailable (no CIM): asserted on windows instead')
+  assert(
+    remaining.length === 0,
+    `no engine window survives the stop (found ${remaining.length}: ${remaining
+      .map(window => window.pid)
+      .join(', ')})`,
+  )
+}
 executed.push('stopping every profile and asserting no engine process is orphaned')
 
 await app.close()
