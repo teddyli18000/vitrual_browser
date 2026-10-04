@@ -127,6 +127,18 @@ jobs:
       - name: Build the NSIS installer and the portable zip
         run: node scripts/build-installer.mjs
 
+      # The gate that actually RUNS the product. `verify-release.mjs` inspects the artifact from the
+      # outside — manifests, fuses, zip layout — and cannot see a defect that only appears once the
+      # application starts. v0.2.0 proved that: every structural check passed while every profile
+      # creation failed, because `camoufox-js/dist/data-files/webgl_data.db` was sealed inside
+      # app.asar and better-sqlite3 is a native module that cannot read through the asar shim.
+      # This launches the packaged executable, drives the real UI, and asserts a real browser window
+      # before anything is published.
+      - name: Run the packaged end-to-end test
+        env:
+          CAMOUFOX_INSTALL_DIR: ${{ github.workspace }}/.cache/camoufox
+        run: node apps/desktop/e2e/packaged-e2e.mjs --app release/win-unpacked
+
       - name: Verify the release artifacts
         run: node scripts/verify-release.mjs
 

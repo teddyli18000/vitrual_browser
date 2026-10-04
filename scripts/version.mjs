@@ -56,22 +56,26 @@ function readVersion(relativePath) {
   return pkg.version
 }
 
+const WORKSPACE_PACKAGES = [
+  'apps/desktop/package.json',
+  'packages/shared/package.json',
+  'packages/core/package.json',
+  'packages/server/package.json',
+  'packages/cli/package.json',
+  'packages/sync/package.json',
+]
+
 const rootVersion = readVersion('package.json')
-const desktopVersion = readVersion('apps/desktop/package.json')
-const cliVersion = readVersion('packages/cli/package.json')
+const others = WORKSPACE_PACKAGES.map(file => ({ file, version: readVersion(file) }))
 
-if (rootVersion !== desktopVersion) {
+const stale = others.filter(entry => entry.version !== rootVersion)
+if (stale.length > 0) {
   fail(
-    `package.json is ${rootVersion} but apps/desktop/package.json is ${desktopVersion}.\n` +
-      '  Both must be bumped together — the installer is built from apps/desktop.',
-  )
-}
-
-if (rootVersion !== cliVersion) {
-  fail(
-    `package.json is ${rootVersion} but packages/cli/package.json is ${cliVersion}.\n` +
-      "  They must be bumped together — `vfox --version` and the CLI help header print the CLI's\n" +
-      '  own package version, so a stale one tells the user a version that was never released.',
+    `package.json is ${rootVersion} but these disagree:\n` +
+      stale.map(entry => `    ${entry.file} is ${entry.version}`).join('\n') +
+      '\n  Every workspace package must carry the application version, because the version a user can\n' +
+      '  see is read from whichever package the code sits in: `vfox --version` prints the CLI package\n' +
+      "  and the app's footer prints the value the server reports. Bump them all together.",
   )
 }
 
