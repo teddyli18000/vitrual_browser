@@ -30,7 +30,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { ENGINE_VERSION } from './engine-version.mjs'
 
 const ENGINE_REPO = 'daijro/camoufox'
@@ -72,6 +72,43 @@ try {
   process.exit(1)
 }
 
+/**
+ * Candidate asset URLs, most specific first. The arch spelling is not obvious — camoufox-js's
+ * `OS_ARCH_MATRIX` uses `x86_64` while Playwright-style tooling uses `x64` — so both are tried and
+ * the winner is reported. A 404 on one candidate is not an error; a 404 on all of them is.
+ */
+function candidateUrls() {
+  const urls = []
+  const override = process.env.VFOX_ENGINE_URL?.trim()
+  if (override) urls.push(override)
+
+  const osName = pkgman.OS_NAME
+  const platformArch = (() => {
+    try {
+      return pkgman.CamoufoxFetcher.getPlatformArch()
+    } catch {
+      return undefined
+    }
+  })()
+  const arches = [...new Set([platformArch, 'x86_64', 'x64', 'arm64'].filter(Boolean))]
+
+  for (const arch of arches) {
+    urls.push(
+      `https://github.com/${ENGINE_REPO}/releases/download/v${ENGINE_VERSION}/camoufox-${ENGINE_VERSION}-${osName}.${arch}.zip`,
+    )
+  }
+  return urls
+}
+
+/** `null` when the URL does not resolve, otherwise its size in bytes. */
+async function headOk(url) {
+  try {
+    const response = await fetch(url, { method: 'HEAD', redirect: 'follow' })
+    return response.ok ? Number(response.headers.get('content-length') ?? 0) : null
+  } catch {
+    return null
+  }
+}
 // `--verify-url` resolves the download URL and stops, without downloading 220 MB. It exists so CI
 // can prove the direct CDN path still works even when the engine cache is warm and the fetch itself
 // is skipped — otherwise a broken asset name would only surface the day the cache missed.
@@ -122,126 +159,45 @@ if (process.argv.includes('--verify-url')) {
   process.exit(1)
 }
 
-/** `152.0.4-beta.31` -> `{ version: '152.0.4', release: 'beta.31' }`, the shape version.json needs. */
-function splitVersion(full) {
-  const at = full.indexOf('-')
-  return at === -1
-    ? { version: full, release: '' }
-    : { version: full.slice(0, at), release: full.slice(at + 1) }
-}
-
 /**
- * Candidate asset URLs, most specific first. The arch spelling is not obvious — camoufox-js's
- * `OS_ARCH_MATRIX` uses `x86_64` while Playwright-style tooling uses `x64` — so both are tried and
- * the winner is reported. A 404 on one candidate is not an error; a 404 on all of them is.
+ * The install itself is the APPLICATION's own code path.
+ *
+ * This used to be a second implementation of the same download, which meant CI proved the script
+ * while users ran `installCamoufoxEngine` in `packages/core` — two implementations, one of them
+ * verified. That is the shape of bug that reaches production. Delegating here means the CI fetch
+ * step exercises exactly the code a user's 一键安装 button runs.
+ *
+ * It requires `packages/core/dist` to exist, so the workflow builds the workspace before fetching.
  */
-function candidateUrls() {
-  const urls = []
-  const override = process.env.VFOX_ENGINE_URL?.trim()
-  if (override) urls.push(override)
-
-  const osName = pkgman.OS_NAME
-  const platformArch = (() => {
-    try {
-      return pkgman.CamoufoxFetcher.getPlatformArch()
-    } catch {
-      return undefined
-    }
-  })()
-  const arches = [...new Set([platformArch, 'x86_64', 'x64', 'arm64'].filter(Boolean))]
-
-  for (const arch of arches) {
-    urls.push(
-      `https://github.com/${ENGINE_REPO}/releases/download/v${ENGINE_VERSION}/camoufox-${ENGINE_VERSION}-${osName}.${arch}.zip`,
-    )
-  }
-  return urls
+const coreKernel = path.join(repoRoot, 'packages', 'core', 'dist', 'kernel.js')
+if (!existsSync(coreKernel)) {
+  console.error(
+    '[fetch-kernel] packages/core is not built. Run `pnpm --filter @vfox/core build` first — the\n' +
+      '  install deliberately reuses the application code rather than a second copy of it.',
+  )
+  process.exit(1)
 }
 
-async function headOk(url) {
-  try {
-    const response = await fetch(url, { method: 'HEAD', redirect: 'follow' })
-    return response.ok ? Number(response.headers.get('content-length') ?? 0) : null
-  } catch {
-    return null
-  }
+let installCamoufoxEngine
+try {
+  ;({ installCamoufoxEngine } = await import(pathToFileURL(coreKernel).href))
+} catch (error) {
+  console.error(`[fetch-kernel] cannot load the application installer: ${error.message}`)
+  process.exit(1)
 }
 
-async function download(url, destination) {
-  const response = await fetch(url, { redirect: 'follow' })
-  if (!response.ok) throw new Error(`HTTP ${response.status}`)
-  const bytes = Buffer.from(await response.arrayBuffer())
-  await fs.writeFile(destination, bytes)
-  return bytes.length
-}
-
-async function installFrom(url) {
-  const staging = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-camoufox-'))
-  const archive = path.join(staging, 'engine.zip')
-  try {
-    const bytes = await download(url, archive)
-    console.error(`[fetch-kernel] downloaded ${(bytes / 1024 / 1024).toFixed(1)} MB`)
-    // `extractZip` is `new AdmZip(file).extractAllTo(INSTALL_DIR, true)` — it holds no fetcher
-    // state, so it works on a fetcher that never ran `init()`.
-    const fetcher = new pkgman.CamoufoxFetcher()
-    await fetcher.extractZip(archive)
-    const { version, release } = splitVersion(ENGINE_VERSION)
-    writeFileSync(
-      path.join(installDir, 'version.json'),
-      JSON.stringify({ version, release }),
-      'utf8',
-    )
-  } finally {
-    await fs.rm(staging, { recursive: true, force: true })
-  }
-}
-
-/** Last resort: let camoufox-js resolve it, which needs api.github.com. */
-async function installViaApi() {
-  const fetcher = new pkgman.CamoufoxFetcher()
-  await fetcher.init()
-  if (fetcher.verstr !== ENGINE_VERSION) {
-    throw new Error(`the registry resolved ${fetcher.verstr}, not the pinned ${ENGINE_VERSION}`)
-  }
-  const archive = await pkgman.CamoufoxFetcher.downloadFile(fetcher.url)
-  pkgman.CamoufoxFetcher.cleanup()
-  await fetcher.extractZip(archive)
-  fetcher.setVersion()
-}
-
-const candidates = candidateUrls()
-console.error(`[fetch-kernel] ${candidates.length} direct candidate URL(s); no API call needed`)
-let installed = false
-for (const url of candidates) {
-  const size = await headOk(url)
-  if (size === null) {
-    console.error(`[fetch-kernel] miss: ${url}`)
-    continue
-  }
-  console.error(`[fetch-kernel] hit (${(size / 1024 / 1024).toFixed(1)} MB): ${url}`)
-  try {
-    await installFrom(url)
-    installed = true
-    break
-  } catch (error) {
-    console.error(`[fetch-kernel] download/extract failed from ${url}: ${error.message}`)
-  }
-}
-
-if (!installed) {
-  console.error('[fetch-kernel] no direct URL worked; falling back to the GitHub API')
-  try {
-    await installViaApi()
-    installed = true
-  } catch (error) {
-    console.error(
-      `[fetch-kernel] API fallback failed too: ${error.message}\n` +
-        '  If this is a rate limit, set VFOX_ENGINE_URL to a mirror of\n' +
-        `  camoufox-${ENGINE_VERSION}-<os>.<arch>.zip, or download it in a browser and extract it\n` +
-        `  into ${installDir}.`,
-    )
-    process.exit(1)
-  }
+try {
+  await installCamoufoxEngine(progress => {
+    const detail = progress.message ? `: ${progress.message}` : ''
+    console.error(`[fetch-kernel] ${progress.phase}${detail}`)
+  })
+} catch (error) {
+  console.error(
+    `[fetch-kernel] the application installer failed: ${error.message}\n` +
+      '  Note the installer tries the CDN first and only falls back to api.github.com, so check the\n' +
+      '  log above for which path it took before assuming a rate limit.',
+  )
+  process.exit(1)
 }
 
 const finalVersion = readInstalledVersion()

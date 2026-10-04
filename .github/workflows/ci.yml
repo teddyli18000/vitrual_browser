@@ -133,6 +133,11 @@ jobs:
       - name: Verify the engine download URL
         run: node scripts/fetch-kernel.mjs --verify-url
 
+      # The engine fetch now delegates to the application's own installer (packages/core/dist), so
+      # the workspace must be built first — CI then proves the code a user's 一键安装 button runs,
+      # rather than a second implementation of the same download that only CI exercises.
+      - name: Build the workspace before fetching the engine
+        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build
       - name: Fetch the Camoufox engine
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -265,6 +270,11 @@ jobs:
       - name: Verify the engine download URL
         run: node scripts/fetch-kernel.mjs --verify-url
 
+      # The engine fetch now delegates to the application's own installer (packages/core/dist), so
+      # the workspace must be built first — CI then proves the code a user's 一键安装 button runs,
+      # rather than a second implementation of the same download that only CI exercises.
+      - name: Build the workspace before fetching the engine
+        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build
       - name: Fetch the Camoufox engine
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -105,6 +105,11 @@ jobs:
       # lookup shares the unauthenticated 60-per-hour per-IP budget, and whichever job runs second
       # is the one that gets rate-limited — which is how `e2e-window` failed on 2026-10-04 with
       # "Failed to fetch releases from api.github.com/repos/daijro/camoufox/releases after 5 attempts".
+      # The engine fetch now delegates to the application's own installer (packages/core/dist), so
+      # the workspace must be built first — CI then proves the code a user's 一键安装 button runs,
+      # rather than a second implementation of the same download that only CI exercises.
+      - name: Build the workspace before fetching the engine
+        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build
       - name: Fetch the Camoufox engine
         env:
           GITHUB_TOKEN: ${{ github.token }}
