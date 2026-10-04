@@ -91,6 +91,36 @@ describe('route table', () => {
     })
     expect(res.statusCode).toBe(404)
   })
+
+  /*
+   * Every route module has to be wired into `registerRoutes`. A module nothing imports is silently
+   * a 404 — no typecheck can see it, and the only symptom is a client failing at runtime. That is
+   * exactly how `registerSyncRoutes` was lost from `routes/index.ts` while the module, the
+   * dependency and the tests were all still present, so this walks the frozen route table itself
+   * rather than a hand-written list.
+   */
+  it('registers a route for every entry in API_ROUTES', () => {
+    const methods = ['GET', 'POST', 'PATCH', 'DELETE']
+    const registered = url => methods.some(method => h.app.hasRoute({ method, url }))
+
+    const patterns = [
+      // Every static route in the frozen table, whatever method it answers.
+      ...Object.values(API_ROUTES).filter(value => typeof value === 'string'),
+      // The parameterised ones, composed the way `routes/params.ts` composes them.
+      `${API_ROUTES.profiles}/:id`,
+      `${API_ROUTES.profiles}/:id/launch`,
+      `${API_ROUTES.profiles}/:id/stop`,
+      `${API_ROUTES.profiles}/:id/clone`,
+      `${API_ROUTES.profiles}/:id/export`,
+      `${API_ROUTES.profiles}/:id/cookies/export`,
+      `${API_ROUTES.profiles}/:id/cookies/import`,
+      `${API_ROUTES.runtime}/:id`,
+      `${API_ROUTES.groups}/:id`,
+    ]
+
+    const missing = patterns.filter(pattern => !registered(pattern))
+    expect(missing, `unregistered API_ROUTES paths: ${missing.join(', ')}`).toEqual([])
+  })
 })
 
 describe('health', () => {

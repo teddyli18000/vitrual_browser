@@ -204,6 +204,61 @@ export const KernelProgressSchema = z.object({
 })
 export type KernelProgress = z.infer<typeof KernelProgressSchema>
 
+/* --------------------------------------------------------------------- cookies */
+
+/**
+ * Cookie interchange uses the Netscape `cookies.txt` format — the one curl, wget, yt-dlp and the
+ * other anti-detect browsers read and write — so a session moved out of VFox stays usable and a
+ * session captured elsewhere can be moved in. The format is lossy in exactly two ways, both
+ * documented on the export path: `SameSite` has no field (imports land as "unspecified", which
+ * Firefox treats as Lax) and cookies carrying a non-empty `originAttributes` (container or
+ * partitioned cookies) cannot be represented at all, so they are skipped and reported.
+ */
+
+/** How an import treats cookies the profile already has. */
+export const CookieImportModeSchema = z.enum(['merge', 'replace'])
+export type CookieImportMode = z.infer<typeof CookieImportModeSchema>
+
+/** A cookie file larger than this is refused before it is parsed. Real jars are a few hundred KB. */
+export const MAX_COOKIE_FILE_BYTES = 4 * 1024 * 1024
+
+/** One line the parser or the jar writer could not use, with the reason. */
+export const CookieSkipSchema = z.object({
+  /** 1-based line in the source file, when the skip came from parsing. */
+  line: z.number().int().positive().nullable().default(null),
+  /** What the skip is about: `name@host`, or the raw line when it could not be parsed. */
+  detail: z.string(),
+  reason: z.string(),
+})
+export type CookieSkip = z.infer<typeof CookieSkipSchema>
+
+export const CookieImportRequestSchema = z.object({
+  /** Netscape `cookies.txt` content. */
+  content: z.string().min(1).max(MAX_COOKIE_FILE_BYTES),
+  /**
+   * `merge` (default) upserts each cookie by `(host, name, path)` and leaves everything else in the
+   * jar alone. `replace` empties the jar first, so the profile ends up with exactly the file.
+   */
+  mode: CookieImportModeSchema.default('merge'),
+})
+export type CookieImportRequest = z.infer<typeof CookieImportRequestSchema>
+
+export const CookieImportResultSchema = z.object({
+  profileId: z.string().min(1),
+  mode: CookieImportModeSchema,
+  /** Usable data lines the file contained. */
+  parsed: z.number().int().nonnegative(),
+  /** Cookies written — inserted or updated. */
+  written: z.number().int().nonnegative(),
+  /** Of those, cookies the profile already had and that were overwritten. */
+  updated: z.number().int().nonnegative(),
+  /** Cookies deleted first by `replace` mode. Always 0 for `merge`. */
+  removed: z.number().int().nonnegative(),
+  /** Lines that could not be used, with the reason. */
+  skipped: z.array(CookieSkipSchema),
+})
+export type CookieImportResult = z.infer<typeof CookieImportResultSchema>
+
 /* --------------------------------------------------------- window synchroniser */
 
 /**

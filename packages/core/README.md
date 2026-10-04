@@ -17,6 +17,8 @@ frozen domain contract (`@vfox/shared`) and everything that drives it (server, C
 | `launcher.ts` | `firefox.launchServer()` options, one visible window per profile, process-tree kill |
 | `runtime.ts` | runtime states, `change` events, unexpected-exit detection (no polling timers) |
 | `archive.ts` | portable profile zip (`exportZip` / `importZip`) |
+| `netscape.ts` | the Netscape `cookies.txt` format, pure text in / text out |
+| `cookies.ts` | the profile's `cookies.sqlite` jar, read and written through `node:sqlite` |
 | `kernel.ts` | engine discovery, installation, real byte-level progress |
 | `orphans.ts` | startup reconciliation of engine processes left by a previous run |
 | `log.ts` | rotating file log at `<dataDir>/logs/vfox.log` |
@@ -29,6 +31,7 @@ frozen domain contract (`@vfox/shared`) and everything that drives it (server, C
 <dataDir>/profiles.corrupt-<ts>.json        a quarantined corrupt file, kept as evidence
 <dataDir>/groups.json                       Group[]
 <dataDir>/profiles/<id>/userdata/           the profile's real, isolated browser data directory
+<dataDir>/profiles/<id>/userdata/cookies.sqlite   the cookie jar (created by the engine on first launch)
 <dataDir>/logs/vfox.log                     rotating diagnostics log (5 × 2 MB)
 ```
 
@@ -85,6 +88,48 @@ node packages/core/scripts/verify-window.mjs --screenshot out/window.png
 koffi/`user32.dll` window and CIM process layer they share; `probe-windows.mjs` is the pre-flight that
 distinguishes "this runner has no interactive desktop" from "the browser never appeared".
 
+## Cookie import / export
+
+`core.cookies.export(id)` / `core.cookies.import(id, content, { mode })` move a logged-in session
+in or out of a profile as a **Netscape `cookies.txt`** — the format curl, wget, yt-dlp and the other
+anti-detect browsers read and write, so a session that leaves VFox stays usable elsewhere.
+
+- **Disk, never a browser.** The jar of record is `<userdata>/cookies.sqlite`, so both directions
+  read and write that file directly and neither launches the engine. Exporting fifty profiles is
+  fifty SQLite reads, not fifty browsers.
+- **Both directions require the profile to be stopped.** A running browser holds the file open and
+  owns the in-memory jar, so a write from outside would be lost or fought over. `stopped` and
+  `error` are accepted (`error` only ever happens with no live process attached); anything else
+  throws before a byte is read.
+- **A profile that has never been launched has no cookie store.** `export` still succeeds and
+  produces a header-only file, reporting `hasCookieStore: false` so a caller can say *why* it is
+  empty. `import` refuses, because creating a `cookies.sqlite` ourselves would mean guessing
+  Firefox's schema version and leaving the engine to migrate a database it did not write.
+- **`merge` (default) upserts** on `(host, name, path)` — the key Firefox itself enforces — and
+  leaves the rest of the jar alone. **`replace`** empties the table first. Either way `sameSite` is
+  written as `0` ("unspecified", which Firefox treats as Lax) on insert *and* on update, so the same
+  file always produces the same jar instead of inheriting whatever happened to be there.
+- **SQLite is `node:sqlite`**, Node's built-in module (unflagged on 22.13+/23.4+/24 and in
+  Electron 38's Node 22.22). No dependency, no native module. It is imported lazily, so its
+  ExperimentalWarning only appears when a cookie command actually runs. `moz_cookies` has gained
+  columns over the years (`schemeMap`, `isPartitionedAttributeSet`), so every statement is built
+  from `PRAGMA table_info` and nothing here writes DDL.
+
+**What the format cannot carry**, and therefore what a move loses:
+
+| Field | Fate |
+| --- | --- |
+| `name`, `value`, `host`, `path`, `expiry`, `secure` | preserved |
+| `isHttpOnly` | preserved, through curl's `#HttpOnly_` domain prefix |
+| host-only vs. subdomain-wide | preserved, through the leading dot |
+| `SameSite` / `rawSameSite` | **lost** — the format has no field; imports land as "unspecified" (Lax), so a cookie that was `SameSite=None` stops being sent in embedded/cross-site contexts. Top-level navigation is unaffected. |
+| `originAttributes` (container / partitioned) | **not exported** — such cookies are skipped and reported rather than silently widened into an unpartitioned cookie |
+| `creationTime`, `lastAccessed`, `schemeMap` | regenerated on import |
+
+A JSON side-car format was considered for those last two rows and rejected: it would double the
+surface for fields that are not session identity, and the whole point of the feature is that the
+file works with everything else.
+
 ## Known limitations (v0.1.0)
 
 - **Exports are built in memory** (adm-zip has no streaming writer). `exportZip` refuses a data
@@ -107,6 +152,12 @@ distinguishes "this runner has no interactive desktop" from "the browser never a
   survive its teardown. Measured: importing `impit` alone and doing nothing else crashed 4 of 6 runs
   with `0xC0000005`, and a full suite run dies that way roughly half the time **after every test has
   passed**. CI runs the forks pool and is unaffected.
+- **Cookie import/export has never run against an engine-written `cookies.sqlite`, and no browser
+  has been observed *using* imported cookies.** Both need a launch, so both are CI-only. Locally the
+  jar is a fixture built from Firefox's documented schema — which is exactly why the code
+  introspects columns rather than assuming them. Session cookies (expiry `0`) are written back as
+  session cookies; that they survive a clean engine shutdown in the real file is likewise unproven
+  here.
 - **`ProfileUpdateSchema` cannot express a partial `fingerprint`/`launch` patch.** `zod`'s
   `.partial()` keeps the inner `.default()`s, so `{ fingerprint: { hardwareConcurrency: 4 } }` parses
   into a *complete* fingerprint with `os: 'windows'`. `Store.updateProfile` therefore merges the raw
