@@ -67,7 +67,16 @@ pnpm --filter @vfox/core typecheck # tsc -b + tsconfig.test.json (src and tests)
 pnpm --filter @vfox/core test      # vitest
 pnpm exec biome check packages/core
 node packages/core/scripts/smoke-launch.mjs   # real engine smoke test — CI only, see below
+node packages/core/scripts/probe-windows.mjs  # can this machine see windows at all? (exit 2 = no FFI)
+node packages/core/scripts/verify-window.mjs  # HEADED: a real window, a usable browser, state that
+                                              # survives a restart — needs an interactive desktop,
+                                              # refuses to run when VFOX_SMOKE_HEADLESS is set
+node packages/core/scripts/verify-window.mjs --screenshot out/window.png
 ```
+
+`verify-window.mjs` and `smoke-launch.mjs` are CI gates. `scripts/lib/user32.mjs` holds the
+koffi/`user32.dll` window and CIM process layer they share; `probe-windows.mjs` is the pre-flight that
+distinguishes "this runner has no interactive desktop" from "the browser never appeared".
 
 ## Known limitations (v0.1.0)
 

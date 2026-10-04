@@ -11,6 +11,10 @@ inputs:
   script:
     description: Repository-relative path of the script, run with the current node.
     required: true
+  args:
+    description: Extra command-line arguments appended after the script path.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -30,7 +34,7 @@ runs:
         $PSNativeCommandUseErrorActionPreference = $false
         $out = Join-Path $env:RUNNER_TEMP '${{ inputs.label }}.stdout.txt'
         $err = Join-Path $env:RUNNER_TEMP '${{ inputs.label }}.stderr.txt'
-        node '${{ inputs.script }}' > $out 2> $err
+        node '${{ inputs.script }}' ${{ inputs.args }} > $out 2> $err
         $code = $LASTEXITCODE
         Write-Host "===== ${{ inputs.label }} stdout ====="
         Get-Content $out -ErrorAction SilentlyContinue

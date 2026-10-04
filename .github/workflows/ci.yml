@@ -201,3 +201,100 @@ jobs:
           path: apps/desktop/.cache/shots/*.png
           if-no-files-found: error
           retention-days: 30
+
+  # The only visual evidence this project has. Everything else measures fingerprints or pixels of a
+  # renderer; this job opens a REAL, VISIBLE browser window on a runner and photographs the desktop,
+  # so "can it be used like a normal browser window?" is answered by a picture.
+  #
+  # VFOX_SMOKE_HEADLESS is deliberately absent from this job — headless is the thing being ruled out.
+  e2e-window:
+    name: headed window and desktop screenshot
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Node.js and pnpm
+        uses: ./.github/actions/setup
+
+      # The cache key is deliberately IDENTICAL to e2e-engine's, so this job reuses the engine
+      # that job already downloaded instead of fetching another 550 MB.
+      - name: Resolve the Camoufox engine version
+        id: engine
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $version = (node scripts/kernel-version.mjs).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
+            throw 'Could not resolve the Camoufox engine version.'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Camoufox engine version: $version"
+
+      - name: Restore the Camoufox engine
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ steps.engine.outputs.version }}
+
+      - name: Fetch the Camoufox engine
+        run: node scripts/fetch-kernel.mjs
+
+      - name: Build the workspace
+        run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build
+
+      # Pre-flight, before any browser: does the user32/koffi layer load, and does this runner have
+      # any visible top-level windows at all? It exits 0 even with zero windows — an empty list here
+      # plus a blank baseline capture is the unambiguous "this runner has no interactive desktop"
+      # answer, which is the environment rather than the script. Exit 2 means the FFI layer itself
+      # cannot load, and then the headed check below could not have run either.
+      - name: Probe the Windows desktop layer
+        uses: ./.github/actions/gated-script
+        with:
+          label: probe-windows
+          script: packages/core/scripts/probe-windows.mjs
+
+      # Taken BEFORE any browser starts, so it answers one question unambiguously: does this runner
+      # have an interactive desktop at all? A blank baseline means the environment is the problem,
+      # not the browser. `-AllowBlank` keeps the diagnostic itself from failing the job.
+      - name: Baseline desktop capture, before any browser
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/capture-desktop.ps1 -Path .cache/window-shots/00-baseline-desktop.png -AllowBlank
+
+      # `--screenshot` is handled by verify-window.mjs calling scripts/capture-desktop.ps1 at the
+      # right moment — after the page has loaded and the window is in front, before teardown.
+      - name: Launch a headed window and verify it
+        uses: ./.github/actions/gated-script
+        with:
+          label: window
+          script: packages/core/scripts/verify-window.mjs
+          args: --screenshot .cache/window-shots/10-browser-window.png
+
+      # Independent of the capture helper and of verify-window.mjs: reads the PNGs back and reports
+      # their real dimensions, and refuses to call a missing or stub-sized file evidence.
+      - name: Inspect the screenshots
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          $problems = @()
+          foreach ($file in @('.cache/window-shots/00-baseline-desktop.png', '.cache/window-shots/10-browser-window.png')) {
+            if (-not (Test-Path $file)) { $problems += "$file is absent"; continue }
+            $bytes = (Get-Item $file).Length
+            if ($bytes -lt 4096) { $problems += "$file is $bytes bytes, too small to be an image"; continue }
+            $image = [System.Drawing.Image]::FromFile((Resolve-Path $file).Path)
+            try { Write-Host "$file  $($image.Width)x$($image.Height)  $bytes bytes" }
+            finally { $image.Dispose() }
+          }
+          if ($problems.Count -gt 0) { throw "screenshot problems: $($problems -join '; ')" }
+
+      - name: Upload the screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-window-screenshots
+          path: .cache/window-shots/*.png
+          if-no-files-found: error
+          retention-days: 30
