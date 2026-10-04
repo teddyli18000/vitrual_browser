@@ -7,6 +7,7 @@ import { errorMessage, setConnection } from '../api/http'
 import { useKernelStore } from './kernel'
 import { usePrefsStore } from './prefs'
 import { useRuntimeStore } from './runtime'
+import { useSyncStore } from './sync'
 
 export type ConnectionState = 'idle' | 'online' | 'offline'
 
@@ -37,12 +38,14 @@ export const useConnectionStore = defineStore('connection', () => {
     const runtime = useRuntimeStore()
     const kernel = useKernelStore()
     const prefs = usePrefsStore()
+    const sync = useSyncStore()
     closeStream = openEventStream({
       onRuntime: (update: ProfileRuntime) => {
         runtime.apply(update)
         prefs.rememberStarted(update)
       },
       onKernel: progress => kernel.applyProgress(progress),
+      onSync: session => sync.apply(session),
       onState: next => {
         streamState.value = next
       },

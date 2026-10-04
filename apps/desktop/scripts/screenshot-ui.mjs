@@ -45,7 +45,7 @@ const VIEWPORT = { width: 1440, height: 900 }
 const MIN_SCREENSHOT_BYTES = 4096
 const EXPECTED_ROWS = 8
 /** Written in this order; also the exact set removed before a run, so nothing else is touched. */
-const SHOT_NAMES = ['1-profiles-table', '2-new-profile-dialog', '3-settings', '4-no-core']
+const SHOT_NAMES = ['1-profiles-table', '2-new-profile-dialog', '3-settings', '4-no-core', '5-sync']
 
 if (!existsSync(join(rendererDir, 'index.html'))) {
   console.error(`No built renderer at ${rendererDir}. Run: pnpm --filter @vfox/desktop build`)
@@ -237,7 +237,7 @@ async function capture(page, name) {
 
 await rm(dataDir, { recursive: true, force: true })
 await mkdir(shotDir, { recursive: true })
-// Remove only the four files this run owns: `.cache/shots` may hold someone else's capture.
+// Remove only the five files this run owns: `.cache/shots` may hold someone else's capture.
 for (const name of SHOT_NAMES) await rm(join(shotDir, `${name}.png`), { force: true })
 
 console.log(`seeding  ${dataDir}`)
@@ -337,6 +337,29 @@ try {
   })
   await sleep(400)
   await capture(offline, '4-no-core')
+
+  /*
+   * 5 — the window synchroniser. This harness launches no profile (that needs the 493 MB engine),
+   * so the honest first-run state is the one to photograph: the "at least two running" warning,
+   * a picker whose controls are all disabled, and the page-level limitation note. The note is an
+   * acceptance criterion of its own, so the shot is only taken once it is on screen — a screenshot
+   * of a half-rendered view would be worse than none.
+   *
+   * A run that ever starts profiles must revisit the warning assertion below together with the
+   * seed it depends on; nothing here fabricates a running profile to make the page look busier.
+   */
+  await page.locator('.nav-item', { hasText: '窗口同步' }).first().click()
+  await waitFor(page.getByText('同步范围（请务必了解）').first(), 'the 窗口同步 page', pageWatch, {
+    timeoutMs: 15_000,
+  })
+  await waitFor(
+    page.getByText('至少需要两个正在运行的环境').first(),
+    'the "two running profiles" warning',
+    pageWatch,
+    { timeoutMs: 15_000 },
+  )
+  await sleep(600)
+  await capture(page, '5-sync')
 } catch (error) {
   failure = error
 } finally {
@@ -366,8 +389,8 @@ for (const file of shots) {
   console.log(`${file}  ${info.size} bytes`)
 }
 
-if (shots.length !== 4) {
-  console.error(`FAILED: expected 4 screenshots, produced ${shots.length}`)
+if (shots.length !== 5) {
+  console.error(`FAILED: expected 5 screenshots, produced ${shots.length}`)
   process.exit(1)
 }
 

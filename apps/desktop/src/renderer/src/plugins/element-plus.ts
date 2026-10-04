@@ -35,6 +35,7 @@ import {
   ElTabPane,
   ElTabs,
   ElTag,
+  ElTooltip,
 } from 'element-plus'
 import type { App, Plugin } from 'vue'
 
@@ -64,6 +65,7 @@ import 'element-plus/es/components/table-column/style/css'
 import 'element-plus/es/components/tab-pane/style/css'
 import 'element-plus/es/components/tabs/style/css'
 import 'element-plus/es/components/tag/style/css'
+import 'element-plus/es/components/tooltip/style/css'
 
 /** `ElMessage` / `ElMessageBox` are imported where used; only their styles are needed here. */
 const components: Plugin[] = [
@@ -89,6 +91,7 @@ const components: Plugin[] = [
   ElTabPane,
   ElTabs,
   ElTag,
+  ElTooltip,
   ElLoading,
 ]
 
