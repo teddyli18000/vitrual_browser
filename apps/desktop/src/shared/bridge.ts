@@ -68,6 +68,18 @@ export interface VfoxBridge {
     suggestedName: string
     base64: string
   }): Promise<{ saved: boolean; path: string | null }>
+  /**
+   * Writes text through the OS save dialog. A separate capability from `saveExport` rather than a
+   * flag on it, because the dialog's title and filter are what the user reads before choosing a
+   * file: a `cookies.txt` must not be offered as a VFox profile package, and a user who clears the
+   * filename must not end up with `.zip` appended to a text file.
+   *
+   * `saved: false` covers the user pressing 取消 — a normal outcome, never an error.
+   */
+  saveText(input: {
+    suggestedName: string
+    content: string
+  }): Promise<{ saved: boolean; path: string | null }>
   pickImport(): Promise<{ name: string; base64: string } | null>
 }
 

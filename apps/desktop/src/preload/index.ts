@@ -43,6 +43,7 @@ const bridge: VfoxBridge = {
   profileDir: profileId => ipcRenderer.invoke('vfox:profile-dir', profileId),
   profileUsage: profileId => ipcRenderer.invoke('vfox:profile-usage', profileId),
   saveExport: input => ipcRenderer.invoke('vfox:save-export', input),
+  saveText: input => ipcRenderer.invoke('vfox:save-text', input),
   pickImport: () => ipcRenderer.invoke('vfox:pick-import'),
 }
 

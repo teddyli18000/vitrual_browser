@@ -1,5 +1,7 @@
 import {
   API_ROUTES,
+  type CookieImportRequest,
+  type CookieImportResult,
   type Group,
   type Health,
   type KernelInfo,
@@ -12,7 +14,16 @@ import {
   type SyncStart,
   type TileRequest,
 } from '@vfox/shared'
-import { apiBytes, apiGet, apiSend, apiSendBytes, fromBase64, toBase64 } from './http'
+import {
+  apiBytes,
+  apiGet,
+  apiSend,
+  apiSendBytes,
+  apiText,
+  fromBase64,
+  type TextDownload,
+  toBase64,
+} from './http'
 
 /* ------------------------------------------------------------------------- profiles */
 
@@ -93,6 +104,24 @@ export function renameGroup(id: string, name: string): Promise<Group> {
 
 export function deleteGroup(id: string): Promise<void> {
   return apiSend<void>(API_ROUTES.group(id), 'DELETE')
+}
+
+/* --------------------------------------------------------------------------- cookies */
+
+/**
+ * The profile's Netscape `cookies.txt`, straight from the server. That route answers raw
+ * `text/plain` with a `Content-Disposition` on purpose (`curl -O` has to work against it), so it
+ * cannot go through `apiGet` — see `apiText`.
+ *
+ * Both cookie routes answer 409 while the profile is running: the jar on disk is what is read and
+ * written, and a running browser owns it.
+ */
+export function exportCookies(id: string): Promise<TextDownload> {
+  return apiText(API_ROUTES.exportCookies(id))
+}
+
+export function importCookies(id: string, input: CookieImportRequest): Promise<CookieImportResult> {
+  return apiSend<CookieImportResult>(API_ROUTES.importCookies(id), 'POST', input)
 }
 
 /* -------------------------------------------------------------- window synchroniser */

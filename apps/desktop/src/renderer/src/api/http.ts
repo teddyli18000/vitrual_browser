@@ -87,6 +87,53 @@ export async function apiBytes(path: string, init?: RequestInit): Promise<ArrayB
   return res.arrayBuffer()
 }
 
+/** A raw `text/plain` response: the body, plus the filename the server chose for it. */
+export interface TextDownload {
+  text: string
+  /** Decoded `Content-Disposition` filename, or null when the response carried none. */
+  filename: string | null
+}
+
+/**
+ * For endpoints that answer with raw text instead of the `ApiResult` envelope (cookie export).
+ * Wrapping the body in a JSON shape here would invent a contract the server does not have, so the
+ * text is returned as-is and the filename is read back out of `Content-Disposition` — the server
+ * already sanitises it, and guessing it from the profile name in the UI would drift.
+ */
+export async function apiText(path: string): Promise<TextDownload> {
+  const res = await send(path, { headers: { accept: 'text/plain' } })
+  const body = await res.text()
+  if (!res.ok) throw failureFrom(res, body)
+  return { text: body, filename: filenameOf(res.headers.get('content-disposition')) }
+}
+
+/** Prefers the server's own envelope, so a raw-response failure keeps its `code` and message. */
+function failureFrom(res: Response, body: string): ApiError {
+  try {
+    const parsed = JSON.parse(body) as ApiResult<unknown>
+    if (!parsed.success) {
+      return new ApiError(parsed.error.code, parsed.error.message, parsed.error.details)
+    }
+  } catch {
+    // Not an envelope — an empty body, or something a proxy wrote. Fall through.
+  }
+  return new ApiError(`http-${res.status}`, body.slice(0, 200) || `HTTP ${res.status}`)
+}
+
+/** `filename*=UTF-8''…` (RFC 5987) is the real name; `filename="…"` is the ASCII fallback. */
+function filenameOf(header: string | null): string | null {
+  if (!header) return null
+  const extended = header.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  if (extended !== undefined) {
+    try {
+      return decodeURIComponent(extended)
+    } catch {
+      return extended
+    }
+  }
+  return header.match(/filename="([^"]*)"/i)?.[1] ?? null
+}
+
 /** POST raw bytes (profile import) and unwrap the JSON envelope that comes back. */
 export async function apiSendBytes<T>(path: string, bytes: ArrayBuffer): Promise<T> {
   return unwrap<T>(

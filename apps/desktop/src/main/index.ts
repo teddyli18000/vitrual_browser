@@ -296,6 +296,27 @@ function registerIpc(): void {
     },
   )
 
+  /**
+   * Same shape as `vfox:save-export`, for text that is not a profile package. The title and the
+   * filter are the point: a cookie jar is a `.txt` file, and offering it as a `*.zip` package (or
+   * appending `.zip` to a cleared filename) would hand the user a file nothing can read back.
+   */
+  ipcMain.handle(
+    'vfox:save-text',
+    async (_event, input: { suggestedName: string; content: string }) => {
+      const window = mainWindow
+      if (!window) return { saved: false, path: null as string | null }
+      const result = await dialog.showSaveDialog(window, {
+        title: '导出 Cookie',
+        defaultPath: input.suggestedName,
+        filters: [{ name: 'Cookie 文件', extensions: ['txt'] }],
+      })
+      if (result.canceled || !result.filePath) return { saved: false, path: null as string | null }
+      await writeFile(result.filePath, input.content, 'utf8')
+      return { saved: true, path: result.filePath }
+    },
+  )
+
   ipcMain.handle('vfox:pick-import', async () => {
     const window = mainWindow
     if (!window) return null
