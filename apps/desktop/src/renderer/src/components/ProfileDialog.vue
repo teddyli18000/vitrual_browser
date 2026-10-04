@@ -203,19 +203,18 @@ function close(): void {
             <ElInput v-model="draft.fontsText" type="textarea" :rows="3" :placeholder="t('fp.fontsPlaceholder')" />
           </AutoField>
 
-          <AutoField v-model:auto="draft.localeAuto" :label="t('fp.locale')">
-            <ElInput v-model="draft.locale" :placeholder="t('fp.localePlaceholder')" />
-          </AutoField>
-
           <AutoField v-model:auto="draft.hardwareConcurrencyAuto" :label="t('fp.hardwareConcurrency')">
             <ElInputNumber v-model="draft.hardwareConcurrency" :min="1" :max="64" controls-position="right" />
           </AutoField>
 
-          <div class="field">
-            <span class="field-label">{{ t('fp.deviceMemory') }}</span>
-            <ElInputNumber disabled controls-position="right" />
-            <span class="hint warn">{{ t('fp.deviceMemoryUnsupported') }}</span>
-          </div>
+          <!--
+            `locale` spans both columns on purpose. Removing the deviceMemory control left an odd
+            number of half-width fields, which would have left a visibly empty cell in the grid;
+            a full-width locale field both fills it and suits values like "zh-CN,zh;q=0.9".
+          -->
+          <AutoField v-model:auto="draft.localeAuto" :label="t('fp.locale')" class="span-2">
+            <ElInput v-model="draft.locale" :placeholder="t('fp.localePlaceholder')" />
+          </AutoField>
 
           <AutoField v-model:auto="draft.userAgentAuto" :label="t('fp.userAgent')" class="span-2">
             <ElInput v-model="draft.userAgent" :placeholder="t('fp.userAgentPlaceholder')" />
@@ -372,11 +371,6 @@ function close(): void {
   font-size: 11px;
   line-height: 1.5;
   color: var(--vfox-muted);
-}
-
-/* Used for fields the engine cannot honour at all, so they read as a warning, not a hint. */
-.hint.warn {
-  color: #b45309;
 }
 
 .quad {
