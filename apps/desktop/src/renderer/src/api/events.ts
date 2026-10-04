@@ -13,6 +13,8 @@ import {
   type ProfileRuntime,
   SSE_EVENT_KERNEL,
   SSE_EVENT_RUNTIME,
+  SSE_EVENT_SYNC,
+  type SyncSession,
 } from '@vfox/shared'
 import { connectionBase, connectionToken } from './http'
 
@@ -21,6 +23,8 @@ export type StreamState = 'connecting' | 'open' | 'closed'
 export interface EventStreamHandlers {
   onRuntime(runtime: ProfileRuntime): void
   onKernel(progress: KernelProgress): void
+  /** `null` means the synchroniser session ended. */
+  onSync(session: SyncSession | null): void
   onState(state: StreamState, error?: string): void
 }
 
@@ -66,6 +70,7 @@ export function openEventStream(handlers: EventStreamHandlers): () => void {
     }
     if (message.event === SSE_EVENT_RUNTIME) handlers.onRuntime(payload as ProfileRuntime)
     else if (message.event === SSE_EVENT_KERNEL) handlers.onKernel(payload as KernelProgress)
+    else if (message.event === SSE_EVENT_SYNC) handlers.onSync(payload as SyncSession | null)
   }
 
   const run = async (): Promise<void> => {

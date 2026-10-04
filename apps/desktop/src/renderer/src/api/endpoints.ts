@@ -7,6 +7,9 @@ import {
   type ProfileCreate,
   type ProfileRuntime,
   type ProfileUpdate,
+  type SyncSession,
+  type SyncStart,
+  type TileRequest,
 } from '@vfox/shared'
 import { apiBytes, apiGet, apiSend, apiSendBytes, fromBase64, toBase64 } from './http'
 
@@ -80,6 +83,34 @@ export function renameGroup(id: string, name: string): Promise<Group> {
 
 export function deleteGroup(id: string): Promise<void> {
   return apiSend<void>(API_ROUTES.group(id), 'DELETE')
+}
+
+/* -------------------------------------------------------------- window synchroniser */
+
+/**
+ * The live session, or `null` when nothing is being mirrored. The same object arrives on the
+ * `sync` SSE event; this call is only the seed for a view that opens after the session started.
+ */
+export function getSync(): Promise<SyncSession | null> {
+  return apiGet<SyncSession | null>(API_ROUTES.sync)
+}
+
+export function startSync(input: SyncStart): Promise<SyncSession> {
+  return apiSend<SyncSession>(API_ROUTES.syncStart, 'POST', input)
+}
+
+/** Stopping while nothing is active is a no-op on the server, not an error. */
+export function stopSync(): Promise<void> {
+  return apiSend<void>(API_ROUTES.syncStop, 'POST')
+}
+
+/**
+ * Arrange real OS windows. Fails with `ApiError.code === 'tiling_unavailable'` (HTTP 501) when the
+ * host cannot do it — a non-Windows platform, a missing `koffi`, or a display index that does not
+ * exist. The message is written to be shown to the user as-is.
+ */
+export function tileWindows(input: TileRequest): Promise<void> {
+  return apiSend<void>(API_ROUTES.syncTile, 'POST', input)
 }
 
 /* ---------------------------------------------------------------------------- kernel */

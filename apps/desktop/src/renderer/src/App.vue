@@ -8,15 +8,18 @@ import ConnectionBanner from './components/ConnectionBanner.vue'
 import { locale, t } from './i18n'
 import { useConnectionStore } from './stores/connection'
 import { useRuntimeStore } from './stores/runtime'
+import { useSyncStore } from './stores/sync'
 
 const connection = useConnectionStore()
 const runtime = useRuntimeStore()
+const sync = useSyncStore()
 const route = useRoute()
 
 const elementLocale = computed(() => (locale.value === 'zh-CN' ? zhCn : en))
 
 const nav = computed(() => [
   { path: '/profiles', label: t('nav.profiles'), icon: 'Grid' },
+  { path: '/sync', label: t('nav.sync'), icon: 'Connection' },
   { path: '/groups', label: t('nav.groups'), icon: 'FolderOpened' },
   { path: '/settings', label: t('nav.settings'), icon: 'Setting' },
   { path: '/about', label: t('nav.about'), icon: 'InfoFilled' },
@@ -47,7 +50,9 @@ onMounted(() => {
             class="nav-item"
             :class="{ active: route.path === item.path }"
           >
-            {{ item.label }}
+            <span>{{ item.label }}</span>
+            <!-- Mirrored input is a global state: it stays visible from any view. -->
+            <span v-if="item.path === '/sync' && sync.active" class="nav-live" />
           </RouterLink>
         </nav>
 
@@ -126,7 +131,9 @@ onMounted(() => {
 }
 
 .nav-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 13px;
@@ -143,6 +150,27 @@ onMounted(() => {
 .nav-item.active {
   background: var(--vfox-accent);
   color: #fff;
+}
+
+.nav-live {
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--vfox-ok);
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
+  animation: nav-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes nav-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 .sidebar-foot {
