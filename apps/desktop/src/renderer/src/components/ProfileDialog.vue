@@ -13,6 +13,7 @@ import {
 import { t } from '../i18n'
 import { useProfilesStore } from '../stores/profiles'
 import AutoField from './AutoField.vue'
+import ProxyFields from './ProxyFields.vue'
 
 const props = defineProps<{
   modelValue: boolean
@@ -244,57 +245,24 @@ function close(): void {
           <div class="field-label">{{ t('proxy.enable') }}</div>
         </div>
 
-        <div class="grid" :class="{ dim: !draft.proxyEnabled }">
-          <label class="field">
-            <span class="field-label">{{ t('proxy.type') }}</span>
-            <ElSelect v-model="draft.proxy.type" :disabled="!draft.proxyEnabled">
-              <ElOption label="HTTP" value="http" />
-              <ElOption label="HTTPS" value="https" />
-              <ElOption label="SOCKS5" value="socks5" />
-            </ElSelect>
-          </label>
-
-          <label class="field">
-            <span class="field-label">{{ t('proxy.port') }}</span>
-            <ElInputNumber
-              v-model="draft.proxy.port"
-              :min="1"
-              :max="65535"
-              controls-position="right"
-              :disabled="!draft.proxyEnabled"
-            />
-          </label>
-
-          <label class="field span-2">
-            <span class="field-label">{{ t('proxy.host') }}</span>
-            <ElInput
-              v-model="draft.proxy.host"
-              :placeholder="t('proxy.hostPlaceholder')"
-              :disabled="!draft.proxyEnabled"
-            />
-          </label>
-
-          <label class="field">
-            <span class="field-label">{{ t('proxy.username') }}</span>
-            <ElInput v-model="draft.proxy.username" :disabled="!draft.proxyEnabled" autocomplete="off" />
-          </label>
-
-          <label class="field">
-            <span class="field-label">{{ t('proxy.password') }}</span>
-            <ElInput
-              v-model="draft.proxy.password"
-              type="password"
-              show-password
-              :disabled="!draft.proxyEnabled"
-              autocomplete="new-password"
-            />
-          </label>
-        </div>
+        <ProxyFields
+          v-model="draft.proxy"
+          :disabled="!draft.proxyEnabled"
+          :disabled-tip="t('proxy.enableTip')"
+        />
 
         <div class="test-row">
-          <ElButton :loading="testing" :disabled="!draft.proxyEnabled" @click="testProxy">
-            {{ testing ? t('proxy.testing') : t('proxy.test') }}
-          </ElButton>
+          <ElTooltip
+            :disabled="draft.proxyEnabled"
+            :content="t('proxy.enableTip')"
+            placement="top"
+          >
+            <span class="tip-wrap">
+              <ElButton :loading="testing" :disabled="!draft.proxyEnabled" @click="testProxy">
+                {{ testing ? t('proxy.testing') : t('proxy.test') }}
+              </ElButton>
+            </span>
+          </ElTooltip>
           <span v-if="testResult" class="test-result" :class="{ ok: testResult.ok }">
             {{ testResult.message }}
           </span>
@@ -427,6 +395,11 @@ function close(): void {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* A disabled control does not emit pointer events, so the tooltip needs a real box to hover. */
+.tip-wrap {
+  display: inline-block;
 }
 
 .auto-summary {

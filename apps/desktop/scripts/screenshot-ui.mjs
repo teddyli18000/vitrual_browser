@@ -45,7 +45,14 @@ const VIEWPORT = { width: 1440, height: 900 }
 const MIN_SCREENSHOT_BYTES = 4096
 const EXPECTED_ROWS = 8
 /** Written in this order; also the exact set removed before a run, so nothing else is touched. */
-const SHOT_NAMES = ['1-profiles-table', '2-new-profile-dialog', '3-settings', '4-no-core', '5-sync']
+const SHOT_NAMES = [
+  '1-profiles-table',
+  '2-new-profile-dialog',
+  '3-settings',
+  '4-no-core',
+  '5-sync',
+  '6-batch-create',
+]
 
 if (!existsSync(join(rendererDir, 'index.html'))) {
   console.error(`No built renderer at ${rendererDir}. Run: pnpm --filter @vfox/desktop build`)
@@ -360,6 +367,27 @@ try {
   )
   await sleep(600)
   await capture(page, '5-sync')
+
+  /*
+   * 6 — the batch-creation dialog. Captured last so it cannot disturb the navigation the earlier
+   * steps depend on: back to 环境列表, open 批量创建, type a prefix, and wait for the name preview.
+   * The preview is the whole point of the dialog — the names are how the user tells twenty windows
+   * apart — so the shot is only taken once chips are actually on screen.
+   */
+  await page.locator('.nav-item', { hasText: '环境列表' }).first().click()
+  await waitFor(page.locator('.el-table__row').first(), 'the profile table again', pageWatch, {
+    timeoutMs: 15_000,
+  })
+  await page.locator('.toolbar .el-button', { hasText: '批量创建' }).first().click()
+  await waitFor(page.getByText('批量创建环境').first(), 'the batch dialog', pageWatch, {
+    timeoutMs: 15_000,
+  })
+  await page.locator('label.field', { hasText: '名称前缀' }).locator('input').fill('工作号')
+  await waitFor(page.locator('.chip').first(), 'the batch name preview', pageWatch, {
+    timeoutMs: 15_000,
+  })
+  await sleep(600)
+  await capture(page, '6-batch-create')
 } catch (error) {
   failure = error
 } finally {
@@ -389,8 +417,8 @@ for (const file of shots) {
   console.log(`${file}  ${info.size} bytes`)
 }
 
-if (shots.length !== 5) {
-  console.error(`FAILED: expected 5 screenshots, produced ${shots.length}`)
+if (shots.length !== 6) {
+  console.error(`FAILED: expected 6 screenshots, produced ${shots.length}`)
   process.exit(1)
 }
 
