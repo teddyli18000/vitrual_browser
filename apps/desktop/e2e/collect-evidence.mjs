@@ -73,26 +73,69 @@ try {
 
 // ------------------------------------------------------------- the running app, best effort
 let app
-let bridge = null
+const bridge = null
 try {
-  const { _electron: electron } = await import('playwright')
-  app = await electron.launch({
-    executablePath: path.join(appTarget, 'VFox.exe'),
-    timeout: 120_000,
+  // The shipped fuses refuse `--inspect` (apps/desktop/electron-builder.yml), so Playwright's
+  // Electron protocol can never attach: the app opens its window and the client waits forever. That
+  // hardening is deliberate — it stops any local process from debugging the main process — so the
+  // app is driven as an ordinary process and read through its OWN API, which is also how a user's
+  // automation reaches it. The renderer is covered by the ui-screenshots job.
+  const { spawn } = await import('node:child_process')
+  const dataDir = path.join(appTarget, 'data')
+  const engineDir = path.join(appTarget, 'engine-evidence')
+  const port = '9100'
+
+  app = spawn(path.join(appTarget, 'VFox.exe'), [], {
+    cwd: appTarget,
+    env: {
+      ...process.env,
+      VFOX_DATA_DIR: dataDir,
+      VFOX_API_PORT: port,
+      CAMOUFOX_INSTALL_DIR: engineDir,
+    },
+    stdio: 'ignore',
   })
-  const page = await app.firstWindow({ timeout: 120_000 })
-  bridge = await page.evaluate(() => globalThis.vfox ?? null)
+  let exited = null
+  app.on('exit', (code, signal) => {
+    exited = { code, signal }
+  })
+
+  const tokenFile = path.join(dataDir, 'api-token')
+  let token = null
+  let health = null
+  const deadline = Date.now() + 120_000
+  while (Date.now() < deadline && !exited) {
+    try {
+      if (!token && existsSync(tokenFile)) token = readFileSync(tokenFile, 'utf8').trim()
+      if (token) {
+        const response = await fetch(`http://127.0.0.1:${port}/api/v1/health`, {
+          headers: { 'x-vfox-token': token },
+        })
+        if (response.ok) {
+          health = await response.json()
+          break
+        }
+      }
+    } catch {
+      // keep polling: the token file is written non-atomically and the server binds late
+    }
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+
   section(
     'Application',
     [
-      `- window title: \`${await page.title()}\``,
-      `- bridge: \`${JSON.stringify(bridge)}\``,
-      `- user agent: \`${await page.evaluate(() => navigator.userAgent)}\``,
+      `- pid: \`${app.pid}\``,
+      exited ? `- **exited early**: \`${JSON.stringify(exited)}\`` : '- still running',
+      `- API token read: **${Boolean(token)}**`,
+      `- health: \`${JSON.stringify(health)}\``,
+      '',
+      'UI responsiveness is **not** measurable from here: the shipped fuses refuse `--inspect`, so the',
+      'renderer is unreachable from this process. The renderer is covered by the `ui-screenshots` job.',
     ].join('\n'),
   )
 
   // The app's own log file — the thing a maintainer would otherwise have to ask the user for.
-  const dataDir = path.join(appTarget, 'data')
   const logs = []
   const collect = dir => {
     if (!existsSync(dir)) return
