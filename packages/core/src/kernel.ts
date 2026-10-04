@@ -152,6 +152,79 @@ function complete(progress: Partial<KernelProgress> & { phase: KernelPhase }): K
  * and the download/extract boundary are observable. The staged zip is downloaded *before* the
  * existing engine is removed, so a failed download never leaves the user without an engine.
  */
+/** The upstream repository the pinned engine comes from. */
+const ENGINE_REPO = 'daijro/camoufox'
+
+/** `152.0.4-beta.31` -> `{ version: '152.0.4', release: 'beta.31' }`, the shape version.json needs. */
+function splitEngineVersion(full: string): { version: string; release: string } {
+  const at = full.indexOf('-')
+  return at === -1
+    ? { version: full, release: '' }
+    : { version: full.slice(0, at), release: full.slice(at + 1) }
+}
+
+/**
+ * Resolve the engine download URL, preferring a plain CDN URL over `api.github.com`.
+ *
+ * `camoufox-js` resolves through the API, which allows 60 anonymous requests per hour per IP — a
+ * shared VPN exit exhausts that immediately, and the app then reports "Failed to fetch releases …
+ * after 5 attempts" while the same release page opens fine in a browser. The asset URL is
+ * deterministic because the engine is pinned, so it is built here and only verified with a HEAD
+ * request; the API is the fallback, and `VFOX_ENGINE_URL` overrides both for mirrors.
+ *
+ * The arch spelling is not obvious — camoufox-js's `OS_ARCH_MATRIX` says `x86_64` while
+ * Playwright-style tooling says `x64` — so both are tried and the winner is logged.
+ */
+async function resolveEngineUrl(
+  pkgman: { OS_NAME: string; CamoufoxFetcher: { getPlatformArch?: () => string } },
+  emit: ProgressReporter,
+): Promise<string> {
+  const override = process.env.VFOX_ENGINE_URL?.trim()
+  const candidates: string[] = []
+
+  if (override) {
+    candidates.push(override)
+  } else {
+    const platformArch = (() => {
+      try {
+        return pkgman.CamoufoxFetcher.getPlatformArch?.()
+      } catch {
+        return undefined
+      }
+    })()
+    const arches = [...new Set([platformArch, 'x86_64', 'x64', 'arm64'].filter(Boolean))]
+    for (const arch of arches) {
+      candidates.push(
+        `https://github.com/${ENGINE_REPO}/releases/download/v${ENGINE_VERSION}/camoufox-${ENGINE_VERSION}-${pkgman.OS_NAME}.${String(arch)}.zip`,
+      )
+    }
+  }
+
+  emit({ phase: 'checking', message: `Resolving Camoufox ${ENGINE_VERSION}` })
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url, { method: 'HEAD', redirect: 'follow' })
+      if (response.ok) {
+        emit({ phase: 'downloading', message: `Downloading Camoufox ${ENGINE_VERSION}` })
+        return url
+      }
+    } catch {
+      // Try the next candidate; a miss here is not an error until every candidate has failed.
+    }
+  }
+
+  emit({ phase: 'checking', message: 'Falling back to the GitHub API to resolve the engine' })
+  const { CamoufoxFetcher } = await import('camoufox-js/dist/pkgman.js')
+  const fetcher = new CamoufoxFetcher()
+  await fetcher.init()
+  if (fetcher.verstr !== ENGINE_VERSION) {
+    throw new Error(
+      `the engine registry resolved ${fetcher.verstr} but VFox pins ${ENGINE_VERSION}; ` +
+        'refusing to install an engine this build was not tested against',
+    )
+  }
+  return fetcher.url
+}
 export const installCamoufoxEngine: EngineInstaller = async emit => {
   const pkgman = await import('camoufox-js/dist/pkgman.js')
   const { DefaultAddons, maybeDownloadAddons } = await import('camoufox-js/dist/addons.js')
@@ -176,14 +249,14 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
   }
 
   const fetcher = new PinnedFetcher()
-  await fetcher.init()
-
-  if (fetcher.verstr !== ENGINE_VERSION) {
-    throw new Error(
-      `the engine registry resolved ${fetcher.verstr} but VFox pins ${ENGINE_VERSION}; ` +
-        'refusing to install an engine this build was not tested against',
-    )
-  }
+  // Resolve the download URL WITHOUT api.github.com where we can. That endpoint allows 60
+  // anonymous requests per hour per IP, and a user behind a shared VPN exit exhausts it at once —
+  // observed as "Failed to fetch releases … after 5 attempts" while the same release page opened
+  // fine in a browser. The limit is on the *lookup*, not the download: release assets come from a
+  // CDN. The asset URL is deterministic because the engine is pinned, so we build it and only fall
+  // back to the API when every candidate 404s. VFOX_ENGINE_URL overrides both, for mirrors.
+  const url = await resolveEngineUrl(pkgman, emit)
+  fetcher._url = url
 
   let current: string | null = null
   try {
@@ -192,16 +265,22 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
     current = null
   }
 
-  if (current !== fetcher.verstr || !(await exists(path.join(target, LAUNCH_FILE)))) {
+  if (current !== ENGINE_VERSION || !(await exists(path.join(target, LAUNCH_FILE)))) {
     await requireFreeSpace(target)
     const staging = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-camoufox-'))
     try {
-      const archive = await downloadEngine(fetcher, staging, emit)
-      emit({ phase: 'extracting', message: `Extracting Camoufox ${fetcher.verstr}` })
+      const archive = await downloadEngine(url, ENGINE_VERSION, staging, emit)
+      emit({ phase: 'extracting', message: `Extracting Camoufox ${ENGINE_VERSION}` })
       pkgman.CamoufoxFetcher.cleanup()
       await fs.mkdir(target, { recursive: true })
       await fetcher.extractZip(archive)
-      fetcher.setVersion()
+      // setVersion() writes version.json from the fetcher's resolved release; we resolved the URL
+      // ourselves, so write the same shape directly.
+      await fs.writeFile(
+        path.join(target, 'version.json'),
+        JSON.stringify(splitEngineVersion(ENGINE_VERSION)),
+        'utf8',
+      )
       if (process.platform !== 'win32') {
         execFileSync('chmod', ['-R', '755', target])
       }
@@ -219,14 +298,15 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
 
 /** Stream the engine archive into `staging` and return its path, reporting real byte counts. */
 async function downloadEngine(
-  fetcher: CamoufoxFetcher,
+  url: string,
+  version: string,
   staging: string,
   emit: ProgressReporter,
 ): Promise<string> {
   const { webdl } = await import('camoufox-js/dist/pkgman.js')
   const archive = path.join(staging, 'camoufox.zip')
   const file = createWriteStream(archive)
-  const total = await contentLength(fetcher.url)
+  const total = await contentLength(url)
   let received = 0
 
   const sink = new Writable({
@@ -237,7 +317,7 @@ async function downloadEngine(
         percent: total ? Math.min(100, Math.round((received / total) * 100)) : null,
         receivedBytes: received,
         totalBytes: total,
-        message: `Downloading Camoufox ${fetcher.verstr}`,
+        message: `Downloading Camoufox ${version}`,
       })
       file.write(chunk, callback)
     },
@@ -248,13 +328,13 @@ async function downloadEngine(
     percent: 0,
     receivedBytes: 0,
     totalBytes: total,
-    message: `Downloading Camoufox ${fetcher.verstr}`,
+    message: `Downloading Camoufox ${version}`,
   })
 
   try {
     // `webdl` keeps camoufox-js's retry policy and GitHub auth handling; the Writable is how its
     // output is observed (it writes every chunk into the buffer it is given).
-    await webdl(fetcher.url, '', false, sink)
+    await webdl(url, '', false, sink)
     await new Promise<void>((resolve, reject) => {
       file.close(error => (error ? reject(error) : resolve()))
     })

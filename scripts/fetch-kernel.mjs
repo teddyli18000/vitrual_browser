@@ -2,33 +2,38 @@
 /**
  * fetch-kernel.mjs — install the PINNED Camoufox engine used by VFox.
  *
- * Why this is not a bare `camoufox-js fetch`:
+ * ## Why this does not call the GitHub API
  *
- *   1. **The version is pinned.** `camoufox fetch` always takes the newest release in range, which
- *      is how engine 156.0.1-beta.34 arrived and broke launching: it removed every `canvas:*`
- *      config key, so a profile's canvas hash changed between launches and its stored identity
- *      could no longer be reproduced. The pinned version lives in
- *      `packages/shared/src/constants.ts` and is read here through `scripts/engine-version.mjs`.
- *   2. `CAMOUFOX_INSTALL_DIR` is pinned into the repo-local `.cache/camoufox` when unset, so
- *      `actions/cache`, `scripts/kernel-path.mjs` and the application agree on one path.
- *   3. It re-reads `version.json` afterwards and fails loudly if the engine is not actually there.
+ * `camoufox-js` resolves the download through `https://api.github.com/repos/.../releases`, which is
+ * rate-limited to **60 requests per hour per IP** for anonymous callers. A user behind a shared VPN
+ * exit — the normal situation here — exhausts that immediately, and the app then reported
+ * "Failed to fetch releases … after 5 attempts" while the very same release page opened fine in a
+ * browser. The rate limit is on the *lookup*, not on the download: release assets are served from a
+ * CDN and are not rate-limited at all.
  *
- * The pin uses `CamoufoxFetcher.checkAsset`, the library's own extension point: it is handed every
- * release asset and returns the one to use. Overriding it to accept only the pinned
- * `Version.fullString` keeps the download, extraction and version bookkeeping inside camoufox-js —
- * we only say *which* release.
+ * Because the engine is pinned, the asset URL is fully deterministic, so we build it and skip the
+ * API entirely. The API remains as a last-resort fallback, and `VFOX_ENGINE_URL` overrides
+ * everything for users who need a mirror.
  *
- * `GITHUB_TOKEN` is honoured automatically by camoufox-js for api.github.com; CI passes
- * `${{ github.token }}` so the lookup is authenticated instead of sharing the anonymous budget.
+ * ## Why the version is pinned
+ *
+ * `camoufox fetch` always takes the newest release in range, which is how engine 156.0.1-beta.34
+ * arrived and broke launching: it removed every `canvas:*` config key, so a profile's canvas hash
+ * changed between launches and its stored identity could no longer be reproduced. Newest is not
+ * best for a fingerprint browser.
  *
  * Usage:
  *   node scripts/fetch-kernel.mjs
  */
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { ENGINE_VERSION } from './engine-version.mjs'
+
+const ENGINE_REPO = 'daijro/camoufox'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const defaultDir = path.join(repoRoot, '.cache', 'camoufox')
@@ -49,7 +54,8 @@ const readInstalledVersion = () => {
 }
 
 const already = readInstalledVersion()
-if (already === ENGINE_VERSION && existsSync(path.join(installDir, 'camoufox.exe'))) {
+const verifying = process.argv.includes('--verify-url')
+if (!verifying && already === ENGINE_VERSION && existsSync(path.join(installDir, 'camoufox.exe'))) {
   console.error(`[fetch-kernel] already installed: ${already}`)
   console.log(already)
   process.exit(0)
@@ -66,52 +72,155 @@ try {
   process.exit(1)
 }
 
-let fetcher
-try {
-  /** Accept only the pinned release; every other asset is rejected and the library keeps looking. */
-  class PinnedFetcher extends pkgman.CamoufoxFetcher {
-    checkAsset(asset) {
-      const found = super.checkAsset(asset)
-      if (!found) return null
-      const [version] = found
-      return version.fullString === ENGINE_VERSION ? found : null
+// `--verify-url` resolves the download URL and stops, without downloading 220 MB. It exists so CI
+// can prove the direct CDN path still works even when the engine cache is warm and the fetch itself
+// is skipped — otherwise a broken asset name would only surface the day the cache missed.
+if (process.argv.includes('--verify-url')) {
+  const candidates = candidateUrls()
+  console.error(`[fetch-kernel] verifying ${candidates.length} candidate URL(s)`)
+  for (const url of candidates) {
+    const size = await headOk(url)
+    if (size !== null) {
+      console.error(`[fetch-kernel] OK  (${(size / 1024 / 1024).toFixed(1)} MB) ${url}`)
+      console.log(url)
+      process.exit(0)
     }
+    console.error(`[fetch-kernel] miss ${url}`)
   }
-  fetcher = new PinnedFetcher()
+  console.error(
+    '[fetch-kernel] no direct URL resolved. The pinned asset name or tag may have changed upstream;\n' +
+      '  check https://github.com/daijro/camoufox/releases and update ENGINE_VERSION if needed.',
+  )
+  process.exit(1)
+}
+
+/** `152.0.4-beta.31` -> `{ version: '152.0.4', release: 'beta.31' }`, the shape version.json needs. */
+function splitVersion(full) {
+  const at = full.indexOf('-')
+  return at === -1
+    ? { version: full, release: '' }
+    : { version: full.slice(0, at), release: full.slice(at + 1) }
+}
+
+/**
+ * Candidate asset URLs, most specific first. The arch spelling is not obvious — camoufox-js's
+ * `OS_ARCH_MATRIX` uses `x86_64` while Playwright-style tooling uses `x64` — so both are tried and
+ * the winner is reported. A 404 on one candidate is not an error; a 404 on all of them is.
+ */
+function candidateUrls() {
+  const urls = []
+  const override = process.env.VFOX_ENGINE_URL?.trim()
+  if (override) urls.push(override)
+
+  const osName = pkgman.OS_NAME
+  const platformArch = (() => {
+    try {
+      return pkgman.CamoufoxFetcher.getPlatformArch()
+    } catch {
+      return undefined
+    }
+  })()
+  const arches = [...new Set([platformArch, 'x86_64', 'x64', 'arm64'].filter(Boolean))]
+
+  for (const arch of arches) {
+    urls.push(
+      `https://github.com/${ENGINE_REPO}/releases/download/v${ENGINE_VERSION}/camoufox-${ENGINE_VERSION}-${osName}.${arch}.zip`,
+    )
+  }
+  return urls
+}
+
+async function headOk(url) {
+  try {
+    const response = await fetch(url, { method: 'HEAD', redirect: 'follow' })
+    return response.ok ? Number(response.headers.get('content-length') ?? 0) : null
+  } catch {
+    return null
+  }
+}
+
+async function download(url, destination) {
+  const response = await fetch(url, { redirect: 'follow' })
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const bytes = Buffer.from(await response.arrayBuffer())
+  await fs.writeFile(destination, bytes)
+  return bytes.length
+}
+
+async function installFrom(url) {
+  const staging = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-camoufox-'))
+  const archive = path.join(staging, 'engine.zip')
+  try {
+    const bytes = await download(url, archive)
+    console.error(`[fetch-kernel] downloaded ${(bytes / 1024 / 1024).toFixed(1)} MB`)
+    // `extractZip` is `new AdmZip(file).extractAllTo(INSTALL_DIR, true)` — it holds no fetcher
+    // state, so it works on a fetcher that never ran `init()`.
+    const fetcher = new pkgman.CamoufoxFetcher()
+    await fetcher.extractZip(archive)
+    const { version, release } = splitVersion(ENGINE_VERSION)
+    writeFileSync(
+      path.join(installDir, 'version.json'),
+      JSON.stringify({ version, release }),
+      'utf8',
+    )
+  } finally {
+    await fs.rm(staging, { recursive: true, force: true })
+  }
+}
+
+/** Last resort: let camoufox-js resolve it, which needs api.github.com. */
+async function installViaApi() {
+  const fetcher = new pkgman.CamoufoxFetcher()
   await fetcher.init()
-} catch (error) {
-  console.error(
-    `[fetch-kernel] could not resolve the pinned engine ${ENGINE_VERSION}: ${error.message}\n` +
-      '  This is the same GitHub release lookup `camoufox fetch` performs.\n' +
-      '  Check network access to api.github.com and that GITHUB_TOKEN is set to avoid the\n' +
-      '  unauthenticated rate limit. If the release was withdrawn, bump ENGINE_VERSION in\n' +
-      '  packages/shared/src/constants.ts after checking the smoke test still passes on the new one.',
-  )
-  process.exit(1)
-}
-
-if (fetcher.verstr !== ENGINE_VERSION) {
-  console.error(
-    `[fetch-kernel] resolved ${fetcher.verstr} but ${ENGINE_VERSION} was pinned — refusing to continue`,
-  )
-  process.exit(1)
-}
-
-try {
+  if (fetcher.verstr !== ENGINE_VERSION) {
+    throw new Error(`the registry resolved ${fetcher.verstr}, not the pinned ${ENGINE_VERSION}`)
+  }
   const archive = await pkgman.CamoufoxFetcher.downloadFile(fetcher.url)
   pkgman.CamoufoxFetcher.cleanup()
   await fetcher.extractZip(archive)
   fetcher.setVersion()
-} catch (error) {
-  console.error(`[fetch-kernel] install failed: ${error.message}`)
-  process.exit(1)
 }
 
-const installed = readInstalledVersion()
-console.error(`[fetch-kernel] installed: ${installed ?? 'unknown'}`)
-if (installed !== ENGINE_VERSION) {
+const candidates = candidateUrls()
+console.error(`[fetch-kernel] ${candidates.length} direct candidate URL(s); no API call needed`)
+let installed = false
+for (const url of candidates) {
+  const size = await headOk(url)
+  if (size === null) {
+    console.error(`[fetch-kernel] miss: ${url}`)
+    continue
+  }
+  console.error(`[fetch-kernel] hit (${(size / 1024 / 1024).toFixed(1)} MB): ${url}`)
+  try {
+    await installFrom(url)
+    installed = true
+    break
+  } catch (error) {
+    console.error(`[fetch-kernel] download/extract failed from ${url}: ${error.message}`)
+  }
+}
+
+if (!installed) {
+  console.error('[fetch-kernel] no direct URL worked; falling back to the GitHub API')
+  try {
+    await installViaApi()
+    installed = true
+  } catch (error) {
+    console.error(
+      `[fetch-kernel] API fallback failed too: ${error.message}\n` +
+        '  If this is a rate limit, set VFOX_ENGINE_URL to a mirror of\n' +
+        `  camoufox-${ENGINE_VERSION}-<os>.<arch>.zip, or download it in a browser and extract it\n` +
+        `  into ${installDir}.`,
+    )
+    process.exit(1)
+  }
+}
+
+const finalVersion = readInstalledVersion()
+console.error(`[fetch-kernel] installed: ${finalVersion ?? 'unknown'}`)
+if (finalVersion !== ENGINE_VERSION) {
   console.error(
-    `[fetch-kernel] expected ${ENGINE_VERSION} after install but found ${installed ?? 'nothing'}`,
+    `[fetch-kernel] expected ${ENGINE_VERSION} after install but found ${finalVersion ?? 'nothing'}`,
   )
   process.exit(1)
 }
@@ -120,4 +229,4 @@ if (!existsSync(path.join(installDir, 'camoufox.exe'))) {
   process.exit(1)
 }
 
-console.log(installed)
+console.log(finalVersion)
