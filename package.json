@@ -1,6 +1,6 @@
 {
   "name": "vfox",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "description": "VFox — a lightweight, open-source, telemetry-free anti-detect (fingerprint) browser for Windows, powered by the Camoufox engine.",
   "license": "MIT",
