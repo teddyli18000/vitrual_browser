@@ -87,10 +87,38 @@ if (process.argv.includes('--verify-url')) {
     }
     console.error(`[fetch-kernel] miss ${url}`)
   }
-  console.error(
-    '[fetch-kernel] no direct URL resolved. The pinned asset name or tag may have changed upstream;\n' +
-      '  check https://github.com/daijro/camoufox/releases and update ENGINE_VERSION if needed.',
-  )
+  // Self-diagnosing failure: ask the API (which is authenticated in CI, so not rate-limited) what
+  // the release actually contains, instead of making the next person guess asset names.
+  console.error('[fetch-kernel] no direct URL resolved; asking the API what the release contains')
+  try {
+    const headers = process.env.GITHUB_TOKEN
+      ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
+      : {}
+    const response = await fetch(
+      `https://api.github.com/repos/${ENGINE_REPO}/releases/tags/v${ENGINE_VERSION}`,
+      { headers },
+    )
+    console.error(`[fetch-kernel] API status for tag v${ENGINE_VERSION}: ${response.status}`)
+    if (response.ok) {
+      const release = await response.json()
+      console.error(`[fetch-kernel] release tag: ${release.tag_name}`)
+      for (const asset of release.assets ?? []) {
+        console.error(`[fetch-kernel]   asset: ${asset.name}`)
+      }
+    } else {
+      const releases = await fetch(
+        `https://api.github.com/repos/${ENGINE_REPO}/releases?per_page=5`,
+        { headers },
+      )
+      if (releases.ok) {
+        const list = await releases.json()
+        console.error('[fetch-kernel] recent tags:')
+        for (const item of list) console.error(`[fetch-kernel]   ${item.tag_name}`)
+      }
+    }
+  } catch (error) {
+    console.error(`[fetch-kernel] could not query the API either: ${error.message}`)
+  }
   process.exit(1)
 }
 
