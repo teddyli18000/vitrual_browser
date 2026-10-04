@@ -274,7 +274,11 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
   }
 
   if (current !== ENGINE_VERSION || !(await exists(path.join(target, LAUNCH_FILE)))) {
+    // The archive is staged in `os.tmpdir()` and only then extracted into `target`, so on the
+    // common small-system-drive layout the engine volume passes this check while the staging volume
+    // fills up — and ENOSPC during the download is the crash path. Both volumes are checked.
     await requireFreeSpace(target)
+    await requireFreeSpace(os.tmpdir())
     const staging = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-camoufox-'))
     try {
       const archive = await downloadEngine(url, ENGINE_VERSION, staging, emit)
@@ -299,7 +303,7 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
 
   if (!(await exists(path.join(target, MMDB_FILE)))) {
     emit({ phase: 'downloading', message: 'Downloading the GeoIP database' })
-    await downloadGeoIpDatabase(emit)
+    await downloadGeoIpDatabase(target, emit)
   }
   await maybeDownloadAddons(DefaultAddons)
 }
@@ -317,8 +321,12 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
  * by default. So the direct CDN URL is tried first, camoufox-js's API path second, and a total
  * failure is a warning rather than an error.
  */
-async function downloadGeoIpDatabase(emit: ProgressReporter): Promise<boolean> {
-  const destination = path.join(await resolveEngineDir(), MMDB_FILE)
+async function downloadGeoIpDatabase(target: string, emit: ProgressReporter): Promise<void> {
+  // One directory source. `resolveEngineDir()` re-reads the env var on every call while the install
+  // uses the frozen `pkgman.INSTALL_DIR`; mixing them means the database can be written to one
+  // directory while the caller checks the other, so it re-downloads on every install. The caller
+  // already knows which directory this install is using, so it is passed in.
+  const destination = path.join(target, MMDB_FILE)
   // `/releases/latest/download/<asset>` redirects straight to the newest asset, so it needs no API
   // call and no pinned tag — the upstream tag is a date that changes every day.
   const direct =
@@ -337,7 +345,7 @@ async function downloadGeoIpDatabase(emit: ProgressReporter): Promise<boolean> {
           phase: 'downloading',
           message: `GeoIP database ready (${formatBytes(bytes.length)})`,
         })
-        return true
+        return
       }
     }
   } catch {
@@ -347,7 +355,7 @@ async function downloadGeoIpDatabase(emit: ProgressReporter): Promise<boolean> {
   try {
     const { downloadMMDB } = await import('camoufox-js/dist/locale.js')
     await downloadMMDB()
-    return await exists(destination)
+    return
   } catch (error) {
     emit({
       phase: 'downloading',
@@ -355,7 +363,6 @@ async function downloadGeoIpDatabase(emit: ProgressReporter): Promise<boolean> {
         `GeoIP database unavailable (${error instanceof Error ? error.message : String(error)}). Continuing — it is only used when a ` +
         'profile enables fingerprint.geoip.',
     })
-    return false
   }
 }
 
@@ -401,6 +408,16 @@ async function downloadEngine(
       // below a real flush rather than a race.
       file.write(chunk, callback)
     },
+  })
+
+  // The write error surfaces on the SINK, not on `file`: the sink's write callback *is*
+  // `file.write`'s callback, so a failing write rejects the sink's write and the Writable emits
+  // 'error'. Node throws for an unhandled 'error' event, which bypasses `sink.end()`'s callback,
+  // the catch below and every check inside it — producing exactly the fatal dialog this drain logic
+  // was added to remove, just triggered by ENOSPC instead of a race. Found by adversarial review and
+  // reproduced as an uncaught ENOSPC with the listener missing.
+  sink.on('error', error => {
+    streamError ??= error
   })
 
   emit({
