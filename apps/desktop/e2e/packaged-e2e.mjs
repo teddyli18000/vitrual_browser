@@ -640,9 +640,14 @@ if (after) {
 executed.push('stopping every profile and asserting no engine process is orphaned')
 
 app.kill()
-if (!keepData) {
+// Best effort, and it says so. The app was just killed and Windows can still hold the directory
+// for a moment, so a thrown EPERM here would fail a run whose every assertion passed - which is
+// exactly what happened. These directories live under release/ and are not shipped.
+try {
   rmSync(dataDir, { recursive: true, force: true })
   rmSync(engineDir, { recursive: true, force: true })
+} catch (error) {
+  note(`could not remove the test directories (${error.message})`)
 }
 origin.close()
 
