@@ -32,7 +32,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { checkWebglDatabase, describeArtifact } from './lib/artifact.mjs'
 
@@ -40,7 +40,6 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..', '..', '..')
 
 /** `packages/core/scripts/lib/user32.mjs` — the one window/process lookup in this repository. */
-const user32 = await import(path.join(repoRoot, 'packages', 'core', 'scripts', 'lib', 'user32.mjs'))
 
 const failures = []
 const notes = []
@@ -120,6 +119,12 @@ writeFileSync(
   'written by apps/desktop/e2e/packaged-e2e.mjs so the test runs against its own data directory\n',
 )
 
+// `import()` takes a URL, not a Windows path: a bare `D:\...` is parsed as the URL scheme `d:`
+// and the ESM loader rejects it with ERR_UNSUPPORTED_ESM_URL_SCHEME. That is what the first CI run
+// of this job reported.
+const user32 = await import(
+  pathToFileURL(path.join(repoRoot, 'packages', 'core', 'scripts', 'lib', 'user32.mjs')).href,
+)
 const { _electron: electron } = await import('playwright')
 const { firefox } = await import('playwright-core')
 
