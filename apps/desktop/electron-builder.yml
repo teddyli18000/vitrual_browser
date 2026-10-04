@@ -35,6 +35,17 @@ asar: true
 # Native addons (impit, pulled in by camoufox-js) cannot be dlopen'd from inside an asar.
 asarUnpack:
   - '**/*.node'
+  # camoufox-js reads this SQLite database with a NATIVE driver (better-sqlite3), and native code
+  # does not go through Electron's asar shim — the shim patches Node's fs layer, while the driver
+  # calls into libuv directly. Electron's own documentation lists exactly which APIs need the file
+  # to be real: `fs.open`, `fs.openSync` and `process.dlopen` "rely on passing the real file path
+  # to underlying system calls".
+  #
+  # Verified against the shipped v0.2.0 package, not inferred: `webgl_data.db` was inside
+  # `app.asar` (the header names it) and `app.asar.unpacked` held only better-sqlite3's own files,
+  # so every profile creation died with SQLITE_CANTOPEN "unable to open database file". No CI job
+  # had ever launched a browser from the packaged artifact, which is why it reached a user.
+  - '**/camoufox-js/dist/data-files/**'
 
 # The UI ships zh-CN + en only. Chromium's 55 locale packs are ~46 MB of dead weight in an
 # installer that is otherwise dominated by the Electron runtime.
