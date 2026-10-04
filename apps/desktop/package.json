@@ -9,7 +9,7 @@
   "main": "./out/main/index.cjs",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build && node scripts/copy-worker.mjs",
+    "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "dist": "electron-vite build && electron-builder --win --x64 --publish never",

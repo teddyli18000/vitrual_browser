@@ -305,7 +305,8 @@ const FORBIDDEN_OUTSIDE_DEPENDENCIES = [
  *
  *     Cannot find module '…\resources\app.asar\out\main\unzip-worker.js'
  *
- * `apps/desktop/scripts/copy-worker.mjs` puts it there as part of the build. This asserts the
+ * The `engineWorkerPlugin` in `apps/desktop/electron.vite.config.ts` puts it there as part of every
+ * build. This asserts the
  * result rather than trusting the build step, because the build step is exactly what was missing.
  *
  * @param {ReturnType<typeof describeArtifact>} artifact
@@ -324,8 +325,8 @@ export function checkMainWorker(artifact) {
       ? []
       : [
           `the engine-extraction worker \`${MAIN_WORKER}\` is not inside app.asar. Every engine ` +
-            'install will fail with "Cannot find module". Check that `node scripts/copy-worker.mjs` ' +
-            'runs as part of the desktop build in apps/desktop/package.json.',
+            'install will fail with "Cannot find module". Check the engineWorkerPlugin in ' +
+            'apps/desktop/electron.vite.config.ts, which copies it as part of every build.',
         ],
   }
 }
