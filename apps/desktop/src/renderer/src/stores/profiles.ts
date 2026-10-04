@@ -1,10 +1,11 @@
-import type { Group, Profile, ProfileCreate, ProfileUpdate } from '@vfox/shared'
+import type { Group, Profile, ProfileBatchCreate, ProfileCreate, ProfileUpdate } from '@vfox/shared'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
   cloneProfile,
   createGroup,
   createProfile,
+  createProfilesBatch,
   deleteGroup,
   deleteProfile,
   exportProfile,
@@ -82,6 +83,16 @@ export const useProfilesStore = defineStore('profiles', () => {
     const profile = await createProfile(input)
     upsert(profile)
     return profile
+  }
+
+  /**
+   * Bulk creation in one request. The API is all-or-nothing, so this either inserts every returned
+   * profile or throws with nothing inserted — never a partial list.
+   */
+  async function createBatch(input: ProfileBatchCreate): Promise<Profile[]> {
+    const created = await createProfilesBatch(input)
+    for (const profile of created) upsert(profile)
+    return created
   }
 
   async function update(id: string, patch: ProfileUpdate): Promise<Profile> {
@@ -224,6 +235,7 @@ export const useProfilesStore = defineStore('profiles', () => {
     upsert,
     load,
     create,
+    createBatch,
     update,
     remove,
     clone,

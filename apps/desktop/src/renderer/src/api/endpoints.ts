@@ -4,6 +4,7 @@ import {
   type Health,
   type KernelInfo,
   type Profile,
+  type ProfileBatchCreate,
   type ProfileCreate,
   type ProfileRuntime,
   type ProfileUpdate,
@@ -21,6 +22,15 @@ export function listProfiles(): Promise<Profile[]> {
 
 export function createProfile(input: ProfileCreate): Promise<Profile> {
   return apiSend<Profile>(API_ROUTES.profiles, 'POST', input)
+}
+
+/**
+ * One request, `count` profiles, each with its own generated identity. All or nothing: a failure
+ * means the store is untouched, so the caller must report "nothing was created" rather than a
+ * partial count. The result is in creation order.
+ */
+export function createProfilesBatch(input: ProfileBatchCreate): Promise<Profile[]> {
+  return apiSend<Profile[]>(API_ROUTES.createProfilesBatch, 'POST', input)
 }
 
 export function updateProfile(id: string, patch: ProfileUpdate): Promise<Profile> {

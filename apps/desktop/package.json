@@ -15,7 +15,9 @@
     "dist": "electron-vite build && electron-builder --win --x64 --publish never",
     "icons": "node scripts/generate-icons.mjs",
     "smoke:api": "node scripts/smoke-api.mjs",
-    "check:ui": "node scripts/check-ui-registration.mjs",
+    "check:ui": "node scripts/check-ui-registration.mjs && node scripts/check-ui.mjs",
+    "check:ui-registration": "node scripts/check-ui-registration.mjs",
+    "check:ui-integrity": "node scripts/check-ui.mjs",
     "shots": "node scripts/screenshot-ui.mjs",
     "lint": "biome check src"
   },

@@ -16,7 +16,7 @@
 import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { startServer } from '@vfox/server'
-import { API_ROUTES, API_TOKEN_HEADER, SSE_EVENT_RUNTIME } from '@vfox/shared'
+import { API_ROUTES, API_TOKEN_HEADER, MAX_BATCH_PROFILES, SSE_EVENT_RUNTIME } from '@vfox/shared'
 
 const withLaunch = process.argv.includes('--launch')
 const dataDir = join(process.cwd(), '.cache', 'tmp', `vfox-smoke-${process.pid}`)
@@ -190,6 +190,60 @@ let profileId = ''
     res.status === 404 && res.json?.success === false,
     'GET unknown profile -> 404 + error envelope',
     `HTTP ${res.status}`,
+  )
+}
+
+/* ------------------------------------------------------------------ batch creation */
+
+{
+  // Exactly the payload 批量创建环境 sends: count + prefix + groupId, plus an optional shared
+  // fingerprint constraint. This is the contract the dialog is built on, so it is checked here
+  // rather than assumed.
+  const res = await call(API_ROUTES.createProfilesBatch, {
+    method: 'POST',
+    body: { count: 3, namePrefix: '冒烟批量', groupId: null, fingerprint: { os: 'linux' } },
+  })
+  const created = res.json?.data
+  record(
+    isOk(res.status) && Array.isArray(created) && created.length === 3,
+    'POST /profiles/batch creates N profiles in one call',
+    why(res),
+  )
+  record(
+    created?.[0]?.name === '冒烟批量 1' && created?.[2]?.name === '冒烟批量 3',
+    'batch names are "<prefix> <index>" starting at 1',
+    (created ?? []).map(profile => profile.name).join(', '),
+  )
+  record(
+    (created ?? []).every(profile => profile.fingerprint?.os === 'linux' && profile.identity),
+    'every batched profile shares the constraint but has its own generated identity',
+    `os=${created?.[0]?.fingerprint?.os} identities=${(created ?? []).filter(p => p.identity).length}/${created?.length ?? 0}`,
+  )
+  for (const profile of created ?? []) {
+    await call(API_ROUTES.profile(profile.id), { method: 'DELETE' })
+  }
+}
+{
+  // The API cap. The dialog enforces the same number so the user never meets this error, which is
+  // why the boundary is asserted here rather than left to the zod message.
+  const res = await call(API_ROUTES.createProfilesBatch, {
+    method: 'POST',
+    body: { count: MAX_BATCH_PROFILES + 1, namePrefix: '冒烟超限' },
+  })
+  record(res.status === 400, `POST /profiles/batch rejects count > ${MAX_BATCH_PROFILES}`, why(res))
+}
+{
+  // All-or-nothing: an invalid prefix must leave the store exactly as it was.
+  const before = (await call(API_ROUTES.profiles)).json?.data?.length ?? -1
+  const res = await call(API_ROUTES.createProfilesBatch, {
+    method: 'POST',
+    body: { count: 2, namePrefix: '' },
+  })
+  const after = (await call(API_ROUTES.profiles)).json?.data?.length ?? -1
+  record(
+    res.status === 400 && before === after,
+    'a rejected batch creates nothing (all-or-nothing)',
+    `${why(res)} profiles ${before} -> ${after}`,
   )
 }
 

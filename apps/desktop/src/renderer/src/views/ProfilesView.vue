@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { errorMessage } from '../api/http'
+import BatchCreateDialog from '../components/BatchCreateDialog.vue'
 import ProfileDetail from '../components/ProfileDetail.vue'
 import ProfileDialog from '../components/ProfileDialog.vue'
 import StatusDot from '../components/StatusDot.vue'
@@ -27,6 +28,7 @@ const groupFilter = ref<string | null>(null)
 const selected = ref<Profile[]>([])
 const currentRow = ref<Profile | null>(null)
 const dialogOpen = ref(false)
+const batchOpen = ref(false)
 const editing = ref<Profile | null>(null)
 const searchInput = ref<{ focus: () => void } | null>(null)
 
@@ -310,6 +312,17 @@ onUnmounted(() => {
         {{ t('profiles.new') }}
         <span class="kbd">Ctrl+N</span>
       </ElButton>
+      <ElTooltip
+        :disabled="connection.state !== 'offline'"
+        :content="t('batch.offlineTip')"
+        placement="top"
+      >
+        <span class="tip-wrap">
+          <ElButton :disabled="connection.state === 'offline'" @click="batchOpen = true">
+            {{ t('batch.button') }}
+          </ElButton>
+        </span>
+      </ElTooltip>
       <ElButton :disabled="batching || !connection.state || connection.state === 'offline'" @click="batchStart">
         {{ t('profiles.batchStart') }}
       </ElButton>
@@ -477,10 +490,16 @@ onUnmounted(() => {
     <footer class="foot vfox-muted">{{ t('detail.startHint') }}</footer>
 
     <ProfileDialog v-model="dialogOpen" :profile="editing" :groups="store.groups" />
+    <BatchCreateDialog v-model="batchOpen" :groups="store.groups" />
   </section>
 </template>
 
 <style scoped>
+/* A disabled control does not emit pointer events, so the tooltip needs a real box to hover. */
+.tip-wrap {
+  display: inline-block;
+}
+
 .view {
   display: flex;
   flex-direction: column;
