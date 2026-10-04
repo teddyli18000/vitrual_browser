@@ -133,6 +133,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/fetch-kernel.mjs
 
+      # Engine updates change which config keys are accepted. Engine 156 dropped canvas:aaOffset,
+      # the tolerance path dropped the pin, and a profile silently lost its canvas stability. Print the
+      # surface so the cause is readable from the log instead of inferred across a CI cycle.
+      - name: Report the engine fingerprint surface
+        run: node scripts/engine-surface.mjs
+
       - name: Build the workspace
         run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build && pnpm --filter @vfox/sync build
 
@@ -253,6 +259,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/fetch-kernel.mjs
+
+      # Engine updates change which config keys are accepted. Engine 156 dropped canvas:aaOffset,
+      # the tolerance path dropped the pin, and a profile silently lost its canvas stability. Print the
+      # surface so the cause is readable from the log instead of inferred across a CI cycle.
+      - name: Report the engine fingerprint surface
+        run: node scripts/engine-surface.mjs
 
       - name: Build the workspace
         run: pnpm --filter @vfox/shared build && pnpm --filter @vfox/core build && pnpm --filter @vfox/server build
