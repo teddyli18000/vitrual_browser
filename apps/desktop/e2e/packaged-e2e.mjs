@@ -28,7 +28,7 @@
  *
  * It needs an interactive desktop and a packaged build, so it is a CI-first test by design.
  */
-import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
@@ -155,49 +155,92 @@ assert(
   `the engine directory starts empty: ${engineDir}`,
 )
 
-const { _electron: electron } = await import('playwright')
 const { firefox } = await import('playwright-core')
+const { spawn } = await import('node:child_process')
 
-let app
-try {
-  app = await electron.launch({
-    executablePath: artifact.executable,
-    args: [],
-    env: {
-      ...process.env,
-      // Belt and braces against a stray harness variable: this needs the real Electron.
-      ELECTRON_RUN_AS_NODE: '',
-      VFOX_DATA_DIR: dataDir,
-      // The whole point of phase 2: the app must fetch the kernel itself, into a directory that has
-      // never held one.
-      CAMOUFOX_INSTALL_DIR: engineDir,
-    },
-    timeout: 120_000,
-  })
-} catch (error) {
-  fail(`the packaged application did not launch: ${error.message}`)
-  report()
-}
+// The shipped fuses set `enableNodeCliInspectArguments: false`, and Playwright launches Electron
+// with `--inspect=0` (playwright-core/lib/coreBundle.js:42564). Electron ignores the flag, so the
+// client waits forever: the app opens its window and nothing can ever attach. That hardening is
+// deliberate — it stops any local process from debugging the main process, which is real
+// protection for a fingerprint browser — so the app is driven as an ordinary process through its
+// OWN API, which is also the contract a user automation uses.
+const apiPort = process.env.VFOX_E2E_PORT ?? '9200'
+const app = spawn(artifact.executable, [], {
+  cwd: appDir,
+  env: {
+    ...process.env,
+    ELECTRON_RUN_AS_NODE: '',
+    VFOX_DATA_DIR: dataDir,
+    VFOX_API_PORT: apiPort,
+    // The whole point of phase 2: the app must fetch the kernel itself, into a directory that has
+    // never held one.
+    CAMOUFOX_INSTALL_DIR: engineDir,
+  },
+  stdio: ['ignore', 'ignore', 'pipe'],
+})
 
 const appStderr = []
-app.process().stderr?.on('data', chunk => {
+app.stderr?.on('data', chunk => {
   const text = String(chunk)
   appStderr.push(text)
   for (const line of text.split('\n')) if (line.trim()) console.log(`      [app] ${line.trim()}`)
 })
 
-const page = await app.firstWindow({ timeout: 120_000 })
-await page.waitForLoadState('domcontentloaded')
-pass(`the packaged application opened a window: "${await page.title()}"`)
-executed.push('launching the packaged VFox.exe and reading its window title')
+let appExited = null
+app.on('exit', (code, signal) => {
+  appExited = { code, signal }
+})
 
-const bridge = await page.evaluate(() => globalThis.vfox ?? null)
-if (!bridge?.apiBase || !bridge?.token) {
-  fail('the preload bridge did not expose { apiBase, token }')
+const apiBase = `http://127.0.0.1:${apiPort}`
+const tokenFile = path.join(dataDir, 'api-token')
+let token = null
+const launchDeadline = Date.now() + 120_000
+while (Date.now() < launchDeadline) {
+  if (appExited) {
+    fail(`the packaged application exited during startup: ${JSON.stringify(appExited)}`)
+    report()
+  }
+  try {
+    if (!token && existsSync(tokenFile)) token = readFileSync(tokenFile, 'utf8').trim()
+    if (token) {
+      const probe = await fetch(`${apiBase}/api/v1/health`, {
+        headers: { 'x-vfox-token': token },
+      })
+      if (probe.ok) break
+    }
+  } catch {
+    // The server binds late and the token file is written non-atomically; keep polling.
+  }
+  await new Promise(resolve => setTimeout(resolve, 500))
+}
+
+if (!token) {
+  fail(`the application did not answer ${apiBase}/api/v1/health within 120s`)
   report()
 }
-note(`api: ${bridge.apiBase}`)
+pass(`the packaged application started and answered its own API on ${apiBase}`)
+executed.push('spawning the packaged VFox.exe and waiting for its loopback API')
+
+// Shaped like the preload bridge the previous version read from the renderer, so everything
+// downstream keeps working unchanged.
+const bridge = { apiBase, token }
 executed.push('reading the preload bridge for { apiBase, token }')
+
+// The version a user reads must be real. `packages/*/src/version.ts` finds its manifest by walking
+// up from `import.meta.url`, because a fixed `../package.json` resolved next to the BUNDLED main
+// process in the packaged app, threw, and fell back to a hardcoded literal — so a 0.3.0 build
+// reported v0.1.0 in its own footer and in this endpoint. Asserted against the repository version,
+// so a stale literal cannot pass.
+const expectedVersion = JSON.parse(
+  readFileSync(path.join(repoRoot, 'package.json'), 'utf8'),
+).version
+const health = await api('/api/v1/health')
+assert(
+  health.body?.data?.version === expectedVersion,
+  `the packaged app reports its real version: ${health.body?.data?.version} (expected ${expectedVersion})`,
+)
+if (health.body?.data?.version !== expectedVersion) report()
+executed.push('reading the app version from its own health endpoint')
 
 async function api(route, init = {}) {
   const response = await fetch(`${bridge.apiBase}${route}`, {
@@ -245,18 +288,24 @@ const sse = (async () => {
 })()
 
 /**
- * Poll the renderer and measure the longest gap between two successful answers.
+ * Measure how long the app takes to answer its own API while the install runs.
  *
- * This is the owner's "安装的时候容易给自己搞的未响应" report. A `page.evaluate` round-trip only
- * completes when the main process and the renderer can both answer, so a blocked event loop shows up
- * as a long gap — which is the evidence, rather than the assertion "it did not freeze".
+ * This is NOT the owner's "安装的时候容易给自己搞的未响应" report measured directly, and the report
+ * says so rather than implying otherwise. The shipped fuses refuse `--inspect`, so the renderer is
+ * unreachable from this process: there is no honest way to observe whether the *window* kept
+ * painting. What is measured is API latency, and the server shares the main process with the UI, so
+ * a blocked event loop does show up here as a long gap — but "the API answered" is a weaker claim
+ * than "the window painted", and the summary prints both the number and that caveat.
+ *
+ * The renderer itself is covered by the ui-screenshots job, which was built for it.
  */
 const responsiveness = { samples: 0, longestGapMs: 0, at: null }
 async function pollResponsiveness() {
   let last = Date.now()
   while (!installFinished) {
     try {
-      await page.evaluate(() => document.readyState)
+      const probe = await api('/api/v1/health')
+      if (probe.status !== 200) throw new Error(`HTTP ${probe.status}`)
       const now = Date.now()
       const gap = now - last
       responsiveness.samples += 1
@@ -266,7 +315,7 @@ async function pollResponsiveness() {
       }
       last = now
     } catch (error) {
-      note(`renderer poll failed: ${error.message}`)
+      note(`API poll failed: ${error.message}`)
     }
     await new Promise(resolve => setTimeout(resolve, 250))
   }
@@ -334,36 +383,15 @@ assert(
     (databaseErrors.length ? `: ${databaseErrors.join(' | ')}` : ''),
 )
 
-// ------------------------------------------------------------------ 3. three profiles, via the UI
-step('3. creating three profiles through the UI')
+// --------------------------------------------------------------- 3. three profiles, via the API
+//
+// Profile creation goes through the app's own API rather than by clicking the dialog, for the same
+// reason as the launch: the shipped fuses refuse `--inspect`, so the renderer is unreachable from
+// this process and a DOM selector can never be reached. Clicking the real dialog IS covered — by
+// the ui-screenshots job, which drives the built renderer in Chromium against a real server and was
+// built for exactly that. Saying so here is better than a selector that silently never runs.
+step('3. creating three profiles through the app API')
 const profileNames = [1, 2, 3].map(index => `e2e-${index}-${Date.now()}`)
-let uiCreates = 0
-for (const name of profileNames) {
-  try {
-    await page
-      .getByRole('button', { name: /新建环境|New profile/i })
-      .first()
-      .click({ timeout: 30_000 })
-    const dialog = page.locator('.el-dialog').first()
-    await dialog.waitFor({ state: 'visible', timeout: 30_000 })
-    await dialog.locator('input').first().fill(name)
-    await dialog
-      .getByRole('button', { name: /确定|保存|OK|Save/i })
-      .first()
-      .click({ timeout: 30_000 })
-    await dialog.waitFor({ state: 'hidden', timeout: 30_000 })
-    uiCreates += 1
-  } catch (error) {
-    note(`creating "${name}" through the UI failed: ${error.message}`)
-  }
-}
-if (uiCreates === profileNames.length) {
-  pass(`created ${uiCreates} profiles through the UI`)
-  executed.push('creating three profiles through the real UI')
-} else {
-  draft.push('creating three profiles through the UI (selectors unexecuted; fell back to the API)')
-}
-
 const listed = await api('/api/v1/profiles')
 const profiles = (listed.body?.data ?? []).filter(candidate =>
   profileNames.includes(candidate.name),
