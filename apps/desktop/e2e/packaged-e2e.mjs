@@ -145,7 +145,8 @@ if (!keepData) {
   rmSync(dataDir, { recursive: true, force: true })
   rmSync(engineDir, { recursive: true, force: true })
 }
-mkdirSync(dataDir, { recursive: true })
+// Deliberately NOT created here: portable mode is what must create it, and if the test made the
+// directory first then "the app chose the portable location" would be true for the wrong reason.
 mkdirSync(engineDir, { recursive: true })
 writeFileSync(path.join(appDir, 'portable'), 'written by apps/desktop/e2e/packaged-e2e.mjs\n')
 
@@ -170,7 +171,10 @@ const app = spawn(artifact.executable, [], {
   env: {
     ...process.env,
     ELECTRON_RUN_AS_NODE: '',
-    VFOX_DATA_DIR: dataDir,
+    // NOT `VFOX_DATA_DIR`. It is the first entry in the documented resolution order and would
+    // shadow the `portable` marker written above, so the suite would exercise the env-var branch
+    // while the zip a user downloads takes the marker branch. That is the configuration that
+    // actually ships, and until now nothing tested it.
     VFOX_API_PORT: apiPort,
     // The whole point of phase 2: the app must fetch the kernel itself, into a directory that has
     // never held one.
@@ -218,6 +222,13 @@ if (!token) {
   fail(`the application did not answer ${apiBase}/api/v1/health within 120s`)
   report()
 }
+// The token file only exists because the app wrote it, into the directory portable mode chooses.
+assert(
+  existsSync(path.join(dataDir, 'api-token')),
+  `portable mode put the store beside the executable: ${dataDir}`,
+)
+executed.push('asserting that the portable marker, not an environment variable, chose the store')
+
 pass(`the packaged application started and answered its own API on ${apiBase}`)
 executed.push('spawning the packaged VFox.exe and waiting for its loopback API')
 
@@ -409,6 +420,22 @@ if (profiles.length < profileNames.length) {
 }
 assert(profiles.length === 3, `three profiles exist (${profiles.length})`)
 if (profiles.length < 3) report()
+
+// The portable promise is that the whole folder can be moved, and the way it breaks is a persisted
+// absolute path: `profiles.json` records where each profile browser directory lives, and if it
+// records the path on *this* machine then copying the folder to another drive leaves a store
+// pointing at a directory that is no longer there. `AGENTS.md` states the invariant - nothing may
+// persist an absolute path - and nothing checked it. This reads the store the app itself just wrote
+// rather than one the test prepared.
+const storeText = readFileSync(path.join(dataDir, 'profiles.json'), 'utf8')
+assert(
+  !storeText.includes(appDir),
+  'the profile store caches no absolute path, so the folder can be moved',
+)
+if (storeText.includes(appDir)) {
+  note(`profiles.json mentions ${appDir}, which will not exist after a move`)
+}
+executed.push('reading profiles.json to check that no absolute path was persisted')
 
 // ------------------------------------------------------------- 4. all three open real windows
 step('4. launching all three and looking for three visible OS windows')
