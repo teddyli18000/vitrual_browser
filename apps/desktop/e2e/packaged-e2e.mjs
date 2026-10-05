@@ -139,7 +139,7 @@ if (!worker.ok) report()
 // only ever runs where the bug cannot happen is not a guard, so this walks the unpacked tree and
 // resolves every bare specifier the way Node would from that module's own directory.
 const resolution = checkUnpackedResolution(artifact, {
-  unpackedRoot: path.join(artifact.resources, 'app.asar.unpacked'),
+  unpackedRoot: artifact.unpackedPrefix.replace(/\/$/, ''),
 })
 assert(
   resolution.ok,
