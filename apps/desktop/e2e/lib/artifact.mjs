@@ -11,7 +11,8 @@
  * The check is deliberately structural and needs no Electron: it is the part of the end-to-end test
  * that can be run anywhere, including on the artifact that shipped the bug.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { createInflateRaw } from 'node:zlib'
 
@@ -354,4 +355,99 @@ export function checkNoTestCode(artifact) {
     detail: `${packaged.length} packaged paths scanned for test tooling`,
     problems,
   }
+}
+
+/**
+ * Every module that will live OUTSIDE the asar must be able to resolve its own imports from there.
+ *
+ * v0.3.4 shipped with only `camoufox-js` unpacked. `dist/pkgman.js` opens with
+ * `import AdmZip from "adm-zip"`, and once camoufox-js is loaded from
+ * `app.asar.unpacked/node_modules/camoufox-js`, Node resolves `adm-zip` upward from that directory -
+ * where nothing else exists. The result was `Cannot find package 'adm-zip'` on every install, and the
+ * reason CI never saw it is the instructive part: CI runs inside the repository, so the repository's
+ * root `node_modules` is an ancestor of the unpacked path and module resolution accidentally
+ * succeeded. On a user's machine there is no such ancestor.
+ *
+ * So the guard walks every package that will be unpacked, parses its static `import`/`export from`
+ * specifiers, resolves each bare one the way Node would from that package's own directory, and
+ * requires the resolved file to exist. Anything missing is a shipped install failure.
+ *
+ * @param {import('./lib/artifact.mjs').PackagedArtifact} artifact
+ * @param {{ unpackedRoot: string }} options
+ * @returns {{ ok: boolean, failures: string[], checked: number }}
+ */
+export function checkUnpackedResolution(artifact, options) {
+  const { unpackedRoot } = options
+  const nm = path.join(unpackedRoot, 'node_modules')
+  const failures = []
+  let checked = 0
+
+  // Whether a bare specifier ships with the package is a question about FILES, so it gets a file
+  // answer. `require.resolve` cannot be used here: Node walks every ancestor of the start point,
+  // and from inside this repository that walk reaches the root `node_modules`, which is exactly
+  // why v0.3.4 looked fine in CI and failed on a user's machine. Asking for existence inside
+  // `app.asar.unpacked/node_modules` cannot be fooled by anything on this machine.
+  const shipsDependency = specifier => {
+    const parts = specifier.split('/')
+    const scoped = specifier.startsWith('@')
+    const pkg = scoped ? `${parts[0]}/${parts[1]}` : parts[0]
+    const rest = scoped ? parts.slice(2).join('/') : parts.slice(1).join('/')
+    const base = path.join(nm, pkg)
+    if (!rest) {
+      return (
+        existsSync(path.join(base, 'package.json')) ||
+        ['index.js', 'index.mjs', 'index.cjs'].some(name => existsSync(path.join(base, name)))
+      )
+    }
+    return [''].some(suffix =>
+      ['', '.js', '.mjs', '.cjs'].some(ext =>
+        existsSync(`${path.join(base, rest)}${ext}${suffix}`),
+      ),
+    )
+  }
+
+  const walk = dir => {
+    let entries = []
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        // `.bin` is symlinks into the store, nothing real. But `node_modules` itself must NOT be
+        // skipped: the unpacked root IS `app.asar.unpacked`, so its `node_modules` is the dependency
+        // tree under test. Skipping it was why the first version of this guard scanned zero modules
+        // and passed everything - it never looked at the thing it was sent to look at.
+        if (entry.name === '.bin') continue
+        walk(full)
+        continue
+      }
+      if (!['.js', '.mjs', '.cjs'].some(ext => entry.name.endsWith(ext))) continue
+      const source = readFileSync(full, 'utf8')
+      checked += 1
+      for (const match of source.matchAll(
+        /(?:import|export)\s[^\n]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+      )) {
+        const specifier = match[1] ?? match[2]
+        if (!specifier) continue
+        if (
+          specifier.startsWith('.') ||
+          specifier.startsWith('/') ||
+          specifier.startsWith('node:')
+        ) {
+          continue
+        }
+        if (!shipsDependency(specifier)) {
+          failures.push(
+            `${path.relative(unpackedRoot, full)} imports '${specifier}', which is not shipped`,
+          )
+        }
+      }
+    }
+  }
+
+  walk(unpackedRoot)
+  return { ok: failures.length === 0, failures: failures.slice(0, 12), checked }
 }
