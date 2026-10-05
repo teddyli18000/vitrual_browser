@@ -284,9 +284,13 @@ async function loadSync(core: Core, logger: CoreLogger): Promise<SyncHandle> {
  * Loaded lazily so that embedding or testing this package never pulls the engine in: the tests
  * always inject a fake core, and the CLI's `--help` must work before `@vfox/core` is built.
  */
-async function loadCore(dataDir: string, logger: CoreLogger): Promise<Core> {
+async function loadCore(
+  dataDir: string,
+  logger: CoreLogger,
+  workArea?: { width: number; height: number },
+): Promise<Core> {
   const { createCore } = await import('@vfox/core')
-  return createCore({ dataDir, logger })
+  return createCore({ dataDir, logger, ...(workArea ? { workArea } : {}) })
 }
 
 function isProtected(request: FastifyRequest): boolean {

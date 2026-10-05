@@ -195,6 +195,10 @@ function runFixture(name) {
 }
 const argv = process.argv.slice(2)
 let screenshotPath = null
+// --without-work-area creates the verified profile the way the CLI and the server do — with no work
+// area — so the window is sized from the claimed display and the size assertion below can be seen
+// failing on a REAL window, not only in a fixture. It is the live-path counterfactual.
+let withoutWorkArea = false
 let fixtureName = null
 for (let index = 0; index < argv.length; index += 1) {
   const argument = argv[index]
@@ -215,6 +219,8 @@ for (let index = 0; index < argv.length; index += 1) {
         'use --fixture <good|window-larger-than-screen|zero-viewport>',
       )
     }
+  } else if (argument === '--without-work-area') {
+    withoutWorkArea = true
   } else {
     refuse('arguments', `unknown argument "${argument}"`, 2, 'usage: [--screenshot <path.png>]')
   }
@@ -386,7 +392,16 @@ try {
     )
   }
 
-  core = await createCore({ dataDir, kernelDir: process.env.CAMOUFOX_INSTALL_DIR })
+  // Read before the core exists: the identity is created when the profile is, and the profile is
+  // sized from this work area. Without it the window is sized from the display the fingerprint
+  // merely claims, which is how a 1616x916 window ended up on a 1600x900 desktop.
+  const api = await loadUser32()
+  const workArea = api.workArea()
+  core = await createCore({
+    dataDir,
+    kernelDir: process.env.CAMOUFOX_INSTALL_DIR,
+    ...(withoutWorkArea ? {} : { workArea: workArea ?? undefined }),
+  })
 
   const kernel = await core.kernel.info()
   if (!kernel.installed) {
@@ -438,8 +453,6 @@ try {
     )
   }
 
-  const api = await loadUser32()
-  const workArea = api.workArea()
   report.workArea = workArea
   if (!workArea) {
     fail('window', 'could not read the desktop work area (SPI_GETWORKAREA failed)', 2)
@@ -495,20 +508,16 @@ try {
     width > workArea.width + WORK_AREA_TOLERANCE ||
     height > workArea.height + WORK_AREA_TOLERANCE
   ) {
-    report.findings ??= {}
-    report.findings.overflowsWorkArea = {
-      window: { width, height },
-      workArea: { width: workArea.width, height: workArea.height },
-      overshoot: { width: width - workArea.width, height: height - workArea.height },
-      matchedBy: lookup.matchedBy,
-    }
-    log(
-      `FINDING: the engine window (${width}x${height}) is larger than the ` +
-        `${workArea.width}x${workArea.height} work area. The engine sizes the real window to the ` +
-        "profile's spoofed screen, so this is expected on a small runner desktop — but it also " +
-        "means a profile whose generated screen exceeds the user's real display opens a window " +
-        'that runs off the screen. Reported, not failed; the geometry checks below decide whether ' +
-        'the spoof is coherent.',
+    // An assertion, not a finding: the identity is now sized from the REAL work area when the
+    // caller has one, so a window larger than it means the sizing is broken rather than the input
+    // missing. A profile created without a work area (CLI, server) can fail here, and that is the
+    // correct reading — the input was missing. `--without-work-area` reproduces it on a real window.
+    fail(
+      'size',
+      `the engine window is ${width}x${height}, larger than the ${workArea.width}x${workArea.height} ` +
+        `work area (tolerance ${WORK_AREA_TOLERANCE}px, matched by ${lookup.matchedBy})`,
+      1,
+      'a profile window must fit the display it opens on — the owner sees this as 满屏',
     )
   }
   report.checks.size = { ok: true, width, height }
