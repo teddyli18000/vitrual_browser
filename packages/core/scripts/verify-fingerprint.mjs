@@ -232,6 +232,164 @@ const SITE_TARGETS = [
     expectSelector: '#twotabsearchtextbox, input[name="field-keywords"]',
     waitMs: 4_000,
   },
+
+  // --------------------------------------------------- aggressive anti-bot, where a bad fingerprint
+  // shows up first. These refuse a browser whose fingerprint does not hold together, which is exactly
+  // what this product is for — so they are the most informative real targets in the list.
+  {
+    name: 'google',
+    url: 'https://www.google.com/',
+    kind: 'real',
+    expectSelector: 'textarea[name="q"], input[name="q"]',
+    waitMs: 3_000,
+  },
+  {
+    name: 'google-search',
+    url: 'https://www.google.com/search?q=test',
+    kind: 'real',
+    expectSelector: '#search, #rso, div[data-sokoban-container]',
+    waitMs: 4_000,
+  },
+  {
+    name: 'taobao',
+    url: 'https://www.taobao.com/',
+    kind: 'real',
+    expectSelector: '#q, input[name="q"], .search-combobox-input',
+    waitMs: 5_000,
+  },
+  {
+    name: 'jd',
+    url: 'https://www.jd.com/',
+    kind: 'real',
+    expectSelector: '#key, input[name="keyword"]',
+    waitMs: 4_000,
+  },
+  {
+    name: 'linkedin',
+    url: 'https://www.linkedin.com/',
+    kind: 'real',
+    expectSelector:
+      'input[aria-label*="Search"], .search-global-typeahead__input, form[action*="login"]',
+    waitMs: 5_000,
+  },
+  {
+    name: 'x',
+    url: 'https://x.com/',
+    kind: 'real',
+    expectSelector:
+      'input[data-testid="SearchBox_Search_Input"], div[data-testid="primaryColumn"], a[href="/login"]',
+    waitMs: 6_000,
+  },
+  {
+    name: 'aliexpress',
+    url: 'https://www.aliexpress.com/',
+    kind: 'real',
+    expectSelector: 'input[name="SearchText"], #search-key',
+    waitMs: 5_000,
+  },
+
+  // ------------------------------------------- common public sites that must simply work, including
+  // the owner's own region. A fingerprint that breaks a page's own JavaScript is invisible to a
+  // screenshot AND to a fingerprint checker, which is why each one names an element the site's own JS
+  // and layout produce. No target logs in or submits a form: pages are loaded, nothing is entered.
+  {
+    name: 'baidu',
+    url: 'https://www.baidu.com/',
+    kind: 'real',
+    expectSelector: '#kw, input[name="wd"]',
+    waitMs: 3_000,
+  },
+  {
+    name: 'bilibili',
+    url: 'https://www.bilibili.com/',
+    kind: 'real',
+    expectSelector: '.nav-search-input, #nav_searchform input',
+    waitMs: 4_000,
+  },
+  {
+    name: 'zhihu',
+    url: 'https://www.zhihu.com/',
+    kind: 'real',
+    expectSelector: 'input[placeholder*="搜索"], .Input, button[aria-label*="搜索"]',
+    waitMs: 4_000,
+  },
+  {
+    name: 'weibo',
+    url: 'https://weibo.com/',
+    kind: 'real',
+    expectSelector: 'input[type="text"], #search-input, .woo-input',
+    waitMs: 5_000,
+  },
+  {
+    name: '163',
+    url: 'https://www.163.com/',
+    kind: 'real',
+    expectSelector: '#search-input, .search-input, input[type="text"]',
+    waitMs: 3_000,
+  },
+  {
+    name: 'csdn',
+    url: 'https://www.csdn.net/',
+    kind: 'real',
+    expectSelector: '#toolbar-search-input, input[placeholder*="搜索"]',
+    waitMs: 4_000,
+  },
+  {
+    name: 'qq',
+    url: 'https://www.qq.com/',
+    kind: 'real',
+    expectSelector: 'input[type="text"], .search-input, #searchBtn',
+    waitMs: 3_000,
+  },
+  {
+    name: 'stackoverflow',
+    url: 'https://stackoverflow.com/',
+    kind: 'real',
+    expectSelector: 'input[name="q"], .s-topbar--searchbar--input',
+    waitMs: 3_000,
+  },
+  {
+    name: 'microsoft',
+    url: 'https://www.microsoft.com/',
+    kind: 'real',
+    expectSelector: 'input[type="search"], #searchInput, form[role="search"] input',
+    waitMs: 4_000,
+  },
+  {
+    name: 'apple',
+    url: 'https://www.apple.com/',
+    kind: 'real',
+    expectSelector: '#globalnav, nav#globalnav, .globalnav-link',
+    waitMs: 3_000,
+  },
+  {
+    name: 'youtube',
+    url: 'https://www.youtube.com/',
+    kind: 'real',
+    expectSelector: 'input#search, input[name="search_query"]',
+    waitMs: 5_000,
+  },
+  {
+    name: 'facebook',
+    url: 'https://www.facebook.com/',
+    kind: 'real',
+    expectSelector: 'input[name="email"], #email, div[role="main"]',
+    waitMs: 5_000,
+  },
+  {
+    name: 'instagram',
+    url: 'https://www.instagram.com/',
+    kind: 'real',
+    expectSelector: 'input[name="username"], form#loginForm, article',
+    waitMs: 5_000,
+  },
+  {
+    name: 'netflix',
+    url: 'https://www.netflix.com/',
+    kind: 'real',
+    expectSelector: 'a[href*="login"], div[data-uia="header"], .netflix-logo',
+    waitMs: 4_000,
+  },
 ]
 
 /**
@@ -1134,7 +1292,11 @@ async function checkTargets(browser, propertiesHeld) {
   console.log(
     'LIMIT: a green oracle result is one third-party opinion, on one day, from one datacenter IP.\n' +
       '       It is not proof of undetectability. A PASS means these particular checks, run today\n' +
-      '       from this IP, named nothing — and an UNREAD means the site proved nothing at all.',
+      '       from this IP, named nothing — and an UNREAD means the site proved nothing at all.\n' +
+      '       A PASS on a PUBLIC site means the site served us a page and its own JavaScript ran.\n' +
+      '       It does NOT mean the site considers us human, and it says nothing about the TLS and\n' +
+      '       behavioural layers, which the commercial anti-detect products cannot see either.\n' +
+      '       No target logs in or submits a form: pages are loaded, nothing is entered.',
   )
 
   const unread = rows.filter(row => row.verdict === 'UNREAD' || row.verdict === 'UNREACHABLE')
