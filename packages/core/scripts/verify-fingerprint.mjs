@@ -1,37 +1,43 @@
 #!/usr/bin/env node
 /**
- * verify-fingerprint.mjs — read the LIVE fingerprint surface of a real profile and assert its
- * consistency properties; then, separately, report what two real sites did.
+ * verify-fingerprint.mjs — read the LIVE fingerprint surface of a real profile, assert its
+ * consistency properties, then run that profile against a table of oracle and real sites.
  *
  * WHY THIS EXISTS, AND WHY IT IS TWO THINGS
  *
  * The owner's GitHub login was risk-controlled with "Automated (bot) activity on your network
- * (IP 103.152.113.33)". Two independent causes were found, and this script deliberately keeps them
- * apart, because blurring them produces a test that fails for a reason nobody can fix — and the next
- * person "fixes" it by weakening the assertion.
+ * (IP 103.152.113.33)". Two independent causes were found, and this script keeps them apart, because
+ * blurring them produces a test that fails for a reason nobody can fix — and the next person "fixes"
+ * it by weakening the assertion.
  *
  *   (a) OURS — and the assertion for it was WITHDRAWN, which is the honest outcome. An
  *       `innerWidth/innerHeight > 0` property was written here and then removed, because it cannot go
  *       red against reality: `_castToProperties` filters falsy values (`if (!data) continue`) and
  *       `properties.json` carries no defaults, so the key never reaches CAMOU_CONFIG and Firefox
  *       reports its real viewport — measured at `inner 1770x1246` on the unfixed build. An assertion
- *       that cannot distinguish the state it names from any other state is decoration. The geometry
+ *       that cannot distinguish the state it names from any other state is decoration; the geometry
  *       property below is what actually holds that line.
  *   (b) NOT OURS. That IP is a US datacenter address (Fremont CA, AS46997 Black Mesa Corporation).
- *       GitHub's page named it. No browser change makes a hosting ASN look residential, and CI runs
- *       from a datacenter too — so the site check REPORTS what it saw rather than pretending a green
- *       result is achievable here.
+ *       No browser change makes a hosting ASN look residential, and CI runs from a datacenter too —
+ *       so a blocked real site is REPORTED, not failed.
  *
- * The property assertions are a pure function of a plain object, so the CHECKER WIRING can be
- * exercised without a browser. That is not coverage of reality: the live run is the coverage, and a
- * fixture only shows that an assertion is wired to the operands it names.
+ * THE TWO VERDICT CLASSES, WHICH MUST NOT BLUR
+ *   - ORACLE sites (third-party checkers) FAIL the run when they name a concrete inconsistency of
+ *     ours. Those are actionable and ours.
+ *   - REAL sites REPORT. A captcha or a block from a datacenter ASN is expected and never fails.
+ *   - `UNREAD` is NEITHER. A site whose verdict cannot be extracted must never look like a pass —
+ *     that is how a decorative guard is born (the packaging guard that scanned zero modules and
+ *     passed everything).
+ *
+ * The property assertions and the verdict parser are pure functions of a plain object / a string, so
+ * the CHECKER WIRING can be exercised without a browser. That is not coverage of reality: the live run
+ * is the coverage, and a fixture only shows that an assertion is wired to the operands it names.
  *
  * Usage:
- *   node packages/core/scripts/verify-fingerprint.mjs --live             # launch a profile, read it
- *   node packages/core/scripts/verify-fingerprint.mjs --fixture geometry # wiring: inner > outer
- *   node packages/core/scripts/verify-fingerprint.mjs --fixture contradiction
- *   node packages/core/scripts/verify-fingerprint.mjs --fixture good
- *   …--skip-sites                                                        # properties only
+ *   node packages/core/scripts/verify-fingerprint.mjs --live              # launch a profile, read it
+ *   node packages/core/scripts/verify-fingerprint.mjs --fixture good|geometry|contradiction
+ *   node packages/core/scripts/verify-fingerprint.mjs --oracle-fixture <name>
+ *   …--skip-sites                                                         # properties only
  *
  * Build prerequisite: `pnpm --filter @vfox/core build` (this imports ../dist/index.js).
  */
@@ -40,47 +46,59 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 
+/* ------------------------------------------------------------------------------------ the table */
+
 /**
  * Every site, in one list.
  *
- * `kind` is one of:
- *   - `oracle`  — a third-party checker. It FAILS the run when it names a concrete inconsistency of
- *                 ours, because those are actionable and ours.
- *   - `login`   — a real target whose success condition is a rendered login form. It REPORTS: a
- *                 datacenter ASN blocking us is expected from CI and no browser change fixes it.
+ * `kind`:
+ *   - `oracle` — a third-party checker. FAILS the run on a named inconsistency of ours.
+ *   - `real`   — a site a user actually uses. REPORTS captchas/blocks; fails only when the page does
+ *                not render at all while every fingerprint property passed.
  *
- * Extraction is text-based rather than selector-based on purpose: third-party selectors change
- * without telling us, and a text parse that stops matching degrades to UNREAD (visible) rather than
+ * `scope` is a list of candidate selectors for the RESULT REGION, tried in order. This matters more
+ * than it looks: an anti-detect checker's page is guaranteed to contain the vocabulary we scan for —
+ * browserscan describes itself as "a human-machine verification system using WebDriver and other
+ * automation tools" in its own chrome, which produced a false FAIL on the first live run. The verdict
+ * must come from the result region, and when no selector matches, the fallback is recorded in the
+ * finding rather than silently trusted.
+ *
+ * Extraction is text-based rather than selector-value-based on purpose: third-party selectors change
+ * without telling us, and a parse that stops matching degrades to UNREAD (visible) rather than
  * silently matching nothing (invisible).
  */
 const SITE_TARGETS = [
+  // ---------------------------------------------------------------- oracle sites (FAIL on a lie)
   {
     name: 'creepjs',
     url: 'https://abrahamjuliot.github.io/creepjs/',
     kind: 'oracle',
     parse: 'creepjs',
-    waitMs: 12_000,
+    waitMs: 25_000,
+    scope: ['#lies', '.lies', '[class*="lie"]', '#fingerprint', 'main'],
   },
   {
     name: 'sannysoft',
     url: 'https://bot.sannysoft.com/',
     kind: 'oracle',
     parse: 'sannysoft',
-    waitMs: 4_000,
+    waitMs: 5_000,
   },
   {
     name: 'browserscan',
     url: 'https://browserscan.net/bot-detection',
     kind: 'oracle',
     parse: 'generic',
-    waitMs: 8_000,
+    waitMs: 10_000,
+    scope: ['[class*="result"]', '[class*="detect"]', 'main', 'article'],
   },
   {
     name: 'pixelscan',
     url: 'https://pixelscan.net/fingerprint-check',
     kind: 'oracle',
     parse: 'generic',
-    waitMs: 8_000,
+    waitMs: 12_000,
+    scope: ['[class*="result"]', '[class*="check"]', 'main'],
   },
   {
     name: 'deviceandbrowserinfo',
@@ -88,22 +106,204 @@ const SITE_TARGETS = [
     kind: 'oracle',
     parse: 'generic',
     waitMs: 8_000,
+    scope: ['[class*="result"]', 'main', 'article'],
   },
+  {
+    name: 'browserleaks-canvas',
+    url: 'https://browserleaks.com/canvas',
+    kind: 'oracle',
+    parse: 'generic',
+    waitMs: 8_000,
+    scope: ['#content', 'main'],
+  },
+  {
+    name: 'browserleaks-webgl',
+    url: 'https://browserleaks.com/webgl',
+    kind: 'oracle',
+    parse: 'generic',
+    waitMs: 8_000,
+    scope: ['#content', 'main'],
+  },
+  {
+    name: 'browserleaks-webrtc',
+    url: 'https://browserleaks.com/webrtc',
+    kind: 'oracle',
+    parse: 'generic',
+    waitMs: 10_000,
+    scope: ['#content', 'main'],
+  },
+  {
+    name: 'browserleaks-fonts',
+    url: 'https://browserleaks.com/fonts',
+    kind: 'oracle',
+    parse: 'generic',
+    waitMs: 8_000,
+    scope: ['#content', 'main'],
+  },
+  {
+    name: 'coveryourtracks',
+    url: 'https://coveryourtracks.eff.org/',
+    kind: 'oracle',
+    parse: 'generic',
+    waitMs: 15_000,
+    scope: ['#test-result', '[class*="result"]', 'main'],
+  },
+  {
+    name: 'amiunique',
+    url: 'https://amiunique.org/fingerprint',
+    kind: 'oracle',
+    parse: 'generic',
+    waitMs: 12_000,
+    scope: ['[class*="result"]', 'main'],
+  },
+  {
+    name: 'whoer',
+    url: 'https://whoer.net/',
+    kind: 'oracle',
+    parse: 'generic',
+    waitMs: 12_000,
+    scope: ['[class*="result"]', '.score', 'main'],
+  },
+  {
+    name: 'iphey',
+    url: 'https://iphey.com/',
+    kind: 'oracle',
+    parse: 'generic',
+    waitMs: 12_000,
+    scope: ['[class*="result"]', '[class*="check"]', 'main'],
+  },
+  {
+    name: 'areyouheadless',
+    url: 'https://arh.antoinevastel.com/bots/areyouheadless',
+    kind: 'oracle',
+    parse: 'generic',
+    waitMs: 8_000,
+  },
+
+  // --------------------------------------------------------------------- real sites (REPORT only)
   {
     name: 'github-login',
     url: 'https://github.com/login',
-    kind: 'login',
+    kind: 'real',
+    expectForm: 'login',
     waitMs: 0,
   },
-  // TODO(lead): the WorkBuddy real target. Its URL has still not been supplied. Kept here so the
-  // configured count stays visible in the output and an incomplete run never reads as a complete pass.
-  // { name: 'workbuddy', url: '<exact URL pending>', kind: 'login', waitMs: 0 },
+  {
+    name: 'bing',
+    url: 'https://www.bing.com/',
+    kind: 'real',
+    expectSelector: 'input[name="q"], #sb_form_q',
+    waitMs: 3_000,
+  },
+  {
+    name: 'duckduckgo',
+    url: 'https://duckduckgo.com/',
+    kind: 'real',
+    expectSelector: 'input[name="q"], #searchbox_input',
+    waitMs: 4_000,
+  },
+  {
+    name: 'wikipedia',
+    url: 'https://en.wikipedia.org/wiki/Main_Page',
+    kind: 'real',
+    expectSelector: '#searchInput, .mw-search-input, #mw-content-text',
+    waitMs: 2_000,
+  },
+  {
+    name: 'reddit',
+    url: 'https://www.reddit.com/',
+    kind: 'real',
+    expectSelector: 'faceplate-search-input, input[name="q"], shreddit-app, #siteTable',
+    waitMs: 6_000,
+  },
+  {
+    name: 'amazon',
+    url: 'https://www.amazon.com/',
+    kind: 'real',
+    expectSelector: '#twotabsearchtextbox, input[name="field-keywords"]',
+    waitMs: 4_000,
+  },
 ]
 
-/** How many targets this runner is designed to cover, so "incomplete" is measurable. */
-const EXPECTED_TARGET_COUNT = 7
+/**
+ * Targets we know we are missing, listed so the gap is a visible ROW in the table rather than a note
+ * that fires on every run and becomes noise people learn to ignore.
+ */
+const PENDING_TARGETS = [{ name: 'workbuddy', reason: 'the owner has not supplied the URL yet' }]
 
-/** The fields read from the page. Kept here so the live read and the fixtures cannot drift. */
+/** Markers a page uses to say "this browser is automated". */
+const AUTOMATION_MARKERS = [
+  /\byou are (a )?bot\b/i,
+  /\bbot detected\b/i,
+  /\bbot check\b/i,
+  /\bautomation (detected|flag|tool)/i,
+  /\bautomated\b/i,
+  /\bheadless\b/i,
+  /\bwebdriver\b/i,
+  /\bselenium\b/i,
+  /\bpuppeteer\b/i,
+]
+
+/** Markers a page uses to say "nothing suspicious found". */
+const CLEAN_MARKERS = [
+  /\bnot a bot\b/i,
+  /\bno automation\b/i,
+  /\bpassed\b/i,
+  /\bconsistent\b/i,
+  /\bno (mismatch|inconsistenc|contradiction|automated)/i,
+]
+
+/**
+ * A clean marker is only a VERDICT when something corroborates it.
+ *
+ * `you are human` appears on deviceandbrowserinfo as a verdict ("Are you a bot? ✅ You are human!"
+ * beside `"isBot": false`) and on a Cloudflare challenge as an INSTRUCTION to the user ("Verify you
+ * are human"). The phrase alone cannot tell them apart, so a clean claim needs a result-shaped token
+ * beside it; without one the verdict is UNREAD rather than PASS, because the alternative is a
+ * challenge page reporting a green fingerprint result.
+ */
+const CLEAN_CORROBORATION = [
+  /"isbot"\s*:\s*false/i,
+  /\bisbot\b[^.]{0,20}false/i,
+  /\bresult\b/i,
+  /\bscore\b/i,
+  /\bverdict\b/i,
+  /\bdetected\b/i,
+  /✅/,
+  /\buniqueness\b/i,
+]
+
+/** Heuristics for "this is a challenge or risk-control page, not the page we asked for". */
+const INTERSTITIAL_SIGNATURES = [
+  /automated \(bot\) activity/i,
+  /unusual traffic/i,
+  /verify your (identity|account)/i,
+  /risk.?control/i,
+  /are you a robot/i,
+  /\bsuspended\b/i,
+  // Cloudflare's actual wording. browserscan and pixelscan both sit behind Cloudflare, which makes
+  // this the likeliest way the table goes quietly green — a challenge page says "Verify you are
+  // human", and `you are human` on its own used to be enough for a PASS.
+  /verify you are human/i,
+  /just a moment/i,
+  /checking your browser/i,
+  /enable javascript and cookies to continue/i,
+  /cf-?challenge|cf_chl|turnstile/i,
+  /\bddos protection by\b/i,
+]
+
+/** Captcha/block signals for real sites. Recorded, never fatal. */
+const BLOCK_SIGNATURES = [
+  ...INTERSTITIAL_SIGNATURES,
+  /\bcaptcha\b/i,
+  /\brecaptcha\b/i,
+  /\bhcaptcha\b/i,
+  /access denied/i,
+  /\bblocked\b/i,
+  /request unsuccessful/i,
+  /\bsorry,? (you have been|something)/i,
+]
+
 const SURFACE_FIELDS = [
   'innerWidth',
   'innerHeight',
@@ -140,7 +340,6 @@ function check(name, passed, detail) {
 
 /* ------------------------------------------------------------------ the consistency properties */
 
-/** Which OS a `navigator.platform` value claims. */
 function platformFamily(platform) {
   const value = String(platform ?? '')
   if (/^Win/i.test(value)) return 'windows'
@@ -148,8 +347,15 @@ function platformFamily(platform) {
   if (/^Linux/i.test(value)) return 'linux'
   return 'unknown'
 }
-
-/** Which OS a user agent claims. */
+/**
+ * Which OS a user agent claims.
+ *
+ * TRAP, recorded here so nobody "aligns" us with Chrome later. A well-known anti-detect benchmark
+ * flags a macOS user agent that is not frozen to `10_15_7`, "the value real Chrome always sends".
+ * That is advice for CHROMIUM-BASED products and it does not apply to us: real Firefox on macOS
+ * sends `Intel Mac OS X 10.15`, and `10_15_7` is Chrome's and Safari's frozen form. If an oracle ever
+ * flags our macOS UA, check it against what real Firefox sends — do not copy the Chromium convention.
+ */
 function userAgentFamily(userAgent) {
   const value = String(userAgent ?? '')
   if (/Windows/i.test(value)) return 'windows'
@@ -157,8 +363,6 @@ function userAgentFamily(userAgent) {
   if (/Linux|X11/i.test(value)) return 'linux'
   return 'unknown'
 }
-
-/** Which OS `navigator.oscpu` claims. */
 function oscpuFamily(oscpu) {
   const value = String(oscpu ?? '')
   if (/Windows/i.test(value)) return 'windows'
@@ -166,8 +370,6 @@ function oscpuFamily(oscpu) {
   if (/Linux/i.test(value)) return 'linux'
   return 'unknown'
 }
-
-/** Whether an IANA zone name is one the runtime actually accepts. */
 function isKnownTimeZone(zone) {
   if (typeof zone !== 'string' || !zone.includes('/')) return false
   try {
@@ -181,9 +383,6 @@ function isKnownTimeZone(zone) {
 /**
  * The property assertions. A pure function of the surface object — deliberately: it is what lets a
  * failing case be demonstrated without a browser, and it keeps the browser out of the logic.
- *
- * @param {Record<string, unknown>} surface
- * @returns {boolean} whether every property held
  */
 function checkConsistencyProperties(surface) {
   const number = key => Number(surface[key])
@@ -198,7 +397,6 @@ function checkConsistencyProperties(surface) {
     number('innerWidth') <= number('outerWidth') && number('innerHeight') <= number('outerHeight'),
     `inner ${surface.innerWidth}x${surface.innerHeight} vs outer ${surface.outerWidth}x${surface.outerHeight}`,
   )
-
   check(
     'outer box fits on the screen',
     number('outerWidth') <= number('screenWidth') &&
@@ -206,21 +404,17 @@ function checkConsistencyProperties(surface) {
     `outer ${surface.outerWidth}x${surface.outerHeight} vs screen ${surface.screenWidth}x` +
       `${surface.screenAvailHeight} (avail)`,
   )
-
-  // A real ratio, never 0 or NaN. 0 is what a detached or unrendered window reports.
   const ratio = number('devicePixelRatio')
   check(
     'devicePixelRatio is a real ratio',
     Number.isFinite(ratio) && ratio > 0 && ratio <= 8,
     `devicePixelRatio=${surface.devicePixelRatio}`,
   )
-
   check(
     'navigator.webdriver is false',
     surface.webdriver === false,
     `webdriver=${JSON.stringify(surface.webdriver)}`,
   )
-
   // Valid IANA zone, but deliberately NOT a specific zone: with geoip on and no proxy, the engine
   // derives it from the local IP, so the correct value depends on where this runs.
   check(
@@ -230,8 +424,6 @@ function checkConsistencyProperties(surface) {
   )
   note(`resolved timezone: ${JSON.stringify(surface.timezone)} (not asserted to a specific zone)`)
 
-  // The contradiction class this whole exercise is about: a UA claiming one OS while the platform
-  // and oscpu claim another.
   const fromUserAgent = userAgentFamily(surface.userAgent)
   const fromPlatform = platformFamily(surface.platform)
   const fromOscpu = oscpuFamily(surface.oscpu)
@@ -242,23 +434,20 @@ function checkConsistencyProperties(surface) {
       (fromOscpu === 'unknown' || fromOscpu === fromUserAgent),
     `ua=${fromUserAgent} platform=${fromPlatform} (${surface.platform}) oscpu=${fromOscpu} (${surface.oscpu})`,
   )
-
   check(
     'the WebGL vendor and renderer are both readable',
     Boolean(surface.webglVendor) && Boolean(surface.webglRenderer),
     `${surface.webglVendor} / ${surface.webglRenderer}`,
   )
-
   return failures.length === 0
 }
 
 /* ------------------------------------------------------------------------------- the live read */
 
-/** Read the whole surface from inside the page. */
 async function readSurface(page) {
   return page.evaluate(() => {
-    // Two SEPARATE canvas elements: a canvas has exactly one context type, so reading `webgl` from
-    // an element that already has a `2d` context returns null.
+    // Two SEPARATE canvas elements: a canvas has exactly one context type, so reading `webgl` from an
+    // element that already has a `2d` context returns null.
     const gl = document.createElement('canvas').getContext('webgl')
     const debug = gl?.getExtension('WEBGL_debug_renderer_info')
     return {
@@ -288,7 +477,6 @@ async function readSurface(page) {
   })
 }
 
-/** A surface where every property holds, used by `--fixture good`. */
 const GOOD_FIXTURE = {
   innerWidth: 1280,
   innerHeight: 720,
@@ -322,8 +510,7 @@ const GEOMETRY_FIXTURE = { ...GOOD_FIXTURE, innerWidth: 1900, innerHeight: 1400 
 
 /**
  * Every geometric property holds, and the OS claims contradict each other: the UA says Macintosh
- * while `platform` and `oscpu` say Windows. That is the contradiction class this whole exercise is
- * about, and it is a different assertion from the geometry one.
+ * while `platform` and `oscpu` say Windows.
  */
 const CONTRADICTION_FIXTURE = {
   ...GOOD_FIXTURE,
@@ -332,72 +519,19 @@ const CONTRADICTION_FIXTURE = {
   oscpu: 'Windows NT 10.0; Win64; x64',
 }
 
-/** Declared after every fixture it references: a `const` used before its declaration is a TDZ error. */
 const FIXTURES = {
   good: GOOD_FIXTURE,
   geometry: GEOMETRY_FIXTURE,
   contradiction: CONTRADICTION_FIXTURE,
 }
 
-/* ------------------------------------------------------------------------------- the site check */
-
-/** The IP this machine exits from, or null when that cannot be determined. */
-async function exitIp() {
-  for (const url of ['https://api.ipify.org?format=json', 'https://ifconfig.me/ip']) {
-    try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-      if (!response.ok) continue
-      const text = (await response.text()).trim()
-      const parsed = text.startsWith('{') ? JSON.parse(text).ip : text
-      if (parsed) return parsed
-    } catch {
-      // Try the next one.
-    }
-  }
-  return null
-}
-
-/** Heuristics for "this is a risk-control page, not the page we asked for". */
-const INTERSTITIAL_SIGNATURES = [
-  /automated \(bot\) activity/i,
-  /unusual traffic/i,
-  /verify your (identity|account)/i,
-  /risk.?control/i,
-  /are you a robot/i,
-  /suspended/i,
-]
-
-/** Markers an oracle page uses to say "this browser is automated". */
-const AUTOMATION_MARKERS = [
-  /\byou are (a )?bot\b/i,
-  /\bbot detected\b/i,
-  /\bautomation (detected|flag|tool)/i,
-  /\bautomated\b/i,
-  /\bheadless\b/i,
-  /\bwebdriver\b/i,
-  /\bselenium\b/i,
-  /\bpuppeteer\b/i,
-]
-
-/** Markers an oracle page uses to say "nothing suspicious found". */
-const CLEAN_MARKERS = [
-  /\bnot a bot\b/i,
-  /\bno automation\b/i,
-  /\byou are human\b/i,
-  /\bpassed\b/i,
-  /\bconsistent\b/i,
-  /\bno (mismatch|inconsistenc|contradiction)/i,
-]
+/* ------------------------------------------------------------------------- the verdict parser */
 
 /**
- * Read a verdict out of an oracle page's text.
+ * Read a verdict out of a page's RESULT TEXT.
  *
- * A **pure function of the page text**, deliberately: it is what lets the oracle path be shown going
- * red on a deliberately bad surface without a browser. See `--oracle-fixture`.
- *
- * The three outcomes are the point. `UNREAD` is neither a pass nor a fail — a site whose verdict
- * cannot be extracted must never look like a pass, because that is how a decorative guard is born
- * (the packaging guard that scanned zero modules and passed everything).
+ * A **pure function of the text**, deliberately: it is what lets every correction below be proven
+ * against the exact strings the live run printed, without a browser.
  *
  * @param {string} kind @param {string} text
  * @returns {{ verdict: 'PASS' | 'FAIL' | 'UNREAD', finding: string }}
@@ -409,18 +543,29 @@ function parsePageVerdict(kind, text) {
   const preview = flat.slice(0, 200)
 
   if (kind === 'creepjs') {
-    // CreepJS labels the count before the number ("Lies 2") in some layouts and after it in others
-    // ("2 lies"). Both are handled; anything else is UNREAD rather than assumed clean.
+    // CreepJS labels the count before the number ("Lies 2") in some layouts and after it in others.
+    // Searched over the WHOLE text, not the 200-character preview: the live run showed the preview is
+    // page chrome ("FP ID: … Fuzzy: … WebRTC…") and the count is further down.
     const counted = /\b(\d+)\s+lies?\b/i.exec(flat)
-    const labelled = counted ? null : /\blies?\b[^\d]{0,12}(\d+)/i.exec(flat)
+    const labelled = counted ? null : /\blies?\b[^a-z\d]{0,12}(\d+)/i.exec(flat)
     const lies = counted ?? labelled
     if (!lies) {
       return {
         verdict: 'UNREAD',
-        finding: `no lie count on the page; first 200 characters: ${preview}`,
+        finding:
+          `no lie count anywhere in the ${flat.length} characters read — the count is not where ` +
+          `this runner looks. First 200 characters: ${preview}`,
       }
     }
-    if (Number(lies[1]) === 0) return { verdict: 'PASS', finding: 'reports 0 lies' }
+    if (Number(lies[1]) === 0) {
+      // The trust score is reported even on a pass: peers phrase their published results as "trust
+      // score 82%", and a number that goes DOWN across releases is a regression this runner can show,
+      // where a binary PASS/FAIL would show nothing at all.
+      const score = /\b(?:trust|score)[^\d%]{0,20}(\d{1,3}(?:\.\d+)?)\s*%/i.exec(flat)
+      const scoreText = score ? `${score[1]}%` : 'not found on the page'
+      note(`${'creepjs trust score'}: ${scoreText} (reported even when the verdict is PASS)`)
+      return { verdict: 'PASS', finding: `reports 0 lies, trust score ${scoreText}` }
+    }
     return {
       verdict: 'FAIL',
       finding: `reports ${lies[1]} lie(s) — the named contradictions are ours: ${flat.slice(lies.index, lies.index + 400)}`,
@@ -428,8 +573,8 @@ function parsePageVerdict(kind, text) {
   }
 
   if (kind === 'sannysoft') {
-    // A check table: each row label is followed by its result. Match the label that precedes "failed"
-    // rather than splitting on separators, which cut labels in half.
+    // Match the row label that precedes "failed" rather than splitting on separators, which cut
+    // labels in half on the first attempt.
     const failed = [...flat.matchAll(/([A-Za-z][\w ()./#-]{1,50}?)\s+failed\b/gi)].map(match =>
       match[1].replace(/^.*[|\n]\s*/, '').trim(),
     )
@@ -445,20 +590,36 @@ function parsePageVerdict(kind, text) {
     return { verdict: 'UNREAD', finding: `no check table found; first 200 characters: ${preview}` }
   }
 
-  // Generic oracle. The STRONG markers are checked before the generic ones on purpose: "0 automation
-  // flags detected" is a clean statement that happens to contain the word "automation", and matching
-  // it as a failure would make this run red for no reason — a false FAIL is as corrosive as a false
-  // pass, because the next person turns the check off.
+  // Generic oracle.
+  //
+  // 1. A NEGATED marker is a clean statement, not a flag. The first live run failed pixelscan on
+  //    "No automated behavior detected" — the page saying the opposite of what the pattern matched.
+  const negated = marker =>
+    new RegExp(`\\b(?:no|not|zero|0)\\s+(?:\\w+\\s+){0,2}${marker}`, 'i').test(flat)
+
+  // 2. A clean marker needs corroboration to count as a verdict rather than an instruction.
+  const corroborated = CLEAN_CORROBORATION.some(pattern => pattern.test(flat))
+
   const strongBot = /\b(you are (a )?bot|bot detected|automation detected)\b/i.exec(flat)
-  if (strongBot) {
+  if (strongBot && !negated('(?:you are (?:a )?bot|bot detected|automation detected)')) {
     return {
       verdict: 'FAIL',
       finding: `automation flag on the page: "${flat.slice(Math.max(0, strongBot.index - 60), strongBot.index + 140)}"`,
     }
   }
-  const strongClean =
-    /\b(not a bot|no automation|0 automation|you are human|nothing suspicious)\b/i.exec(flat)
+
+  const strongClean = /\b(not a bot|no automation|you are human|nothing suspicious)\b/i.exec(flat)
   if (strongClean) {
+    if (!corroborated) {
+      return {
+        verdict: 'UNREAD',
+        finding:
+          'a clean-sounding phrase ' +
+          `("${flat.slice(Math.max(0, strongClean.index - 20), strongClean.index + 60)}") with ` +
+          'nothing corroborating it — a Cloudflare challenge says the same thing, so it is not ' +
+          'treated as a pass',
+      }
+    }
     return {
       verdict: 'PASS',
       finding: `page says: "${flat.slice(Math.max(0, strongClean.index - 40), strongClean.index + 120)}"`,
@@ -466,19 +627,25 @@ function parsePageVerdict(kind, text) {
   }
 
   const automation = AUTOMATION_MARKERS.find(pattern => pattern.test(flat))
-  if (automation) {
+  if (automation && !negated('(?:automated|automation|webdriver|headless|selenium|puppeteer)')) {
     const at = flat.search(automation)
     return {
       verdict: 'FAIL',
       finding: `automation flag on the page: "${flat.slice(Math.max(0, at - 60), at + 140)}"`,
     }
   }
+
   const clean = CLEAN_MARKERS.find(pattern => pattern.test(flat))
   if (clean) {
+    // NO negation guard here. A negated automation phrase is a false positive to suppress on the BOT
+    // side only; suppressing the clean side too made "No automated behavior detected … Bot check
+    // passed" fall through to UNREAD, which is how this branch was wrong on the first attempt.
     const at = flat.search(clean)
     return {
       verdict: 'PASS',
-      finding: `page says: "${flat.slice(Math.max(0, at - 40), at + 120)}"`,
+      finding:
+        `page says: "${flat.slice(Math.max(0, at - 40), at + 120)}"` +
+        (corroborated ? '' : ' (uncorroborated)'),
     }
   }
   return {
@@ -487,38 +654,98 @@ function parsePageVerdict(kind, text) {
   }
 }
 
-/** Which parser an oracle fixture exercises. */
-const ORACLE_FIXTURE_KINDS = {
-  'creepjs-lies': 'creepjs',
-  'sannysoft-failed': 'sannysoft',
-}
-
-/** Synthetic pages proving the oracle parser can go red — and that UNREAD is reachable. */
+/**
+ * Synthetic pages, each taken from what a real page ACTUALLY PRINTED, or from a known challenge page.
+ * These prove the corrections; the live run is the coverage.
+ */
 const ORACLE_FIXTURES = {
+  // The exact string that produced the false FAIL on pixelscan.
+  'pixelscan-negation':
+    'Fingerprint No automated behavior detected Bot check passed Uniqueness 1 in 200000',
+  // The site describing itself — the whole reason the verdict must come from the result region.
+  'browserscan-marketing':
+    'BrowserScan is a human-machine verification system using WebDriver and other automation tools to help websites detect bots.',
+  // Cloudflare's own wording. This reached PASS before the fix.
+  'cloudflare-challenge':
+    'Verify you are human Just a moment... Enable JavaScript and cookies to continue',
+  // The same phrase doing correct work, with corroboration.
+  'deviceandbrowserinfo-clean':
+    'Are you a bot? ✅ You are human! "isBot": false, no automated behavior detected',
   'creepjs-lies':
-    'Trust score 42% Lies 2 webDriver: true platform: Win32 but userAgent says Macintosh resistance 3.1',
+    'FP ID: abc Fuzzy: 1700.00 ms WebRTC Lies 2 webDriver: true platform: Win32 userAgent says Macintosh',
+  'creepjs-clean': 'FP ID: abc Lies 0 resistance 0 canvas 0.02',
   'sannysoft-failed':
     'WebDriver (New) failed | Chrome (New) failed | Permissions passed | Plugins passed',
-  'clean-oracle': 'You are not a bot 0 automation flags detected consistent fingerprint',
   unreadable: 'Loading…',
 }
 
+/** Which parser an oracle fixture exercises. */
+const ORACLE_FIXTURE_KINDS = {
+  'creepjs-lies': 'creepjs',
+  'creepjs-clean': 'creepjs',
+  'sannysoft-failed': 'sannysoft',
+}
+
 /**
- * Run every target and print one table.
+ * What each fixture MUST produce. The counterfactual ASSERTS this rather than only printing, so a
+ * later change that quietly re-breaks one of these corrections fails the run.
  *
- * One target failing, timing out or being blocked NEVER aborts the others, and every target appears
- * in the table with its verdict and its specific finding — including the ones that could not be read.
+ * `browserscan-marketing` is expected to FAIL, and that is not a bug: it is the demonstration that
+ * reading the whole body is unsafe. In a live run the `scope` selectors hand the parser the result
+ * region instead, which is exactly why `scope` exists.
  */
+const ORACLE_FIXTURE_EXPECT = {
+  'pixelscan-negation': 'PASS',
+  'browserscan-marketing': 'FAIL',
+  'cloudflare-challenge': 'UNREAD',
+  'deviceandbrowserinfo-clean': 'PASS',
+  'creepjs-lies': 'FAIL',
+  'creepjs-clean': 'PASS',
+  'sannysoft-failed': 'FAIL',
+  unreadable: 'UNREAD',
+}
+
+/* ------------------------------------------------------------------------------------ the runner */
+
+async function exitIp() {
+  for (const url of ['https://api.ipify.org?format=json', 'https://ifconfig.me/ip']) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+      if (!response.ok) continue
+      const text = (await response.text()).trim()
+      const parsed = text.startsWith('{') ? JSON.parse(text).ip : text
+      if (parsed) return parsed
+    } catch {
+      // Try the next one.
+    }
+  }
+  return null
+}
+
+/** The result region's text, or the whole body with a recorded caveat. */
+async function resultText(page, target) {
+  for (const selector of target.scope ?? []) {
+    try {
+      const locator = page.locator(selector).first()
+      if ((await locator.count()) === 0) continue
+      const text = await locator.innerText({ timeout: 5_000 })
+      if (text && text.trim().length > 0) return { text, scope: selector }
+    } catch {
+      // Try the next selector.
+    }
+  }
+  const body =
+    (await page
+      .locator('body')
+      .innerText()
+      .catch(() => '')) || ''
+  return { text: body, scope: null }
+}
+
 async function checkTargets(browser, propertiesHeld) {
   const ip = await exitIp()
   console.log('')
   console.log(`=== site check (exit IP ${ip ?? 'could not be determined'})`)
-  if (SITE_TARGETS.length < EXPECTED_TARGET_COUNT) {
-    console.log(
-      `note  only ${SITE_TARGETS.length} of ${EXPECTED_TARGET_COUNT} targets are configured ` +
-        `(${EXPECTED_TARGET_COUNT - SITE_TARGETS.length} pending); this run is INCOMPLETE`,
-    )
-  }
 
   const rows = []
   for (const target of SITE_TARGETS) {
@@ -529,31 +756,31 @@ async function checkTargets(browser, propertiesHeld) {
         waitUntil: 'domcontentloaded',
         timeout: 45_000,
       })
-      // A fixed settle rather than a network-idle wait: these sites keep a connection open, so
-      // `networkidle` would never fire.
       if (target.waitMs > 0) await page.waitForTimeout(target.waitMs)
-      const text =
-        (await page
-          .locator('body')
-          .innerText()
-          .catch(() => '')) || ''
-      const interstitial = INTERSTITIAL_SIGNATURES.find(pattern => pattern.test(text))
+      const { text, scope } = await resultText(page, target)
+      const unscoped =
+        target.kind === 'oracle' && scope === null
+          ? ' [read from the whole body: no result-region selector matched]'
+          : ''
+      const flat = text.replace(/\s+/g, ' ').trim()
 
-      if (target.kind === 'login') {
-        if (interstitial) {
-          rows.push({
-            name: target.name,
-            verdict: 'REPORT',
-            finding:
-              `RISK CONTROL from ${ip ?? 'unknown'} (status ${response?.status() ?? '?'}); the page ` +
-              `says: "${text.replace(/\s+/g, ' ').slice(0, 200)}"`,
-          })
-          note(
-            `${target.name} served a risk-control page from ${ip ?? 'unknown'}. That is the ` +
-              'datacenter ASN, not a fingerprint defect — no browser change alters where CI exits from.',
-          )
-          continue
-        }
+      const interstitial = INTERSTITIAL_SIGNATURES.find(pattern => pattern.test(flat))
+      if (interstitial) {
+        // A challenge page is NEVER a verdict, for either kind of target. This is the fix for the
+        // path that reached PASS on Cloudflare's "Verify you are human".
+        rows.push({
+          name: target.name,
+          verdict: 'REPORT',
+          finding:
+            `${target.kind === 'oracle' ? 'the oracle was' : 'the site was'} behind a ` +
+            `challenge/interstitial (${interstitial}) from ${ip ?? 'unknown'} — no verdict is ` +
+            `possible. It says: "${flat.slice(0, 160)}"`,
+        })
+        note(`${target.name}: challenge page matched ${interstitial}; not read as a verdict`)
+        continue
+      }
+
+      if (target.kind === 'real' && target.expectForm === 'login') {
         const password = await page.locator('input[type="password"]').count()
         const username =
           (await page
@@ -571,35 +798,57 @@ async function checkTargets(browser, propertiesHeld) {
           rows.push({
             name: target.name,
             verdict: 'REPORT',
-            finding:
-              'no login form, but a fingerprint property already failed, so this is not an ' +
-              'independent defect',
+            finding: 'no login form, but a fingerprint property already failed',
           })
         }
         continue
       }
 
-      // An oracle site: an interstitial is a REPORT (not ours), otherwise read the verdict.
-      if (interstitial) {
-        rows.push({
-          name: target.name,
-          verdict: 'REPORT',
-          finding:
-            `the oracle served a risk-control/interstitial page from ${ip ?? 'unknown'}, so no ` +
-            `verdict can be read. It says: "${text.replace(/\s+/g, ' ').slice(0, 200)}"`,
-        })
+      if (target.kind === 'real') {
+        // Does the page RENDER and work? A block/captcha is recorded, never fatal.
+        const block = BLOCK_SIGNATURES.find(pattern => pattern.test(flat))
+        let found = 0
+        try {
+          found = await page.locator(target.expectSelector).count()
+        } catch {
+          found = 0
+        }
+        if (found > 0) {
+          rows.push({
+            name: target.name,
+            verdict: 'PASS',
+            finding: `rendered and working (${found} match for "${target.expectSelector}")`,
+          })
+        } else if (block) {
+          rows.push({
+            name: target.name,
+            verdict: 'REPORT',
+            finding:
+              `blocked/captcha (${block}) from ${ip ?? 'unknown'} — recorded, not failed. It says: ` +
+              `"${flat.slice(0, 160)}"`,
+          })
+        } else {
+          rows.push({
+            name: target.name,
+            verdict: 'UNREAD',
+            finding:
+              `the page returned ${flat.length} characters but nothing matched ` +
+              `"${target.expectSelector}" — the layout may have changed, or the page is a stub. ` +
+              `Title "${await page.title()}"`,
+          })
+        }
         continue
       }
 
-      const parsed = parsePageVerdict(target.parse, text)
-      rows.push({ name: target.name, verdict: parsed.verdict, finding: parsed.finding })
+      const parsed = parsePageVerdict(target.parse, flat)
+      rows.push({ name: target.name, verdict: parsed.verdict, finding: parsed.finding + unscoped })
       if (parsed.verdict === 'FAIL') {
         failures.push(`${target.name} (oracle) named an inconsistency of ours: ${parsed.finding}`)
       }
       if (parsed.verdict === 'UNREAD') {
         note(
-          `${target.name}: the verdict could NOT be read. That is neither a pass nor a fail — the ` +
-            'extraction for this site needs updating, and until then this site proves nothing.',
+          `${target.name}: the verdict could NOT be read. Neither a pass nor a fail — the extraction ` +
+            'needs updating, and until then this site proves nothing.',
         )
       }
     } catch (error) {
@@ -615,6 +864,14 @@ async function checkTargets(browser, propertiesHeld) {
     } finally {
       await page.close().catch(() => {})
     }
+  }
+
+  for (const pending of PENDING_TARGETS) {
+    rows.push({
+      name: pending.name,
+      verdict: 'PENDING',
+      finding: `not configured: ${pending.reason}`,
+    })
   }
 
   console.log('')
@@ -633,7 +890,6 @@ async function checkTargets(browser, propertiesHeld) {
       .map(([verdict, count]) => `${count} ${verdict}`)
       .join(', ')}`,
   )
-  // The honesty line, in the runner's own output rather than only in a PR description.
   console.log(
     'LIMIT: a green oracle result is one third-party opinion, on one day, from one datacenter IP.\n' +
       '       It is not proof of undetectability. A PASS means these particular checks, run today\n' +
@@ -669,8 +925,8 @@ if (!fixture && !live && !oracleFixture) {
   process.exit(2)
 }
 
-// The counterfactual for the ORACLE path: drive the verdict parser with a synthetic page, so "an
-// oracle can fail us" is demonstrable without a browser. Same parser the live oracles use.
+// The counterfactual for the ORACLE path: drive the verdict parser with a page that really printed
+// what produced the bug. Same parser the live oracles use.
 if (oracleFixture) {
   if (!Object.hasOwn(ORACLE_FIXTURES, oracleFixture)) {
     console.error(
@@ -682,10 +938,24 @@ if (oracleFixture) {
   const kind = ORACLE_FIXTURE_KINDS[oracleFixture] ?? 'generic'
   console.log(`=== oracle fixture (${oracleFixture}, parsed as "${kind}") — no browser needed`)
   console.log(`      page text: ${JSON.stringify(text)}`)
+  // Both halves of the challenge fix are shown here: the interstitial pre-check runs BEFORE the
+  // parser in a live run, so a challenge page is REPORTed and never parsed at all — and the parser
+  // itself refuses to read an uncorroborated "you are human" as a pass.
+  const interstitial = INTERSTITIAL_SIGNATURES.find(pattern => pattern.test(text))
+  console.log(
+    `      interstitial: ${interstitial ? `MATCHED ${interstitial} — a live run REPORTs this page and never parses it` : 'not matched'}`,
+  )
   const parsed = parsePageVerdict(kind, text)
-  console.log(`      verdict:   ${parsed.verdict}`)
+  console.log(
+    `      verdict:   ${parsed.verdict} (expected ${ORACLE_FIXTURE_EXPECT[oracleFixture]})`,
+  )
   console.log(`      finding:   ${parsed.finding}`)
-  if (parsed.verdict === 'FAIL') failures.push(`oracle fixture ${oracleFixture}: ${parsed.finding}`)
+  if (parsed.verdict !== ORACLE_FIXTURE_EXPECT[oracleFixture]) {
+    failures.push(
+      `oracle fixture ${oracleFixture}: expected ${ORACLE_FIXTURE_EXPECT[oracleFixture]} but got ` +
+        `${parsed.verdict} — ${parsed.finding}`,
+    )
+  }
   report()
 }
 
@@ -715,16 +985,15 @@ if (fixture) {
     name: `verify-fingerprint-${Date.now()}`,
     launch: { headless, startUrl: 'about:blank' },
   })
-
   closeCore = async () => {
     await core.runtime.stop(profile.id).catch(() => {})
     await core.close().catch(() => {})
     await rm(dataDir, { recursive: true, force: true }).catch(() => {})
   }
 
-  // `runtime.launch` THROWS when the engine cannot start, rather than returning a status — verified:
-  // without this catch the spawn failure arrives as an uncaught exception and a stack trace, which
-  // is exactly the kind of output that gets misread as a fingerprint defect.
+  // `runtime.launch` THROWS when the engine cannot start rather than returning a status — verified.
+  // Without this catch the spawn failure arrives as an uncaught exception and a stack trace, which is
+  // exactly the output that gets misread as a fingerprint defect.
   let runtime
   try {
     runtime = await core.runtime.launch(profile.id)
@@ -737,7 +1006,6 @@ if (fixture) {
     await closeCore()
     process.exit(2)
   }
-
   if (runtime.status !== 'running' || !runtime.wsEndpoint) {
     console.error(`FAIL  the profile did not launch with a wsEndpoint (status ${runtime.status}).`)
     await closeCore()
@@ -771,7 +1039,7 @@ if (browser && !skipSites) {
 await closeCore?.()
 report()
 
-/** Print the summary and exit appropriately. */
+/** Print the summary and exit non-zero on any failure. */
 function report() {
   console.log('')
   console.log('='.repeat(72))
