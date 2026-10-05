@@ -55,6 +55,10 @@ import process from 'node:process'
  *   - `oracle` — a third-party checker. FAILS the run on a named inconsistency of ours.
  *   - `real`   — a site a user actually uses. REPORTS captchas/blocks; fails only when the page does
  *                not render at all while every fingerprint property passed.
+ *   - `data`   — a page that DISPLAYS values and has no verdict to give (the `browserleaks-*` pages,
+ *                whose text is documentation prose plus a data table). Verdict `DATA` when values were
+ *                read, and the page's own assertions are applied where something real is checkable.
+ *                Treating these as verdict targets was a design error, not an extraction bug.
  *
  * `scope` is a list of candidate selectors for the RESULT REGION, tried in order. This matters more
  * than it looks: an anti-detect checker's page is guaranteed to contain the vocabulary we scan for —
@@ -111,32 +115,31 @@ const SITE_TARGETS = [
   {
     name: 'browserleaks-canvas',
     url: 'https://browserleaks.com/canvas',
-    kind: 'oracle',
-    parse: 'generic',
+    kind: 'data',
     waitMs: 8_000,
     scope: ['#content', 'main'],
   },
   {
     name: 'browserleaks-webgl',
     url: 'https://browserleaks.com/webgl',
-    kind: 'oracle',
-    parse: 'generic',
+    kind: 'data',
     waitMs: 8_000,
     scope: ['#content', 'main'],
   },
   {
     name: 'browserleaks-webrtc',
     url: 'https://browserleaks.com/webrtc',
-    kind: 'oracle',
-    parse: 'generic',
+    kind: 'data',
     waitMs: 10_000,
     scope: ['#content', 'main'],
+    // The one checkable assertion on this page, and a real leak test: if WebRTC reports a public
+    // address that is not the one we exited from, that is a leak and it fails us.
+    assertNoForeignIp: true,
   },
   {
     name: 'browserleaks-fonts',
     url: 'https://browserleaks.com/fonts',
-    kind: 'oracle',
-    parse: 'generic',
+    kind: 'data',
     waitMs: 8_000,
     scope: ['#content', 'main'],
   },
@@ -147,6 +150,9 @@ const SITE_TARGETS = [
     parse: 'generic',
     waitMs: 15_000,
     scope: ['#test-result', '[class*="result"]', 'main'],
+    // The live run read the EFF's intro prose ("A Project of the Electronic Frontier Foundation See
+    // how t…"), which is page chrome: this page has no verdict until its own test is run.
+    clickBefore: '#click-me, a[href*="test"], button[type="submit"]',
   },
   {
     name: 'amiunique',
@@ -170,7 +176,10 @@ const SITE_TARGETS = [
     kind: 'oracle',
     parse: 'generic',
     waitMs: 12_000,
-    scope: ['[class*="result"]', '[class*="check"]', 'main'],
+    // NO `main` fallback: iphey's own marketing copy lives in `main` and contains "Bot Check", which
+    // produced a false FAIL. With only result-region selectors, a miss is recorded as
+    // "[read from the whole body: …]" so a reviewer can see the scope failed rather than the page.
+    scope: ['[class*="result"]', '[class*="check"]', '[class*="score"]'],
   },
   {
     name: 'areyouheadless',
@@ -716,14 +725,16 @@ const ORACLE_FIXTURE_EXPECT = {
  * class of contradiction that made CreepJS report lies about other products. So it is asserted, and a
  * difference fails us.
  */
-const WORKER_FIELDS = [
-  'hardwareConcurrency',
-  'webglVendor',
-  'webglRenderer',
-  'screenWidth',
-  'userAgent',
-  'devicePixelRatio',
-]
+/**
+ * The fields a WORKER can actually see.
+ *
+ * `screenWidth` and `devicePixelRatio` are deliberately NOT in this list. `screen` and
+ * `devicePixelRatio` are Window-only APIs and do not exist in Worker scope, so they can never agree
+ * there — comparing them produced a permanent "4 of 6 fields agree", which reads as two fields
+ * pending rather than as a complete check. A permanently partial PASS is the shape of a decorative
+ * guard even when the comparison underneath is sound, so the two are excluded rather than counted.
+ */
+const WORKER_FIELDS = ['hardwareConcurrency', 'webglVendor', 'webglRenderer', 'userAgent']
 
 /**
  * Compare the main thread's values with the worker's.
@@ -923,27 +934,82 @@ async function checkTargets(browser, propertiesHeld) {
         waitUntil: 'domcontentloaded',
         timeout: 45_000,
       })
+      // Four different causes used to share one UNREAD label. A server error means the site is down
+      // and proves nothing either way; a 4xx means the site refused us; a block page is the same kind
+      // of event; and a page that rendered without the element we expect is a layout change. They are
+      // labelled apart so the table says which happened.
+      const status = response?.status() ?? 0
+      if (status >= 500) {
+        rows.push({
+          name: target.name,
+          verdict: 'UNREACHABLE',
+          finding: `HTTP ${status} from ${ip ?? 'unknown'} — the site itself is failing, so this proves nothing either way`,
+        })
+        continue
+      }
+      if (status >= 400) {
+        rows.push({
+          name: target.name,
+          verdict: 'REPORT',
+          finding: `HTTP ${status} from ${ip ?? 'unknown'} — the site refused us`,
+        })
+        continue
+      }
+
+      // Some checkers only produce a verdict after their own test button is clicked. Tried, and when
+      // the selector does not match the UNREAD says so rather than looking like an extraction bug.
+      if (target.clickBefore) {
+        try {
+          const button = page.locator(target.clickBefore).first()
+          if ((await button.count()) > 0) await button.click({ timeout: 10_000 })
+        } catch (error) {
+          note(
+            `${target.name}: the test button did not click ` +
+              `(${String(error?.message ?? error).split('\n')[0]})`,
+          )
+        }
+      }
       if (target.waitMs > 0) await page.waitForTimeout(target.waitMs)
-      const { text, scope } = await resultText(page, target)
+      const { text, scope, tried } = await resultText(page, target)
       const unscoped =
-        target.kind === 'oracle' && scope === null
+        target.kind !== 'real' && scope === null
           ? ' [read from the whole body: no result-region selector matched]'
           : ''
       const flat = text.replace(/\s+/g, ' ').trim()
 
-      const interstitial = INTERSTITIAL_SIGNATURES.find(pattern => pattern.test(flat))
+      // BLOCK_SIGNATURES, not just INTERSTITIAL_SIGNATURES: "Sorry, you have been blocked" is the site
+      // refusing us (whoer printed exactly that), which is a REPORT rather than a failed extraction.
+      const interstitial = BLOCK_SIGNATURES.find(pattern => pattern.test(flat))
       if (interstitial) {
-        // A challenge page is NEVER a verdict, for either kind of target. This is the fix for the
-        // path that reached PASS on Cloudflare's "Verify you are human".
+        // A challenge or block page is NEVER a verdict, for any kind of target. This is the fix for
+        // the path that reached PASS on Cloudflare's "Verify you are human".
         rows.push({
           name: target.name,
           verdict: 'REPORT',
           finding:
-            `${target.kind === 'oracle' ? 'the oracle was' : 'the site was'} behind a ` +
-            `challenge/interstitial (${interstitial}) from ${ip ?? 'unknown'} — no verdict is ` +
+            `${target.kind === 'real' ? 'the site was' : 'the page was'} behind a ` +
+            `challenge/block (${interstitial}) from ${ip ?? 'unknown'} — no verdict is ` +
             `possible. It says: "${flat.slice(0, 160)}"`,
         })
-        note(`${target.name}: challenge page matched ${interstitial}; not read as a verdict`)
+        note(`${target.name}: challenge/block page matched ${interstitial}; not read as a verdict`)
+        continue
+      }
+
+      if (target.kind === 'data') {
+        // A DATA page displays values and has no verdict to give. `browserleaks-*` is the case that
+        // taught us this: every one of its pages is documentation prose plus a data table, so
+        // expecting a pass/fail was a design error rather than an extraction bug. The values are
+        // extracted and asserted where something real is checkable, instead of nine permanent
+        // UNREADs training people to ignore the column.
+        const outcome = checkDataTarget(target, flat, ip)
+        rows.push({
+          name: target.name,
+          verdict: outcome.verdict,
+          finding: outcome.finding + unscoped,
+        })
+        if (outcome.verdict === 'FAIL') {
+          failures.push(`${target.name} (data target) failed its assertion: ${outcome.finding}`)
+        }
         continue
       }
 
@@ -999,16 +1065,24 @@ async function checkTargets(browser, propertiesHeld) {
             name: target.name,
             verdict: 'UNREAD',
             finding:
-              `the page returned ${flat.length} characters but nothing matched ` +
-              `"${target.expectSelector}" — the layout may have changed, or the page is a stub. ` +
-              `Title "${await page.title()}"`,
+              `the page rendered ${flat.length} characters but nothing matched ` +
+              `"${target.expectSelector}" — a layout change or a bot page, NOT a block (no block ` +
+              `signature was present). Title "${await page.title()}". It says: "${flat.slice(0, 120)}"`,
           })
         }
         continue
       }
 
       const parsed = parsePageVerdict(target.parse, flat)
-      rows.push({ name: target.name, verdict: parsed.verdict, finding: parsed.finding + unscoped })
+      // On UNREAD, dump WHERE the runner looked and how much each place held. `creepjs` read 3947
+      // characters and found no lie count, which means the count is not in body.innerText at all —
+      // so the next correction comes from this list rather than from another guess.
+      const where = parsed.verdict === 'UNREAD' ? ` [looked in: ${tried.join('; ')}]` : ''
+      rows.push({
+        name: target.name,
+        verdict: parsed.verdict,
+        finding: parsed.finding + unscoped + where,
+      })
       if (parsed.verdict === 'FAIL') {
         failures.push(`${target.name} (oracle) named an inconsistency of ours: ${parsed.finding}`)
       }
