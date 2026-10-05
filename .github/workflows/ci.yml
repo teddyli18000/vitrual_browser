@@ -164,6 +164,32 @@ jobs:
         with:
           headless: '1'
 
+      # The live fingerprint guard, beside the smoke runner rather than in a job of its own: this job
+      # already fetched the kernel and built the workspace, and `--live` needs exactly that.
+      #
+      # It is HEADED, deliberately. `VFOX_SMOKE_HEADLESS` is set per-step in this job and never at job
+      # level, so this step gets a real window — the only configuration in which the geometry property
+      # means anything, since a headless profile reports a synthetic viewport measured against
+      # numbers no user ever sees.
+      #
+      # WHAT THIS STEP IS NOT. An earlier version of this comment claimed a red run here proved the
+      # guard was live. No such run happened, and that claim was wrong twice over: the assertion it
+      # referred to (`window.innerWidth/innerHeight = 0`) was withdrawn because it CANNOT go red —
+      # `_castToProperties` filters falsy values and `properties.json` has no defaults, so the key
+      # never reaches CAMOU_CONFIG and Firefox reports its real viewport, measured at `inner
+      # 1770x1246` on the very build that was under suspicion. This step is expected to be GREEN on
+      # main. Do not keep it green by weakening a property, and do not read green as coverage the
+      # fixtures provided: a fixture exercises the checker wiring, the live run is the coverage.
+      #
+      # The site check inside the runner reports a datacenter-IP risk-control page instead of failing
+      # on it, because CI exits from a datacenter too.
+      - name: Read the live fingerprint surface
+        uses: ./.github/actions/gated-script
+        with:
+          label: fingerprint
+          script: packages/core/scripts/verify-fingerprint.mjs
+          args: --live
+
       # packages/sync was the only shipped feature with no end-to-end evidence: unit tests
       # against a fake Playwright layer plus a smoke script that had never executed anywhere.
       # It launches two real profiles and drives a real session, so it runs here where the
