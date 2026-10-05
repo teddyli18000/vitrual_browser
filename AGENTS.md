@@ -257,6 +257,45 @@ Teammates edit files and report; the Lead creates branches, pushes, opens PRs, a
 CI is green on the same commit. The Lead independently re-runs the relevant gate before merging
 rather than trusting a summary — a summary is a claim, and claims are what reviews are for.
 
+## Delivery discipline
+
+The owner's rules, and each one exists because breaking it shipped a defect.
+
+1. **Work is tracked before it is done.** A behaviour change starts as an issue; a non-trivial design is
+   reviewed as a proposal before code exists; the work lands as one concern per pull request. Do not
+   batch unrelated changes, and do not let a release become the place where several features first meet.
+2. **Every pull request is reviewed by someone who did not write it**, and **the Lead merges, never the
+   author**. The Lead re-runs the gate on the same commit rather than trusting a summary - a summary is a
+   claim, and claims are what reviews are for.
+3. **CI is the primary evidence, because local verification is impossible by construction.** No browser
+   can start in the development sandbox (Chromium dies on Mojo's named pipe, the same wall as Electron
+   and esbuild) and Electron cannot run at all. A browser-driven or packaged claim that has not run in
+   CI has not been verified - say which it is, and never dress a local partial run up as one.
+4. **Verify the artifact that ships, not the directory that was built.** `release/win-unpacked` is not
+   what a user downloads; the portable zip and the installer are. v0.3.4 passed every check against the
+   build directory and failed on every user's machine, because the directory let module resolution walk
+   up into this repository's own `node_modules` - an environment the user does not have.
+5. **A guard that has never failed has not been shown to test anything.** Every new assertion ships with
+   the output of it going red. A guard that scans zero inputs and returns green is worse than no guard,
+   because it is believed - and this repository has shipped that mistake twice.
+6. **Releases are cut from a green main, one at a time**, with the release workflow running the packaged
+   suite against the artifact before it publishes. A release that has to be re-cut is a process failure,
+   not a shipping accident.
+
+### Assembling a pull request from a working tree
+
+Two defects in one week came from copying whole files out of the shared working tree into a branch based
+on `origin/main`: one silently **reverted** work that was already on main, the other **added** a file
+belonging to a different branch. Before pushing an assembled branch, check **both** directions:
+
+```powershell
+git diff --stat origin/main                        # every hunk must belong to this task
+git diff origin/main | Select-String '^-'          # nothing that is on main may disappear
+```
+
+The shared tree drifts behind main within hours, so work in a worktree from `origin/main` and treat any
+file copied from the shared tree as suspect until that diff is clean.
+
 ## Fingerprint spread is a property, not a threshold
 
 - **The engine's WebGL sampler is weighted by real-world GPU market share, and that is a defect in
@@ -286,11 +325,6 @@ rather than trusting a summary — a summary is a claim, and claims are what rev
   `camoufoxModule()`, which already handles the `app.asar.unpacked` redirect. Only the *pair* has to
   be chosen here; camoufox-js resolves `webgl_config` back to the row's full `data` fragment at
   launch.
-## License
-
-MIT for this repository's own code. Camoufox (MPL-2.0) and camoufox-js (MPL-2.0) are consumed as
-external dependencies and are not modified; their binaries are downloaded at runtime, not vendored.
-
 ## Packaging gotchas (learned from the first two release runs)
 
 - **A build step belongs in `electron.vite.config.ts`, not in a package script.**
