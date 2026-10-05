@@ -109,7 +109,11 @@ export async function acquireDataDirLock(
     }
 
     const holder = await readLock(file)
-    // Ours when the token matches, or when the file predates tokens and carries our pid.
+    // Ours when the token matches. The token, not the pid, is what identifies this core: two cores in
+    // one process — the desktop starting twice, or a test — share a pid, so a pid alone cannot tell
+    // "another instance" from "my own leftover", and getting that wrong is how a second writer gets in.
+    // A lock written before tokens existed carries our pid and no token; that is ours too, or an upgrade
+    // would refuse to start against its own previous run's file.
     const ours =
       holder !== null &&
       (holder.token === token || (holder.token === undefined && holder.pid === process.pid))

@@ -108,7 +108,7 @@ describe('data directory lock', () => {
     expect((await acquireDataDirLock(dataDir, logger())).acquired).toBe(true)
   })
 
-  it('ignores an unreadable lock file instead of refusing to start', async () => {
+  it('takes over an unreadable lock file instead of refusing to start — a corrupt file must never lock the user out of their own data', async () => {
     await fs.writeFile(path.join(dataDir, 'core.lock'), 'not json', 'utf8')
 
     expect((await acquireDataDirLock(dataDir, logger())).acquired).toBe(true)

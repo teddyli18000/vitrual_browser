@@ -174,6 +174,12 @@ export interface AddonsApi {
 
 export interface Core {
   readonly dataDir: string
+  /**
+   * Who owns the data directory: `owned` is false when another live VFox instance holds it, in which
+   * case every mutating method throws and only reads work. The desktop uses this to refuse to start a
+   * second instance at all, which is the only way to guarantee a single writer.
+   */
+  readonly dataDirLock: { owned: boolean; owner: number | null }
   readonly profiles: ProfilesApi
   readonly groups: GroupsApi
   readonly runtime: RuntimeApi

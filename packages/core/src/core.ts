@@ -338,6 +338,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
 
   return {
     dataDir: store.dataDir,
+    dataDirLock: { owned: dataDirLock.acquired, owner: dataDirLock.owner },
     profiles,
     groups,
     runtime,

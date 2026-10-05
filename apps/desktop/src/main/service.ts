@@ -70,6 +70,10 @@ export async function startService(dataDir: string): Promise<ServiceState> {
       dataDir,
       logger: log,
       workArea: screen.getPrimaryDisplay().workAreaSize,
+      // The desktop must be the only instance on this data directory: two of them would mean two
+      // writers and two browsers on one profile directory. The refusal below becomes `error`, which
+      // the window already surfaces.
+      requireExclusive: true,
     })
     handle = started
     log.info(`API listening on ${started.url}`)
