@@ -49,6 +49,43 @@ async function serve(options = {}) {
 }
 
 describe('startServer', () => {
+  it('serves the event stream over the same real socket', async () => {
+    // The suite drove `/api/v1/events` through `inject`, which simulates a request inside Fastify
+    // and never touches a real `ServerResponse`. That is why it stayed green while the route was
+    // broken in the packaged application: `hub.handle` reads the runtime snapshot from the store
+    // before it hijacks the reply, so it yields on its first line, and a route that does not await
+    // it lets Fastify send its own 200 first. The hub then dies on `res.writeHead(200, ...)` with
+    // ERR_HTTP_HEADERS_SENT, and every client of the app loses live updates.
+    //
+    // Only a real socket reproduces it. This asserts the first frame arrives, which cannot happen
+    // if Fastify won the race.
+    const handle = await serve({ port: 0 })
+    const response = await fetch(`${handle.url}${API_ROUTES.events}`, {
+      headers: { [API_TOKEN_HEADER]: TEST_TOKEN, accept: 'text/event-stream' },
+    })
+    expect(response.status).toBe(200)
+    expect(String(response.headers.get('content-type'))).toContain('text/event-stream')
+
+    const reader = response.body.getReader()
+    const { value } = await reader.read()
+    expect(new TextDecoder().decode(value)).toContain('retry:')
+    await reader.cancel()
+  })
+
+  it('does not let Fastify answer before the hub hijacks the reply', async () => {
+    // The failure mode was intermittent from the outside: whichever of the two won the race decided
+    // whether the stream worked. Ten connections in a row is enough to make a regression show up
+    // as a non-200 rather than as a flake.
+    const handle = await serve({ port: 0 })
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await fetch(`${handle.url}${API_ROUTES.events}`, {
+        headers: { [API_TOKEN_HEADER]: TEST_TOKEN, accept: 'text/event-stream' },
+      })
+      expect(response.status).toBe(200)
+      await response.body.cancel()
+    }
+  })
+
   it('serves the API on a real loopback socket', async () => {
     const handle = await serve({ port: 0 })
     expect(handle.host).toBe(DEFAULT_API_HOST)

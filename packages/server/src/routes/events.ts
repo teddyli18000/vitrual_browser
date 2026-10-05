@@ -14,6 +14,14 @@ export function registerEventRoutes(app: FastifyInstance, deps: RouteDeps): void
     for (const [name, value] of Object.entries(corsHeaders(request))) {
       reply.raw.setHeader(name, value)
     }
-    deps.hub.handle(request, reply)
+    // AWAITED, and the await is load-bearing rather than stylistic. `handle` reads the runtime
+    // snapshot from the store before it hijacks the reply, so it now yields control on its first
+    // line. Dropping the promise here lets the async handler resolve immediately, Fastify sends its
+    // own empty 200, and `handle` then dies on `res.writeHead(200, ...)` with ERR_HTTP_HEADERS_SENT.
+    //
+    // That is exactly what shipped in the store PR: before it, `handle` reached `reply.hijack()`
+    // without ever yielding, so the missing await was invisible. CI caught it on the real SSE route
+    // while the unit suite stayed green, because the suite drives a fake hub.
+    await deps.hub.handle(request, reply)
   })
 }
