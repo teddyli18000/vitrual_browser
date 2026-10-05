@@ -88,6 +88,19 @@ export async function createIdentity(
     },
   )
 
+  // The viewport in this fingerprint is `0`, and that is correct and harmless — do not "repair" it.
+  //
+  // `innerWidth: "window.innerWidth"` in the mapping table is never reached for a falsy value:
+  // `_castToProperties` skips them (`if (!data) continue`, dist/fingerprints.js:12), so the key is
+  // absent from CAMOU_CONFIG, `properties.json` has no default for it, and the engine overrides
+  // nothing. Firefox reports its own true viewport — measured on the CI runner at 1770x1246 inside a
+  // 1786x1311 window. Writing a non-zero value here would START it being mapped, replacing that
+  // measured viewport with a guess derived from a chrome allowance that is not exactly right.
+  //
+  // If a geometry value ever does need correcting, correct it at launch, on a clone of the stored
+  // fingerprint, and never by re-rolling the identity — a re-roll costs the user the device they have
+  // been presenting, which is the one thing pinning exists to prevent.
+
   // `fromBrowserforge()` is where the last per-launch random lives: `handleScreenXY` picks
   // `window.screenY` with `randrange` whenever the fingerprint's screenX is far from zero
   // (dist/fingerprints.js:31-54). Running the mapper once and pinning what it produced keeps the

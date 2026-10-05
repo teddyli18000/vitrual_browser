@@ -8,10 +8,7 @@
  *
  * It drives the shipped path — `createCore` from `packages/core/dist` — never raw Playwright, and
  * asserts, in order:
- *   1. a real visible OS window exists for the engine (koffi → user32.dll/kernel32.dll), with
- *      pid/handle/title/rect — found by pid first and by process image name as the fallback, because
- *      a headed launch reports a Windows launcher stub that owns no window at all (see the long
- *      comment on `findEngineWindow` in `lib/user32.mjs`); the payload says which path matched;
+ *   1. a real visible OS window exists for the engine (koffi → user32.dll), with pid/handle/title/rect;
  *   2. the rect is a plausible browser window (>= 800x600, no bigger than the work area);
  *   3. it is a usable Firefox: a real page loads and reports the profile's spoofed user agent;
  *   4. **state survives a restart** — cookie and localStorage written before a stop are still there
@@ -35,10 +32,7 @@
  * Output contract (stdout is machine-readable only; human progress goes to stderr):
  *   VFOX_WINDOW_STEP   {"step":…,"ok":…,…}       one line per assertion group
  *   VFOX_WINDOW_OK     {…}                       exactly once, on success
- *   VFOX_WINDOW_FAIL   {"stage":…,"reason":…,"hint":…,"details":…}
- *                                                on failure, and the exit code is non-zero; when a
- *                                                window is missing, `details.desktop` is a snapshot
- *                                                of what was actually on screen
+ *   VFOX_WINDOW_FAIL   {"stage":…,"reason":…}    on failure, and the exit code is non-zero
  *   exit codes: 0 ok | 1 an assertion failed | 2 the environment cannot run this check
  *
  * Prerequisites: `pnpm --filter @vfox/core build` (this imports `dist`), the engine
@@ -56,12 +50,6 @@ import { firefox } from 'playwright-core'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..', '..', '..')
 
-/**
- * The lower bound on a plausible browser window, and the only one: the CI runner's desktop is
- * 1024x768 with a 1024x720 work area, so a maximized window is roughly 1024x720 — anything tighter
- * than 800x600 would fail a perfectly good window. The upper bound is the work area plus
- * `WORK_AREA_TOLERANCE` (a maximized window has an invisible border that sticks out past it).
- */
 const MIN_WIDTH = 800
 const MIN_HEIGHT = 600
 const WINDOW_WAIT_MS = 30_000
@@ -70,13 +58,11 @@ const CHROME_MAX_WIDTH = 120
 const CHROME_MAX_HEIGHT = 200
 
 class WindowFailure extends Error {
-  constructor(stage, reason, exitCode, hint, details) {
+  constructor(stage, reason, exitCode, hint) {
     super(reason)
     this.stage = stage
     this.exitCode = exitCode
     this.hint = hint
-    /** Extra machine-readable evidence for this failure, or null. */
-    this.details = details ?? null
   }
 }
 
@@ -92,13 +78,13 @@ function step(name, details) {
   emit('VFOX_WINDOW_STEP', { step: name, ok: true, ...details }, process.stderr)
 }
 
-function fail(stage, reason, exitCode, hint, details) {
-  throw new WindowFailure(stage, reason, exitCode, hint, details)
+function fail(stage, reason, exitCode, hint) {
+  throw new WindowFailure(stage, reason, exitCode, hint)
 }
 
 /** For the pre-flight checks, which run before the main try/catch: report and exit directly. */
 function refuse(stage, reason, exitCode, hint) {
-  emit('VFOX_WINDOW_FAIL', { stage, reason, hint: hint ?? null, details: null }, process.stderr)
+  emit('VFOX_WINDOW_FAIL', { stage, reason, hint: hint ?? null }, process.stderr)
   log(`REFUSING to run at ${stage}: ${reason}`)
   if (hint) {
     log(`hint: ${hint}`)
@@ -136,76 +122,36 @@ if (/^(1|true|yes|on)$/i.test(process.env.VFOX_SMOKE_HEADLESS ?? '')) {
 
 /* ------------------------------------------------------------------------------ win32 access */
 
-// The user32/kernel32/CIM layer lives in ./lib/user32.mjs so `scripts/probe-windows.mjs` can
-// exercise the exact same code without a browser — the only way to test it in the development
-// sandbox.
+// The user32/CIM layer lives in ./lib/user32.mjs so `scripts/probe-windows.mjs` can exercise the
+// exact same code without a browser — the only way to test it in the development sandbox.
 import {
-  describeWindows,
-  ENGINE_IMAGE_NAME,
   enginePids,
-  findEngineWindow,
   listEngineProcesses,
   loadUser32,
   message,
+  pickLargestWindow,
   WORK_AREA_TOLERANCE,
 } from './lib/user32.mjs'
 
 /* ------------------------------------------------------------------------------- utilities */
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
-
-/**
- * Poll until the engine owns a visible window, and say which lookup found it.
- *
- * The failure carries a snapshot of the desktop, because "no window appeared" has two very different
- * causes — the engine never opened one (environment) or this lookup is wrong (product) — and the log
- * from a failed run has to be enough to tell them apart without another 30-second round trip.
- *
- * @param {Awaited<ReturnType<typeof loadUser32>>} api
- * @param {Set<number>} pids
- * @param {{ stage?: string, context?: string }} [options]
- * @returns {Promise<import('./lib/user32.mjs').EngineWindowLookup>}
- */
-async function waitForWindow(api, pids, options = {}) {
-  const { stage = 'window', context = 'the engine' } = options
+async function waitForWindow(pids) {
+  const api = await loadUser32()
   const deadline = Date.now() + WINDOW_WAIT_MS
-  let lastLookup = null
-  let lastWindows = []
+  let lastSeen = 0
   while (Date.now() < deadline) {
-    lastWindows = api.windows()
-    lastLookup = findEngineWindow(lastWindows, { pids, imageName: ENGINE_IMAGE_NAME })
-    if (lastLookup.window) {
-      return lastLookup
+    const windows = api.windows()
+    lastSeen = windows.filter(window => pids.has(window.pid)).length
+    const found = pickLargestWindow(windows, pids)
+    if (found) {
+      return found
     }
-    await sleep(500)
+    await new Promise(resolve => setTimeout(resolve, 500))
   }
-  throw new WindowFailure(
-    stage,
-    `${context} has no visible top-level window after ${WINDOW_WAIT_MS}ms: the pid path ` +
-      `(${[...pids].join(', ')}) matched ${lastLookup?.pidWindows ?? 0} window(s) and the image ` +
-      `path ("${ENGINE_IMAGE_NAME}") matched ${lastLookup?.imageWindows ?? 0}`,
-    1,
-    `read details.desktop: no "${ENGINE_IMAGE_NAME}" window on it means the engine never opened ` +
-      'one, or lost it (environment); a visible one there means this lookup is wrong (product)',
-    {
-      desktop: describeWindows(lastWindows),
-      engineImage: ENGINE_IMAGE_NAME,
-      // The engine's own windows, visible or not: three hidden helper windows with no visible main
-      // window is a completely different situation from no engine window at all, and this is the
-      // line that tells them apart.
-      engineWindows: lastWindows
-        .filter(candidate => candidate.image === ENGINE_IMAGE_NAME)
-        .slice(0, 8)
-        .map(candidate => ({
-          pid: candidate.pid,
-          visible: candidate.visible,
-          rect: candidate.rect,
-          title: candidate.title,
-        })),
-      pids: [...pids],
-      pidWindows: lastLookup?.pidWindows ?? 0,
-      imageWindows: lastLookup?.imageWindows ?? 0,
-    },
+  throw new Error(
+    `no visible top-level window appeared within ${WINDOW_WAIT_MS}ms for pid(s) ` +
+      `${[...pids].join(', ')} (${lastSeen} window(s) belong to those pids but none is visible and ` +
+      'larger than 1x1)',
   )
 }
 
@@ -234,6 +180,8 @@ const PAGE_PROBE = () => ({
 })
 
 const SET_STATE = value => {
+  // Runs *inside the page* on purpose: the check is that the profile's own cookie jar and
+  // localStorage survive a restart, so going through Playwright's API would test something else.
   document.cookie = `vfox_probe=${value}; path=/; max-age=86400`
   localStorage.setItem('vfox_probe', value)
   return {
@@ -329,12 +277,8 @@ try {
   const { pids, walked, reason: pidReason } = enginePids(runtime.pid)
   report.pidSet = [...pids]
   report.pidTreeWalked = walked
-  report.pidTreeReason = pidReason
   if (!walked) {
-    log(
-      `warning: could not walk the process tree (${pidReason}); the pid path is the launcher pid ` +
-        `alone, so the "${ENGINE_IMAGE_NAME}" image-name path is what can find the real window`,
-    )
+    log(`warning: could not walk the process tree (${pidReason}); matching the launcher pid only`)
   }
 
   const api = await loadUser32()
@@ -344,8 +288,7 @@ try {
     fail('window', 'could not read the desktop work area (SPI_GETWORKAREA failed)', 2)
   }
 
-  const lookup = await waitForWindow(api, pids)
-  const window = lookup.window
+  const window = await waitForWindow(pids)
   report.window = {
     pid: window.pid,
     hwnd: window.hwnd,
@@ -353,61 +296,27 @@ try {
     rect: window.rect,
     iconic: window.iconic,
   }
-  report.windowLookup = {
-    matchedBy: lookup.matchedBy,
-    engineImage: ENGINE_IMAGE_NAME,
-    pidPath: {
-      pids: [...pids],
-      treeWalked: walked,
-      treeReason: pidReason,
-      windows: lookup.pidWindows,
-    },
-    imagePath: { image: ENGINE_IMAGE_NAME, windows: lookup.imageWindows },
-  }
-  step('window-exists', { ...report.window, matchedBy: lookup.matchedBy })
-  step('window-lookup', report.windowLookup)
+  step('window-exists', report.window)
 
   /* -- 2. the window is a normal size ------------------------------------------------------ */
   const { width, height } = window.rect
-  const sizeDetails = { window: report.window, workArea, matchedBy: lookup.matchedBy }
   if (width < MIN_WIDTH || height < MIN_HEIGHT) {
     fail(
       'size',
       `the engine window is ${width}x${height}, below the ${MIN_WIDTH}x${MIN_HEIGHT} minimum`,
       1,
       'a 0x0 or 1x1 window is not a usable browser window',
-      sizeDetails,
     )
   }
-  // A window larger than the physical desktop is EXPECTED, not suspicious: the engine sizes the real
-  // window to the profile's *spoofed* screen, and that screen is generated without knowing how big
-  // the runner's desktop is. Measured on the 1024x720 runner: a generated screen produced a real
-  // 1679x1409 window, which is correct behaviour rather than evidence of a bad match.
-  //
-  // This used to be a hard failure, which was wrong twice over. It rejected correct product
-  // behaviour, and because it ran before the page was even connected it blocked every later
-  // assertion — including the geometry numbers that say whether the spoof is coherent, which is the
-  // entire reason this job exists. The window's identity is guaranteed far more strongly by the
-  // process-image match than by any size heuristic, so the ceiling is reported and the checks that
-  // actually matter (chrome thickness, screen self-consistency) do the asserting.
   if (
     width > workArea.width + WORK_AREA_TOLERANCE ||
     height > workArea.height + WORK_AREA_TOLERANCE
   ) {
-    report.findings ??= {}
-    report.findings.overflowsWorkArea = {
-      window: { width, height },
-      workArea: { width: workArea.width, height: workArea.height },
-      overshoot: { width: width - workArea.width, height: height - workArea.height },
-      matchedBy: lookup.matchedBy,
-    }
-    log(
-      `FINDING: the engine window (${width}x${height}) is larger than the ` +
-        `${workArea.width}x${workArea.height} work area. The engine sizes the real window to the ` +
-        "profile's spoofed screen, so this is expected on a small runner desktop — but it also " +
-        "means a profile whose generated screen exceeds the user's real display opens a window " +
-        'that runs off the screen. Reported, not failed; the geometry checks below decide whether ' +
-        'the spoof is coherent.',
+    fail(
+      'size',
+      `the engine window is ${width}x${height}, larger than the ${workArea.width}x${workArea.height} ` +
+        `work area (tolerance ${WORK_AREA_TOLERANCE}px)`,
+      1,
     )
   }
   report.checks.size = { ok: true, width, height }
@@ -521,7 +430,28 @@ try {
     )
   }
 
-  // (b) chrome thickness: this is the derived value a detector reads.
+  // (b) the viewport, measured against the OS rectangle rather than against our own numbers.
+  //
+  // The page's viewport is NOT derived from a fingerprint value: `_castToProperties` skips falsy
+  // entries (`if (!data) continue`, camoufox-js `dist/fingerprints.js:12`), so the identity's
+  // `innerWidth`/`innerHeight` of 0 are never mapped into CAMOU_CONFIG and Firefox reports its own
+  // true viewport. Measured on the CI runner: inner 1770x1246 inside an OS window of 1786x1311.
+  // This check is here so that stops being true by accident — if a future change ever emits a
+  // non-zero value, the engine starts overriding the real viewport and this is where it shows.
+  const viewport = checkViewportAgainstOs({
+    osRect: window.rect,
+    innerWidth: view.innerWidth,
+    innerHeight: view.innerHeight,
+    devicePixelRatio: view.devicePixelRatio,
+  })
+  if (!viewport.ok) {
+    fail(
+      'geometry',
+      `the page viewport disagrees with the real window: ${viewport.failures.join('; ')}`,
+      1,
+      'the reported viewport does not match the window the OS gave us — a detector can see this',
+    )
+  }
   if (
     chrome.width < 0 ||
     chrome.height < 0 ||
@@ -650,8 +580,8 @@ try {
   log('profile stopped; relaunching it to check that state persisted')
 
   const second = await core.runtime.launch(profile.id)
-  if (second.status !== 'running' || !second.wsEndpoint || second.pid === null) {
-    fail('state', `the relaunched profile reported ${second.status} without pid/wsEndpoint`, 1)
+  if (second.status !== 'running' || !second.wsEndpoint) {
+    fail('state', `the relaunched profile reported ${second.status}`, 1)
   }
   browser = await firefox.connect(second.wsEndpoint)
   context = browser.contexts()[0]
@@ -689,27 +619,21 @@ try {
   /* -- 5. the window survives the automation client detaching ------------------------------ */
   await browser.close()
   browser = null
-  // The relaunch is a NEW process, so the pid set from the first launch is dead. Looking the window
-  // up again for `second.pid` is not optional: with the stale set this check can never find anything
-  // and would blame "the window vanished on detach" for what is really a stale lookup.
-  const secondTree = enginePids(second.pid)
-  report.detachPidSet = [...secondTree.pids]
-  const detachLookup = await waitForWindow(api, secondTree.pids, {
-    stage: 'detach',
-    context: 'the relaunched engine, after the automation client detached',
-  })
-  const stillThere = detachLookup.window
-  report.checks.detach = {
-    ok: true,
-    hwnd: stillThere.hwnd,
-    title: stillThere.title,
-    matchedBy: detachLookup.matchedBy,
+  const afterDetach = api.windows()
+  const stillThere = pickLargestWindow(afterDetach, pids)
+  if (!stillThere) {
+    fail(
+      'detach',
+      'the engine window disappeared after the automation client detached — the user would lose ' +
+        'their browser when their script exits',
+      1,
+    )
   }
+  report.checks.detach = { ok: true, hwnd: stillThere.hwnd, title: stillThere.title }
   step('detach-survived', {
     hwnd: stillThere.hwnd,
     title: stillThere.title,
     visible: stillThere.visible,
-    matchedBy: detachLookup.matchedBy,
   })
 
   /* -- 6. cleanup -------------------------------------------------------------------------- */
@@ -772,12 +696,7 @@ try {
 if (failure) {
   emit(
     'VFOX_WINDOW_FAIL',
-    {
-      stage: failure.stage,
-      reason: failure.message,
-      hint: failure.hint ?? null,
-      details: failure.details,
-    },
+    { stage: failure.stage, reason: failure.message, hint: failure.hint ?? null },
     process.stderr,
   )
   log(`FAILED at ${failure.stage}: ${failure.message}`)
