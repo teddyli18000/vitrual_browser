@@ -53,7 +53,16 @@ export const FingerprintSchema = z.object({
   locale: z.string().nullable().default(null),
   /** Match timezone / geolocation / locale to the proxy egress IP. */
   geoip: z.boolean().default(true),
-  humanize: z.boolean().default(false),
+  /**
+   * Human-like mouse movement. Defaults to **on**: raw synthetic input is the wrong default for a
+   * product whose whole purpose is not looking automated, and the setting is invisible in an
+   * ordinary profile. `false` stays selectable for anyone who wants raw input.
+   *
+   * This only changes what a *new* profile gets. Existing profiles keep whatever they stored — the
+   * value is part of a pinned identity's launch config, so flipping it in a rewrite pass would be a
+   * migration decision, not a default change.
+   */
+  humanize: z.boolean().default(true),
   blockImages: z.boolean().default(false),
   blockWebrtc: z.boolean().default(false),
   blockWebgl: z.boolean().default(false),

@@ -118,6 +118,35 @@ for (const [field, reason] of Object.entries(REMOVED)) {
   }
 }
 
+/* ------------------------------------------- the form's own defaults must match the schema */
+
+/**
+ * A default the form hardcodes is a default the schema default cannot protect. The 新建环境 dialog
+ * always sends an explicit `humanize`, so `emptyDraft()` — not `FingerprintSchema` — decides what a
+ * profile created in the GUI actually gets. Reverting it to `false` would reintroduce the exact
+ * complaint that started this: a profile that looks automated by default.
+ *
+ * `packages/shared/test/humanize-default.test.mjs` guards the schema half; this guards the form half,
+ * because no test runner covers the renderer.
+ */
+const draftPath = join(appRoot, 'src', 'renderer', 'src', 'forms', 'profile-draft.ts')
+const draftSource = await readFile(draftPath, 'utf8')
+// `[\s\S]` rather than `[^]`: the same "any character including newline", without a negated empty
+// character class, which the linter rejects (and rightly — it reads as a mistake).
+const emptyDraftBody = draftSource.match(/export function emptyDraft\(\)[\s\S]*?\n\}/)?.[0] ?? ''
+const formDefault = emptyDraftBody.match(/\bhumanize:\s*(true|false)/)?.[1]
+
+if (!formDefault) {
+  failures.push(
+    'could not read the humanize default out of emptyDraft() in forms/profile-draft.ts — this check must not pass on a file it could not parse',
+  )
+} else if (formDefault !== 'true') {
+  failures.push(
+    `emptyDraft() sets humanize: ${formDefault}, but the schema default is true — a profile created in the GUI would get that value instead`,
+  )
+}
+console.log(`form default for humanize   : ${formDefault ?? '(unreadable)'}`)
+
 console.log(`fingerprint fields bound    : ${Object.keys(FIELDS).length}`)
 console.log(`engine keys checked         : ${checked}`)
 console.log(`removed fields asserted gone: ${Object.keys(REMOVED).join(', ')}`)

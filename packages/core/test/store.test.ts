@@ -38,7 +38,9 @@ describe('profiles', () => {
       fonts: null,
       locale: null,
       geoip: true,
-      humanize: false,
+      // `humanize` defaults to true in `FingerprintSchema`: VFox exists so a profile does not look
+      // automated, so a profile created without touching the field gets human-like input.
+      humanize: true,
       blockImages: false,
       blockWebrtc: false,
       blockWebgl: false,
