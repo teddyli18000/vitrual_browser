@@ -119,7 +119,15 @@ import { checkViewportAgainstOs } from './lib/window-geometry.mjs'
  * the engine — the headings below name which real run each set of numbers came from.
  */
 const FIXTURES = {
-  /** CI run 37266596880's window, with the geometry the sizing policy now produces for that runner. */
+  /**
+   * The TARGET geometry for a 1024x720 work area, carrying the chrome measured in CI run
+   * 37266596880 (16x65). The CHROME is a measurement; the window is what the sizing policy produces
+   * for that work area - which is why this fixture passes by construction: it cannot fail while its
+   * operands are self-consistent, and it therefore carries no evidence. An earlier version of this
+   * comment claimed the window was that run's own, and that run's window was 1786x1311, which is the
+   * neighbouring fixture. The evidence in this file is `window-larger-than-screen`, `zero-viewport`
+   * and the unit test's REAL case, not this one.
+   */
   good: {
     os: { width: 1024, height: 700 },
     inner: { width: 1008, height: 635 },
