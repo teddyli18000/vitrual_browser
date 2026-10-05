@@ -37,6 +37,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   checkMainWorker,
   checkNoTestCode,
+  checkUnpackedResolution,
   checkWebglDatabase,
   describeArtifact,
 } from './lib/artifact.mjs'
@@ -130,6 +131,22 @@ const worker = checkMainWorker(artifact)
 assert(worker.ok, `the engine-extraction worker is inside the package (${worker.detail})`)
 for (const problem of worker.problems) console.log(`      ${problem}`)
 if (!worker.ok) report()
+// Everything that lives outside the asar must be able to resolve its own imports from out there.
+// v0.3.4 unpacked only `camoufox-js`, whose `pkgman.js` opens with `import AdmZip from "adm-zip"`;
+// Node resolved that upward from the unpacked directory, found nothing, and every install failed
+// with "Cannot find package 'adm-zip'" - on the user machine, not in CI, because CI runs inside
+// this repository and its root `node_modules` happens to sit above the unpacked path. A guard that
+// only ever runs where the bug cannot happen is not a guard, so this walks the unpacked tree and
+// resolves every bare specifier the way Node would from that module's own directory.
+const resolution = checkUnpackedResolution(artifact, {
+  unpackedRoot: artifact.unpackedPrefix.replace(/\/$/, ''),
+})
+assert(
+  resolution.ok,
+  `every unpacked module resolves its own imports (${resolution.checked} modules scanned)`,
+)
+for (const problem of resolution.failures) console.log(`      ${problem}`)
+if (!resolution.ok) report()
 
 if (!existsSync(artifact.executable)) {
   fail(`the packaged executable ${artifact.executable} is missing`)

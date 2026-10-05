@@ -48,9 +48,21 @@ asarUnpack:
   # The WHOLE package, not just its data files: `dist/webgl/sample.js` computes its SQLite path
   # from its own module URL, so it must be LOADED from a real directory, not merely have its data
   # file unpacked beside the archive. `packages/core/src/camoufox.ts` redirects every import of this
-  # package to this unpacked copy for exactly that reason.
-  - '**/node_modules/camoufox-js/**'
-
+  # The WHOLE dependency tree, not a selected subset of it. Earlier attempts unpacked only the
+  # packages this repo imports directly, and that shipped broken: `camoufox-js/dist/pkgman.js`
+  # opens with `import AdmZip from "adm-zip"`, and once camoufox-js itself is loaded from
+  # `app.asar.unpacked/node_modules/camoufox-js`, Node resolves `adm-zip` upward FROM THERE -
+  # where it does not exist if only camoufox-js was unpacked. v0.3.4 failed every install for
+  # exactly that reason, and the user hit it, not CI: CI runs inside the repository, whose root
+  # `node_modules` sits above the unpacked path, so module resolution accidentally succeeded.
+  # A user's Downloads folder has no such ancestor.
+  #
+  # `**/*.node` is still listed separately for documentation: native modules must be real files
+  # for `process.dlopen`, and saying so where the first packaging bug is recorded is worth the
+  # redundancy. Keeping the whole tree outside the asar costs disk space and startup time and
+  # buys the absence of a whole class of "works in CI, fails on a user's machine" defects.
+  - '**/node_modules/**'
+  - '**/*.node'
 # The UI ships zh-CN + en only. Chromium's 55 locale packs are ~46 MB of dead weight in an
 # installer that is otherwise dominated by the Electron runtime.
 electronLanguages:
