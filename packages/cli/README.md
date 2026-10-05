@@ -75,6 +75,32 @@ or duplicate it — without copying the whole profile directory.
   as Lax). Container and partitioned cookies cannot be represented and are reported as skipped. The
   full table is in [`../core/README.md`](../core/README.md).
 
+## Addons — an extension in one profile only
+
+```
+vfox addons list <id|name>                  # what this profile loads
+vfox addons add <id|name> <path>            # an extracted addon, or an .xpi to extract
+vfox addons add <id|name> <path> --replace  # update an addon already installed under the same id
+vfox addons remove <id|name> <slug|id>      # take one out
+```
+
+An addon belongs to **one profile's own engine directory**, so it loads for that profile and no other.
+
+- `<path>` is either an extracted addon (a directory containing `manifest.json`) or an `.xpi`/`.zip`,
+  which VFox extracts for you — the engine only loads directories.
+- **`add` and `remove` need the profile to be stopped.** The addon list is read when the browser
+  starts, so a change while it runs would take effect only after a restart, and removing one could
+  delete files the browser has loaded. `list` works on a running profile.
+- `list` also shows the addons the **engine** ships itself (`SOURCE` = `engine`, currently uBlock
+  Origin), which are read-only here.
+- Addons live inside the profile's data directory, so they travel with `vfox clone`, `vfox export`
+  and `vfox import`. That also means **an imported profile zip carries someone's extensions, which
+  the engine will then load** — a profile zip is executable content.
+- Nothing is downloaded: an addon is a local path. VFox does not scan, sign-check or sandbox it — it
+  is arbitrary code with the browser's privileges, the same as installing it in Firefox by hand.
+  What is checked is structure (a readable manifest, an archive that stays inside its destination,
+  size caps).
+
 ## `vfox serve`
 
 Starts the same service the desktop app runs in-process: REST under `/api/v1`, SSE at

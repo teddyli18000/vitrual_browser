@@ -37,6 +37,18 @@ export const API_ROUTES = {
   /** POST CookieImportRequest (JSON) -> CookieImportResult. */
   importCookies: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/cookies/import`,
 
+  /**
+   * GET -> ProfileAddon[] (the addons VFox manages plus the engine's own defaults, which are
+   * read-only). Readable while the profile runs: the store is an inert directory on disk that no
+   * browser holds open, unlike `cookies.sqlite`.
+   */
+  profileAddons: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/addons`,
+  /** POST AddonInstallRequest -> ProfileAddon. Refused (409) while the profile runs. */
+  installAddon: (id: string) => `${API_PREFIX}/profiles/${encodeURIComponent(id)}/addons`,
+  /** DELETE -> { removed: ProfileAddon }. `slug` is the record's slug or its gecko id. */
+  profileAddon: (id: string, slug: string) =>
+    `${API_PREFIX}/profiles/${encodeURIComponent(id)}/addons/${encodeURIComponent(slug)}`,
+
   runtime: `${API_PREFIX}/runtime`,
   runtimeFor: (id: string) => `${API_PREFIX}/runtime/${encodeURIComponent(id)}`,
 

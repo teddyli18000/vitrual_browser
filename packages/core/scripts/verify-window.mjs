@@ -14,10 +14,14 @@
  *      comment on `findEngineWindow` in `lib/user32.mjs`); the payload says which path matched;
  *   2. the rect is a plausible browser window (>= 800x600, no bigger than the work area);
  *   3. it is a usable Firefox: a real page loads and reports the profile's spoofed user agent;
- *   4. **state survives a restart** — cookie and localStorage written before a stop are still there
+ *   4. **an addon installed for this profile is loaded by the engine** — the fixture's content
+ *      script writes its own runtime id into the page, so a marker that matches proves the engine
+ *      read the addon, not merely that the files exist. Without this, "installed on disk but never
+ *      loaded" is invisible, and every other addon check in the repository passes anyway;
+ *   5. **state survives a restart** — cookie and localStorage written before a stop are still there
  *      after relaunching the SAME profile. Without this the product is a toy, not a browser;
- *   5. the window survives an automation client detaching;
- *   6. cleanup: no engine process and no temp directory is left behind.
+ *   6. the window survives an automation client detaching;
+ *   7. cleanup: no engine process and no temp directory is left behind.
  * plus the window-geometry coherence check: the OS rect, `window.outer*`, `window.inner*`,
  * `screenX/Y` and `screen.*` are reported raw and checked against each other, because a spoofed
  * `outerWidth` over a differently-sized real window is exactly the derived inconsistency a detector
@@ -340,6 +344,12 @@ const PAGE_PROBE = () => ({
   devicePixelRatio: window.devicePixelRatio,
 })
 
+/** What the addon fixture's content script left behind, if it ran at all. */
+const ADDON_PROBE = () => ({
+  marker: document.documentElement.dataset.vfoxAddon ?? null,
+  href: location.href,
+})
+
 const SET_STATE = value => {
   document.cookie = `vfox_probe=${value}; path=/; max-age=86400`
   localStorage.setItem('vfox_probe', value)
@@ -416,6 +426,43 @@ try {
     fingerprint: { geoip: false },
   })
   report.profileId = profile.id
+
+  /**
+   * Install the fixture addon **before** the profile ever starts, so the launch is what has to pick
+   * it up. This is the only place in the repository where "the addon is on disk" and "the browser
+   * actually loaded it" can be told apart: the store, the API and the CLI are all verifiable without
+   * a browser, and every one of them passes while the engine loads nothing.
+   */
+  const addonFixture = path.join(here, 'fixtures', 'addon-probe')
+  const addonManifest = await fs
+    .readFile(path.join(addonFixture, 'manifest.json'), 'utf8')
+    .catch(() => null)
+  if (addonManifest === null) {
+    fail(
+      'addon',
+      `the addon fixture is missing at ${addonFixture}`,
+      2,
+      'it lives in packages/core/scripts/fixtures/addon-probe and is what proves a profile loads addons',
+    )
+  }
+  const addonId = JSON.parse(addonManifest)?.browser_specific_settings?.gecko?.id ?? null
+  if (typeof addonId !== 'string' || addonId.length === 0) {
+    fail('addon', `the addon fixture at ${addonFixture} has no gecko id`, 2)
+  }
+  let installedAddon = null
+  try {
+    installedAddon = await core.addons.install(profile.id, addonFixture)
+  } catch (error) {
+    fail('addon', `could not install the addon fixture: ${message(error)}`, 1)
+  }
+  report.addon = { expectedId: addonId, installed: installedAddon }
+  step('addon-installed', {
+    slug: installedAddon.slug,
+    id: installedAddon.id,
+    version: installedAddon.version,
+    files: installedAddon.files,
+    bytes: installedAddon.bytes,
+  })
 
   const probe = await startProbeServer()
   server = probe.server
@@ -741,7 +788,33 @@ try {
     step('screenshot', report.screenshot)
   }
 
-  /* -- 4. state survives a restart --------------------------------------------------------- */
+  /* -- 4. the addon this profile was given is really loaded by the engine ------------------- */
+  // The fixture's content script writes its own `browser.runtime.id` into the page, so a marker
+  // that matches is proof that the extension was loaded *and* ran — not that a file exists.
+  await page.goto(probe.url, { timeout: 20_000, waitUntil: 'domcontentloaded' })
+  const addonProbe = await page.evaluate(ADDON_PROBE)
+  report.addon.probe = addonProbe
+  if (addonProbe.marker !== addonId) {
+    fail(
+      'addon',
+      `the addon installed for this profile did not run in the page: expected ` +
+        `document.documentElement.dataset.vfoxAddon = "${addonId}", got ` +
+        `${JSON.stringify(addonProbe.marker)} on ${addonProbe.href}`,
+      1,
+      'the addon is on disk and the API reported it installed, so this is the engine not loading ' +
+        'it — check that the paths handed to camoufox-js as `addons` are absolute and that they ' +
+        'reached CAMOU_CONFIG (the addon-installed step above shows what was stored)',
+    )
+  }
+  report.checks.addon = { ok: true, id: addonId, marker: addonProbe.marker }
+  step('addon-loaded', {
+    id: addonId,
+    marker: addonProbe.marker,
+    href: addonProbe.href,
+    slug: installedAddon.slug,
+  })
+
+  /* -- 5. state survives a restart --------------------------------------------------------- */
   const marker = `vfox-${Date.now()}`
   await page.goto(probe.url, { timeout: 20_000, waitUntil: 'domcontentloaded' })
   const written = await page.evaluate(SET_STATE, marker)
@@ -801,7 +874,7 @@ try {
     relaunchPid: second.pid,
   })
 
-  /* -- 5. the window survives the automation client detaching ------------------------------ */
+  /* -- 6. the window survives the automation client detaching ------------------------------ */
   await browser.close()
   browser = null
   // The relaunch is a NEW process, so the pid set from the first launch is dead. Looking the window
@@ -827,7 +900,7 @@ try {
     matchedBy: detachLookup.matchedBy,
   })
 
-  /* -- 6. cleanup -------------------------------------------------------------------------- */
+  /* -- 7. cleanup -------------------------------------------------------------------------- */
   const stopped = await core.runtime.stop(profile.id)
   if (stopped.status !== 'stopped') {
     fail('cleanup', `the profile is ${stopped.status} after stop()`, 1)

@@ -19,6 +19,7 @@ frozen domain contract (`@vfox/shared`) and everything that drives it (server, C
 | `archive.ts` | portable profile zip (`exportZip` / `importZip`) |
 | `netscape.ts` | the Netscape `cookies.txt` format, pure text in / text out |
 | `cookies.ts` | the profile's `cookies.sqlite` jar, read and written through `node:sqlite` |
+| `addons.ts` | the profile's own addon store: install, list, remove, and the paths the launcher hands the engine |
 | `kernel.ts` | engine discovery, installation, real byte-level progress |
 | `orphans.ts` | startup reconciliation of engine processes left by a previous run |
 | `log.ts` | rotating file log at `<dataDir>/logs/vfox.log` |
@@ -32,6 +33,7 @@ frozen domain contract (`@vfox/shared`) and everything that drives it (server, C
 <dataDir>/groups.json                       Group[]
 <dataDir>/profiles/<id>/userdata/           the profile's real, isolated browser data directory
 <dataDir>/profiles/<id>/userdata/cookies.sqlite   the cookie jar (created by the engine on first launch)
+<dataDir>/profiles/<id>/userdata/vfox-addons/<slug>/   the addons this profile loads, extracted
 <dataDir>/logs/vfox.log                     rotating diagnostics log (5 × 2 MB)
 ```
 
@@ -129,6 +131,59 @@ anti-detect browsers read and write, so a session that leaves VFox stays usable 
 A JSON side-car format was considered for those last two rows and rejected: it would double the
 surface for fields that are not session identity, and the whole point of the feature is that the
 file works with everything else.
+
+## Per-profile addons
+
+`core.addons.list(id)` / `.install(id, path, { replace })` / `.remove(id, slugOrId)` put a browser
+extension into **one profile's own engine directory**, so it is there for that profile's launches and
+no other profile sees it.
+
+- **The unit is an extracted addon directory, not an `.xpi`.** `camoufox-js` requires every path it
+  is handed as `addons` to be an existing directory containing `manifest.json` (`dist/addons.js`
+  `confirmPaths` throws `InvalidAddonPath` otherwise), and the engine's own `properties.json`
+  declares `addons` as a supported config key. `install` therefore accepts an `.xpi`/`.zip` **and
+  extracts it** (adm-zip, already a dependency) — an archive is a convenience at the door, never the
+  stored form.
+- **Where they live: `<userdata>/vfox-addons/<slug>/`.** Inside the browser data directory on
+  purpose — `cloneProfile` copies `userDataDir` and `archive.ts` zips it, so addons travel with
+  `vfox clone`, `vfox export` and `vfox import` without any addon-specific code in those paths. It is
+  deliberately **not** `<userdata>/extensions/`, which is Firefox's own sideload directory: an addon
+  there would be loaded twice over, once by the engine's `addons` option and once by Firefox's
+  XPIProvider, for the same gecko id.
+- **Loaded by path at launch, never installed into the browser.** `launcher.ts` passes absolute paths
+  into `camoufox-js`'s `addons` option, which is the only working route: it assigns `config.addons`
+  itself, so the raw `fingerprint.config` escape hatch is overwritten, and it **mutates the array it
+  is given** by pushing the engine's default addons into it — hence a fresh array per attempt.
+  Relative paths fail silently (a browser launches, no addon loads), which is why they are absolute.
+- **No sidecar metadata.** `list` reads each directory's `manifest.json` and `stat`s it, so the
+  record cannot drift from what the engine will load, and an addon directory copied in by hand still
+  lists. A directory whose manifest does not parse is skipped rather than reported: `confirmPaths`
+  would throw on it and fail every launch of that profile.
+- **`install` and `remove` require the profile to be stopped** (the addon list is baked into the
+  launch environment, so a change mid-run would silently do nothing until the next launch, and a
+  remove could delete files the browser has loaded). **`list` does not**, which is the one deliberate
+  difference from cookies: this store is an inert directory nobody holds open, so disk is
+  authoritative even while a profile runs.
+- **The engine's own defaults are reported read-only.** `camoufox-js` appends its bundled uBlock
+  Origin to every launch, so it appears in `list` with `source: 'engine'` and `remove` refuses it.
+  Excluding it per profile needs state that does not exist yet. A profile that installs **its own**
+  copy of an addon the engine also ships has the engine's copy excluded automatically — one gecko id
+  from two paths is a conflict Firefox resolves silently.
+- **What is validated, and what is not.** Structural only: the source exists and is a directory with
+  a readable manifest or an archive whose every entry stays inside the destination (zip-slip is
+  refused, the same rule `archive.ts` applies), plus file-count and byte caps. An addon is arbitrary
+  code with the browser's privileges — that is the user's choice, exactly like a browser's own
+  "install add-on" — and there is deliberately **no signature check**, so an unsigned or self-signed
+  addon that Firefox would run is not rejected here.
+- **A profile zip is executable content.** Addons live inside the profile directory, so importing
+  somebody else's exported profile imports their extensions, which the engine then loads. That is a
+  real consequence of the layout, not a bug in it, and it is the reason this is written down.
+
+Verified by `packages/core/test/addons.test.ts` (store, `.xpi` extraction, zip-slip refusal, the
+atomic replace, the engine's defaults, and the option object the launcher builds). What that suite
+**cannot** show is that the engine loads what is stored — that needs a launch, so `verify-window.mjs`
+installs a fixture addon into a real headed profile in CI and asserts the marker its content script
+writes into the page (`addon-loaded`).
 
 ## Known limitations (v0.1.0)
 
