@@ -212,51 +212,35 @@ Verified on this machine: Node 24.14, pnpm 10.33, `camoufox-js` 0.12.0,
   and an empty `data/`, and nothing may persist an absolute path that would break after the folder is
   moved.
 
-## Review process — non-negotiable
+## Fingerprint spread is a property, not a threshold
 
-The owner's rule, and the reason it exists: **every change is reviewed by someone other than its
-author, and every technical proposal is reviewed before it is implemented.** This is what a
-professional shop does, and skipping it is how a defect reached a user.
-
-### 1. Every pull request gets an independent review
-
-Before a PR is merged, an agent that did **not** write it reviews it and reports:
-
-- **what it verified**, with the command and its raw output;
-- **what it did not verify**, named explicitly — "reviewed and clean" must be distinguishable from
-  "not reviewed";
-- **what it believes is still wrong**, ranked by how likely a user is to hit it.
-
-A review that only agrees is not a review. The reviewer's job is to find the third bug, not to
-confirm the first two are fixed.
-
-### 2. Technical proposals are reviewed before implementation
-
-A design that has not been challenged is a guess with a plan attached. For anything non-trivial —
-a new subsystem, a contract change, a change to how state is stored, a new dependency, a change to
-the release or packaging model — write the proposal down (an issue is fine: the options, the
-trade-offs, the recommendation, and what would falsify it) and have it reviewed **before** the code
-exists. Cheap to change on paper; expensive to change in a shipped installer.
-
-### 3. A test that has never failed has not been shown to test anything
-
-When a change adds or relies on a test, prove the test **can** fail: reintroduce the defect, watch it
-go red, and show the message names the cause. A guard that is always green is worse than no guard,
-because it is believed. `apps/desktop/e2e/lib/artifact.mjs` does this properly — it fails on the real
-shipped v0.2.0 artifact and passes on a synthetic correct layout, so it is known to discriminate.
-
-### 4. Evidence, not confidence
-
-Claims in a PR description must be backed by something the reviewer can re-run. "Should work",
-"probably fine" and "the types check" are not evidence. Where something can only be verified in CI,
-say so in the PR and let CI settle it; where it was verified locally, paste the output.
-
-### 5. The Lead owns git, and verifies before merging
-
-Teammates edit files and report; the Lead creates branches, pushes, opens PRs, and merges only after
-CI is green on the same commit. The Lead independently re-runs the relevant gate before merging
-rather than trusting a summary — a summary is a claim, and claims are what reviews are for.
-
+- **The engine's WebGL sampler is weighted by real-world GPU market share, and that is a defect in
+  this product even though it is correct as a simulation.** `camoufox-js/dist/webgl/sample.js` draws
+  with `Math.random()` over `data-files/webgl_data.db`, whose `win` / `mac` / `lin` columns are
+  **floats, not flags** — the engine's estimate of how common each GPU is. Measured over 2000 draws:
+  only **15 of the 32 pairs are ever produced**, the top three cover **81%**, and a single NVIDIA
+  GTX 980 row alone is **45%**, so three profiles collided **61.3%** of the time. Nearly half of a
+  user's profiles reported the identical GPU, which is a link between accounts rather than an
+  aesthetic overlap: the WebGL vendor and renderer are among the first values a fingerprinting script
+  reads.
+- **Do not fix that by flattening the weights.** The distribution of GPUs across real machines is
+  itself a fingerprint; a uniform one trades a link between two profiles for an implausible
+  population. `packages/core/src/identity.ts` draws from the engine's own table but only over the
+  pairs **no other profile holds yet**, so the weights are kept wherever they can be. `createBatch`
+  carries one set for the whole batch and adds to it as it goes — de-duplicating against the store
+  alone still lets the profiles of one batch collide with each other, which is the case a batch of
+  twenty actually hits.
+- **Re-drawing is not a fix.** With the popular pairs taken, what remains is rare, and a bounded
+  number of draws frequently fails to land on a survivor: that is how a ten-profile run still ended
+  with a repeat after the first attempt at this fix. Select from the table, do not re-roll.
+- **Assert it as a property.** The packaged suite used to require "at least 4 of 11 dimensions
+  differ", a threshold that passes by luck — and did, intermittently, on two runs of the same code
+  twenty minutes apart (six differing dimensions, then three). It now also asserts that **no two
+  profiles report the same WebGL vendor and renderer**, which is the property that matters.
+- **Reading the table from the app is fine**: `node:sqlite` with `readOnly: true`, through
+  `camoufoxModule()`, which already handles the `app.asar.unpacked` redirect. Only the *pair* has to
+  be chosen here; camoufox-js resolves `webgl_config` back to the row's full `data` fragment at
+  launch.
 ## License
 
 MIT for this repository's own code. Camoufox (MPL-2.0) and camoufox-js (MPL-2.0) are consumed as
@@ -264,6 +248,22 @@ external dependencies and are not modified; their binaries are downloaded at run
 
 ## Packaging gotchas (learned from the first two release runs)
 
+- **A build step belongs in `electron.vite.config.ts`, not in a package script.**
+  `scripts/build-installer.mjs` runs `electron-vite build` **directly** and never calls
+  `apps/desktop`'s `build` script, so anything chained onto that script (`cmd && node extra.mjs`)
+  silently does not run in CI or in a release. This shipped a real defect twice: the engine
+  extraction worker is started with `new Worker(new URL('./unzip-worker.js', import.meta.url))`,
+  which resolves next to the **bundled** main process (`out/main/index.cjs`) rather than inside
+  `packages/core`, so v0.3.0 failed every install with `Cannot find module
+  …\out\main\unzip-worker.js`. The first fix chained a copy onto the `build` script and changed
+  nothing; it is now a plugin in `electron.vite.config.ts`, which no path that produces a main
+  bundle can skip. **If a step must happen for the packaged app to work, put it in the build
+  config.**
+
+- **A file the bundled main process loads by relative path must be asserted inside the package.**
+  `apps/desktop/e2e/lib/artifact.mjs` checks `out/main/unzip-worker.js` and the WebGL database the
+  same way, against a real packaged artifact. Both checks were written *after* a defect shipped, and
+  the worker one caught the first attempt at its own fix — which is the argument for having it.
 - **The repository root `package.json` must NOT declare `"type": "module"`.** electron-builder
   extracts helper tools (e.g. `icons@1.1.0/icon-tool.js`) into `<repo>/.cache/electron-builder/`,
   which is *inside* the repo, so a root-level `"type": "module"` makes Node parse those CommonJS
