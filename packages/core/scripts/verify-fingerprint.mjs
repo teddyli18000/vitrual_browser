@@ -402,7 +402,6 @@ const PENDING_TARGETS = [{ name: 'workbuddy', reason: 'the owner has not supplie
 const AUTOMATION_MARKERS = [
   /\byou are (a )?bot\b/i,
   /\bbot detected\b/i,
-  /\bbot check\b/i,
   /\bautomation (detected|flag|tool)/i,
   /\bautomated\b/i,
   /\bheadless\b/i,
@@ -447,7 +446,10 @@ const INTERSTITIAL_SIGNATURES = [
   /verify your (identity|account)/i,
   /risk.?control/i,
   /are you a robot/i,
-  /\bsuspended\b/i,
+  // NO bare `/\bsuspended\b/i` or `/\bblocked\b/i` here. Both matched ordinary prose on pages that
+  // were not blocking us at all — CreepJS says "blocked" about its own features and bing and amiunique
+  // say "suspended" — and a false REPORT short-circuits the oracle path, so it also swallowed the
+  // `[looked in: …]` dump that is the diagnostic. A block claim needs a PHRASE, not a word.
   // Cloudflare's actual wording. browserscan and pixelscan both sit behind Cloudflare, which makes
   // this the likeliest way the table goes quietly green — a challenge page says "Verify you are
   // human", and `you are human` on its own used to be enough for a PASS.
@@ -466,7 +468,6 @@ const BLOCK_SIGNATURES = [
   /\brecaptcha\b/i,
   /\bhcaptcha\b/i,
   /access denied/i,
-  /\bblocked\b/i,
   /request unsuccessful/i,
   /\bsorry,? (you have been|something)/i,
 ]
@@ -796,10 +797,22 @@ function parsePageVerdict(kind, text) {
   const automation = AUTOMATION_MARKERS.find(pattern => pattern.test(flat))
   if (automation && !negated('(?:automated|automation|webdriver|headless|selenium|puppeteer)')) {
     const at = flat.search(automation)
-    return {
-      verdict: 'FAIL',
-      finding: `automation flag on the page: "${flat.slice(Math.max(0, at - 60), at + 140)}"`,
+    const excerpt = flat.slice(Math.max(0, at - 60), at + 140)
+    // A GENERIC marker needs corroboration, exactly like a clean claim does. An anti-detect checker's
+    // page is guaranteed to contain this vocabulary about itself — iphey's own copy reads "leaks and
+    // confirm your proxy or VPN is working as expected. Bot Check Check if your browser behavior
+    // triggers…" — and matching that produced a false FAIL that kept the whole step red. Without a
+    // result-shaped token beside it, this is UNREAD rather than a verdict, because "the page mentions
+    // automation" is not the same claim as "the page says this browser is automated".
+    if (!corroborated) {
+      return {
+        verdict: 'UNREAD',
+        finding:
+          `the page mentions "${flat.slice(at, at + 40)}" but nothing corroborates it as a verdict ` +
+          `rather than its own description: "${excerpt}"`,
+      }
     }
+    return { verdict: 'FAIL', finding: `automation flag on the page: "${excerpt}"` }
   }
 
   const clean = CLEAN_MARKERS.find(pattern => pattern.test(flat))
@@ -863,7 +876,13 @@ const ORACLE_FIXTURE_KINDS = {
  */
 const ORACLE_FIXTURE_EXPECT = {
   'pixelscan-negation': 'PASS',
-  'browserscan-marketing': 'FAIL',
+  // UNREAD, not FAIL: the text is browserscan describing itself and nothing corroborates it as a
+  // verdict. It used to be expected FAIL, which is the false positive this expectation was recording
+  // as correct behaviour.
+  'browserscan-marketing': 'UNREAD',
+  // The site describing its own service, including the words "Bot Check" and "automated detection".
+  // Nothing corroborates it as a verdict, so it is UNREAD rather than a FAIL.
+  'iphey-selfdescription': 'UNREAD',
   'cloudflare-challenge': 'UNREAD',
   'deviceandbrowserinfo-clean': 'PASS',
   'creepjs-lies': 'FAIL',
@@ -1235,7 +1254,11 @@ async function checkTargets(browser, propertiesHeld) {
           finding:
             `${target.kind === 'real' ? 'the site was' : 'the page was'} behind a ` +
             `challenge/block (${interstitial}) from ${ip ?? 'unknown'} — no verdict is ` +
-            `possible. It says: "${flat.slice(0, 160)}"`,
+            `possible. It says: "${flat.slice(0, 160)}"` +
+            // The dump is printed for a REPORT too. "We think this was blocked" and "here is what the
+            // page actually said, and where we looked for it" are both useful, and the second is what
+            // corrects the first — a false REPORT used to swallow the diagnostic entirely.
+            (target.kind === 'real' ? '' : ` [looked in: ${tried.join('; ')}]`),
         })
         note(`${target.name}: challenge/block page matched ${interstitial}; not read as a verdict`)
         continue
