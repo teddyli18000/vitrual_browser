@@ -184,13 +184,20 @@ export async function runDurabilityPhase({
       return { unread, checks }
     }
 
+    // Phase 6 has already launched and driven every profile to a page, so stop A first. The process-tree
+    // check below must observe a stop this phase caused, or it is testing phase 6's cleanup instead.
+    await api(`/api/v1/profiles/${profileA.id}/stop`, { method: 'POST', body: '{}' })
+
     const launched = await api(`/api/v1/profiles/${profileA.id}/launch`, {
       method: 'POST',
       body: '{}',
     })
     const wsEndpoint = endpointOf(launched)
     if (!wsEndpoint) {
-      fail(`profile ${profileA.name} exposed no wsEndpoint, so its page state cannot be read`)
+      fail(
+        `profile ${profileA.name}: the launch returned no wsEndpoint, so its page state cannot be read ` +
+          `— the API answered ${JSON.stringify(launched).slice(0, 300)}`,
+      )
       return { unread, checks }
     }
 
@@ -250,7 +257,10 @@ export async function runDurabilityPhase({
     })
     const secondEndpoint = endpointOf(relaunched)
     if (!secondEndpoint) {
-      fail(`profile ${profileA.name} exposed no wsEndpoint after the relaunch`)
+      fail(
+        `profile ${profileA.name}: the relaunch returned no wsEndpoint — ` +
+          `the API answered ${JSON.stringify(relaunched).slice(0, 300)}`,
+      )
       return { unread, checks }
     }
 
@@ -304,7 +314,10 @@ export async function runDurabilityPhase({
     })
     const endpointB = endpointOf(launchedB)
     if (!endpointB) {
-      fail(`profile ${profileB.name} exposed no wsEndpoint`)
+      fail(
+        `profile ${profileB.name}: the launch returned no wsEndpoint — ` +
+          `the API answered ${JSON.stringify(launchedB).slice(0, 300)}`,
+      )
       return { unread, checks }
     }
     browser = await connect(endpointB)
