@@ -80,6 +80,17 @@ const SITE_TARGETS = [
     parse: 'creepjs',
     waitMs: 25_000,
     scope: ['#lies', '.lies', '[class*="lie"]', '#fingerprint', 'main'],
+    // WAIT FOR A PANEL, NOT FOR A DURATION. The live run proved the content is worker-driven: the
+    // header (FP ID, fuzzy hash, `3008.00 ms`) is in the DOM while every analysis panel is absent and
+    // no selector matches at all — `#fingerprint: 0 matches`, `main: 0 matches`, and `shadow roots:
+    // 0 chars`, which killed the shadow-DOM hypothesis outright. A fixed `waitMs` on a page whose real
+    // content arrives when its Web Worker finishes is a race, so this polls until a panel exists.
+    //
+    // If none appears within the timeout that is the FINDING, not a reason to extend it: the run
+    // reports `no panel appeared within 30000 ms` plus the custom-element inventory, and the next
+    // correction comes from that list rather than from another guess at CreepJS's markup.
+    waitFor: ['#lies', '.lies', '[class*="lie"]', '#fingerprint', 'lies-panel', 'fp-lies'],
+    panelTimeoutMs: 30_000,
   },
   {
     name: 'sannysoft',
@@ -1080,6 +1091,34 @@ async function exitIp() {
 /** The result region's text, or the whole body with a recorded caveat. */
 async function resultText(page, target) {
   const tried = []
+
+  // Wait for a PANEL to exist rather than for a duration, when the target declares one. A fixed wait on
+  // a page whose real content is produced by a Web Worker is a race: CreepJS's header is in the DOM
+  // while every analysis panel is still absent.
+  if (target.waitFor) {
+    const budget = target.panelTimeoutMs ?? 20_000
+    const deadline = Date.now() + budget
+    let appeared = null
+    while (Date.now() < deadline && !appeared) {
+      for (const selector of target.waitFor) {
+        try {
+          if ((await page.locator(selector).first().count()) > 0) {
+            appeared = selector
+            break
+          }
+        } catch {
+          // Try the next selector.
+        }
+      }
+      if (!appeared) await page.waitForTimeout(1_000)
+    }
+    tried.push(
+      appeared
+        ? `panel appeared: ${appeared}`
+        : `no panel appeared within ${budget} ms (polled: ${target.waitFor.join(', ')})`,
+    )
+  }
+
   for (const selector of target.scope ?? []) {
     try {
       const locator = page.locator(selector).first()
@@ -1120,6 +1159,25 @@ async function resultText(page, target) {
     })
     .catch(() => '')
   tried.push(`shadow roots: ${shadow.length} chars`)
+
+  // Dump the element names ACTUALLY present. This is the durable half of the diagnostic: `panel
+  // appeared` tells us whether timing was the whole story, while this list tells us what the page
+  // renders in this build. Guessing a page's markup from memory is how the two false FAILs happened.
+  const inventory = await page
+    .evaluate(() => {
+      const custom = new Set()
+      for (const element of document.querySelectorAll('*')) {
+        const tag = element.tagName.toLowerCase()
+        if (tag.includes('-')) custom.add(tag)
+      }
+      return {
+        custom: [...custom].slice(0, 40),
+        ids: [...document.body.querySelectorAll('[id]')].map(element => element.id).slice(0, 40),
+      }
+    })
+    .catch(() => ({ custom: [], ids: [] }))
+  tried.push(`custom elements: ${inventory.custom.join(', ') || 'none'}`)
+  tried.push(`ids: ${inventory.ids.join(', ') || 'none'}`)
 
   return { text: shadow.length > 0 ? `${body}\n${shadow}` : body, scope: null, tried }
 }
