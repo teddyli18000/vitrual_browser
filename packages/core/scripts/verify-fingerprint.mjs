@@ -705,6 +705,173 @@ const ORACLE_FIXTURE_EXPECT = {
   unreadable: 'UNREAD',
 }
 
+/* ---------------------------------------------------- worker-thread consistency (main vs Worker) */
+
+/**
+ * "A real device never disagrees with itself."
+ *
+ * The published anti-detect benchmark says the checkers verify that a page's MAIN thread and its
+ * BACKGROUND WORKER agree on the hardware. Camoufox patches at the C++ level so the two *should*
+ * agree, but this project has never measured it — and a disagreement between threads is exactly the
+ * class of contradiction that made CreepJS report lies about other products. So it is asserted, and a
+ * difference fails us.
+ */
+const WORKER_FIELDS = [
+  'hardwareConcurrency',
+  'webglVendor',
+  'webglRenderer',
+  'screenWidth',
+  'userAgent',
+  'devicePixelRatio',
+]
+
+/**
+ * Compare the main thread's values with the worker's.
+ *
+ * A pure function of two plain objects — deliberately: it is what lets the assertion be shown going
+ * red on this machine, where no engine can launch, via `--worker-fixture`.
+ *
+ * A field the WORKER could not report (a capability the worker does not expose, not a disagreement)
+ * is `null`, and that is UNREAD for that field rather than a failure — otherwise a missing
+ * OffscreenCanvas would read as "our fingerprint is inconsistent".
+ */
+function checkWorkerConsistency(main, worker) {
+  if (!worker || worker.error) {
+    return {
+      verdict: 'UNREAD',
+      findings: [],
+      detail: `the worker could not report anything: ${worker?.error ?? 'no worker result'}`,
+    }
+  }
+  const differences = []
+  const unreadable = []
+  for (const field of WORKER_FIELDS) {
+    const fromWorker = worker[field]
+    if (fromWorker === null || fromWorker === undefined) {
+      unreadable.push(field)
+      continue
+    }
+    if (String(fromWorker) !== String(main[field])) {
+      differences.push(
+        `${field}: main=${JSON.stringify(main[field])} worker=${JSON.stringify(fromWorker)}`,
+      )
+    }
+  }
+  if (differences.length > 0) {
+    return {
+      verdict: 'FAIL',
+      findings: differences,
+      detail: `${differences.length} of ${WORKER_FIELDS.length} fields disagree between threads`,
+    }
+  }
+  if (unreadable.length === WORKER_FIELDS.length) {
+    return {
+      verdict: 'UNREAD',
+      findings: [],
+      detail: 'the worker reported no comparable field at all',
+    }
+  }
+  return {
+    verdict: 'PASS',
+    findings: [],
+    detail:
+      `${WORKER_FIELDS.length - unreadable.length} of ${WORKER_FIELDS.length} fields agree between ` +
+      `threads${unreadable.length ? `; the worker could not report ${unreadable.join(', ')}` : ''}`,
+  }
+}
+
+/**
+ * Read the same values from inside a Worker.
+ *
+ * Needs a REAL origin — a worker created from `about:blank` sits on an opaque origin and is blocked.
+ * The caller navigates to the runner's own loopback page first.
+ *
+ * WebGL inside a worker needs `OffscreenCanvas`, and where that is unavailable the field comes back
+ * `null` rather than wrong. That distinction is the point: "could not measure" must never be reported
+ * as "measured and different".
+ */
+async function readWorkerSurface(page) {
+  return page.evaluate(async () => {
+    const source = `
+      self.onmessage = () => {
+        const out = {
+          hardwareConcurrency: navigator.hardwareConcurrency ?? null,
+          userAgent: navigator.userAgent ?? null,
+          screenWidth: typeof screen !== 'undefined' ? screen.width : null,
+          devicePixelRatio: typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : null,
+          webglVendor: null,
+          webglRenderer: null,
+        }
+        try {
+          // A separate OffscreenCanvas for WebGL: one canvas has exactly one context type.
+          const gl = new OffscreenCanvas(1, 1).getContext('webgl')
+          if (gl) {
+            const debug = gl.getExtension('WEBGL_debug_renderer_info')
+            out.webglVendor = debug
+              ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL)
+              : gl.getParameter(gl.VENDOR)
+            out.webglRenderer = debug
+              ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)
+              : gl.getParameter(gl.RENDERER)
+          }
+        } catch (error) {
+          out.webglError = String(error && error.message ? error.message : error)
+        }
+        self.postMessage(out)
+      }
+    `
+    try {
+      const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
+      const worker = new Worker(url)
+      const result = await new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('the worker did not answer within 10 s')),
+          10_000,
+        )
+        worker.onmessage = event => {
+          clearTimeout(timer)
+          resolve(event.data)
+        }
+        worker.onerror = event => {
+          clearTimeout(timer)
+          reject(new Error(event.message || 'the worker raised an error'))
+        }
+        worker.postMessage(null)
+      })
+      worker.terminate()
+      URL.revokeObjectURL(url)
+      return result
+    } catch (error) {
+      return { error: String(error && error.message ? error.message : error) }
+    }
+  })
+}
+
+/**
+ * Synthetic main/worker pairs, so `checkWorkerConsistency` can be shown going red without a browser.
+ *
+ * Each worker starts from the SAME good surface as the main thread, so only the field a fixture names
+ * can differ. An empty worker object makes every field unreadable and the `consistent` case comes back
+ * UNREAD rather than PASS — which is what happened on the first attempt.
+ */
+const WORKER_FIXTURES = {
+  consistent: { main: {}, worker: { ...GOOD_FIXTURE } },
+  'hardware-mismatch': { main: {}, worker: { ...GOOD_FIXTURE, hardwareConcurrency: 4 } },
+  'webgl-mismatch': {
+    main: {},
+    worker: { ...GOOD_FIXTURE, webglRenderer: 'ANGLE (Intel, Intel UHD Graphics 620)' },
+  },
+  unavailable: { main: {}, worker: { error: 'OffscreenCanvas is not defined' } },
+}
+
+/** What each worker fixture MUST produce, asserted rather than only printed. */
+const WORKER_FIXTURE_EXPECT = {
+  consistent: 'PASS',
+  'hardware-mismatch': 'FAIL',
+  'webgl-mismatch': 'FAIL',
+  unavailable: 'UNREAD',
+}
+
 /* ------------------------------------------------------------------------------------ the runner */
 
 async function exitIp() {
@@ -914,15 +1081,50 @@ function argument(name) {
 
 const fixture = argument('fixture')
 const oracleFixture = argument('oracle-fixture')
+const workerFixture = argument('worker-fixture')
 const live = process.argv.includes('--live')
 const skipSites = process.argv.includes('--skip-sites')
 
-if (!fixture && !live && !oracleFixture) {
+if (!fixture && !live && !oracleFixture && !workerFixture) {
   console.error(
     `usage: verify-fingerprint.mjs --live | --fixture ${Object.keys(FIXTURES).join('|')} | ` +
-      `--oracle-fixture ${Object.keys(ORACLE_FIXTURES).join('|')} [--skip-sites]`,
+      `--oracle-fixture ${Object.keys(ORACLE_FIXTURES).join('|')} | ` +
+      `--worker-fixture ${Object.keys(WORKER_FIXTURES).join('|')} [--skip-sites]`,
   )
   process.exit(2)
+}
+
+// The counterfactual for the WORKER-consistency assertion: two plain objects through the same
+// comparison the live run uses, so "this can go red" is answered with output rather than argument.
+if (workerFixture) {
+  if (!Object.hasOwn(WORKER_FIXTURES, workerFixture)) {
+    console.error(
+      `unknown worker fixture "${workerFixture}"; expected one of ${Object.keys(WORKER_FIXTURES).join(', ')}`,
+    )
+    process.exit(2)
+  }
+  // A fixture with no explicit main values uses the same good surface the property fixtures use, so
+  // only the field(s) the fixture names can differ.
+  const pair = WORKER_FIXTURES[workerFixture]
+  const main = { ...GOOD_FIXTURE, ...pair.main }
+  const outcome = checkWorkerConsistency(main, pair.worker)
+  console.log(`=== worker fixture (${workerFixture}) — no browser needed`)
+  for (const field of WORKER_FIELDS) {
+    console.log(
+      `      ${field.padEnd(20)} main=${JSON.stringify(main[field])} worker=${JSON.stringify(pair.worker?.[field] ?? null)}`,
+    )
+  }
+  console.log(
+    `      verdict: ${outcome.verdict} (expected ${WORKER_FIXTURE_EXPECT[workerFixture]})`,
+  )
+  console.log(`      detail:  ${outcome.detail}`)
+  for (const finding of outcome.findings) console.log(`      difference: ${finding}`)
+  if (outcome.verdict !== WORKER_FIXTURE_EXPECT[workerFixture]) {
+    failures.push(
+      `worker fixture ${workerFixture}: expected ${WORKER_FIXTURE_EXPECT[workerFixture]} but got ${outcome.verdict}`,
+    )
+  }
+  report()
 }
 
 // The counterfactual for the ORACLE path: drive the verdict parser with a page that really printed
@@ -960,6 +1162,7 @@ if (oracleFixture) {
 }
 
 let surface
+let workerSurface = null
 let browser = null
 let closeCore = null
 
@@ -1016,8 +1219,21 @@ if (fixture) {
   browser = await firefox.connect(runtime.wsEndpoint)
   const context = browser.contexts()[0] ?? (await browser.newContext())
   const page = await context.newPage()
-  await page.goto('about:blank', { waitUntil: 'load' })
+
+  // A worker needs a REAL origin: one created from `about:blank` sits on an opaque origin and is
+  // blocked, which would read as "the worker could not report" rather than as a measurement. The
+  // runner serves its own one-page origin instead.
+  const { createServer } = await import('node:http')
+  const origin = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    response.end('<!doctype html><title>vfox-fingerprint</title><p>loopback origin</p>')
+  })
+  await new Promise(resolve => origin.listen(0, '127.0.0.1', resolve))
+  const originUrl = `http://127.0.0.1:${origin.address().port}/`
+  await page.goto(originUrl, { waitUntil: 'load' })
   surface = await readSurface(page)
+  workerSurface = await readWorkerSurface(page)
+  await new Promise(resolve => origin.close(resolve))
 }
 
 console.log('')
@@ -1027,6 +1243,28 @@ for (const field of SURFACE_FIELDS) console.log(`      ${field}: ${JSON.stringif
 console.log('')
 console.log('=== consistency properties')
 const held = checkConsistencyProperties(surface)
+
+// Main thread vs background worker. "A real device never disagrees with itself", so any difference in
+// the fields the worker can report is a hard finding and fails us. A field the worker could not
+// report at all is UNREAD, not a disagreement.
+if (browser) {
+  console.log('')
+  console.log('=== worker-thread consistency (main thread vs Worker)')
+  const workerOutcome = checkWorkerConsistency(surface, workerSurface)
+  console.log(`${workerOutcome.verdict}  ${workerOutcome.detail}`)
+  for (const finding of workerOutcome.findings) console.log(`      difference: ${finding}`)
+  if (workerOutcome.verdict === 'FAIL') {
+    failures.push(
+      'worker-thread inconsistency (a real device never disagrees with itself): ' +
+        workerOutcome.findings.join('; '),
+    )
+  }
+  if (workerOutcome.verdict === 'UNREAD') {
+    note('the worker consistency check could not measure anything, so it proves nothing either way')
+  }
+} else {
+  note('fixture mode: the worker-thread check needs a browser and was not run')
+}
 
 if (browser && !skipSites) {
   await checkTargets(browser, held)
