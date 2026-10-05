@@ -1,38 +1,41 @@
 /**
  * Durability and isolation of a profile's browser state — the property the product exists for.
  *
- * The gap this closes, verified rather than assumed: the packaged suite runs eight phases and **not one
- * of them restarts a profile**. The mechanism is `_userDataDir` in `packages/core/src/launcher.ts` — what
- * makes a profile a real directory instead of a throwaway temp one — and nothing would fail if it were
- * dropped. Every profile would still launch, render, and report a distinct fingerprint; a user would find
- * out weeks later as "I have to log in again every time", and it would look like the site's fault.
+ * The gap this closes: the packaged suite runs eight phases and not one of them restarts a profile. The
+ * mechanism is `_userDataDir` in `packages/core/src/launcher.ts` — what makes a profile a real directory
+ * instead of a throwaway temp one — and nothing would fail if it were dropped. Every profile would still
+ * launch, render and report a distinct fingerprint; a user would find out weeks later as "I have to log in
+ * again every time", and it would look like the site's fault.
  *
- * What the phase does:
- *   1. serves one page from a local HTTP origin that sets a cookie **with an explicit expiry** and a
- *      localStorage entry on load;
- *   2. launches profile A (an existing profile, so no new creation path), loads it, confirms the state;
- *   3. **stops A completely** through the app's own stop route, with the process-tree check;
- *   4. **relaunches A** and asserts the cookie — value *and* expiry — and the localStorage entry survived;
- *   5. asserts profile B **cannot see A's cookie**: a shared profile directory would pass step 4 and fail
- *      here, and durability without isolation is a different bug.
+ * THE ROUTES ARE SPLIT, and that is structural rather than cosmetic. The setter lives at `/set`; every
+ * other path serves a page that only reports. With one page doing both — the first version of this module
+ * — every verification navigation re-seeded the state it was about to assert, so:
+ *   · the post-relaunch assertions could not fail, because the probe's own script satisfied them;
+ *   · the isolation check could never pass, because profile B's page set B's own cookie and the failure
+ *     blamed a shared directory for correct behaviour;
+ *   · break mode could not break what it names, because the fresh directory was re-seeded before the read.
+ * With the split, all three become real assertions.
  *
- * The cookie is set by the page (`document.cookie`), not by `context.addCookies`, so the profile's own
- * store owns it, and it is read back **two ways** — `context.cookies()` and `document.cookie` after a
- * reload — which distinguishes "the store kept it" from "the automation context remembered it". The
- * expiry is asserted too: a session cookie can outlive a stop on a live process and prove nothing about
- * disk, which is the entire question here.
+ * The phase: `/set` writes an expiring cookie and a localStorage entry from the page itself; profile A
+ * loads it and the row is polled for in the profile's `cookies.sqlite`; A is stopped through the app's own
+ * route with the process-tree check; A relaunches and loads the read-only `/`, where the cookie (value and
+ * expiry) and the localStorage entry must still be there; profile B loads the same read-only page and must
+ * see neither.
  *
- * The origin is plain HTTP on `127.0.0.1`, never a `data:` URL, which has an opaque origin where a cookie
- * cannot be set at all. If the engine's anti-detection interferes with a plain-HTTP local origin, this
- * reports UNREAD with the observed state rather than weakening the assertion — a check that cannot fail is
- * worse than a check that says it could not read.
+ * FLUSH AMBIGUITY, designed against rather than discovered in a red run: the stop is a forced kill and
+ * Firefox batches cookie writes, so a bare failure would be ambiguous between "the profile is not durable"
+ * and "the engine was killed before it flushed". The poll makes the two distinguishable and the failure
+ * message says which one it cannot rule out.
  *
- * What it does NOT prove, and says so in its own output: that a real third-party site's login survives.
- * Credentials must never be in CI. It proves the mechanism.
+ * Plain HTTP on 127.0.0.1, never a `data:` URL (opaque origin, cookies cannot be set at all). If the engine
+ * interferes with a loopback origin the phase reports UNREAD — returned to the caller so it reaches the
+ * summary — rather than weakening the assertion.
  *
- * The red run is `VFOX_E2E_BREAK=durability-userdata`, matching the project's `VFOX_FLOW_BREAK`
- * convention: it deletes the profile's `userdata` between the stop and the relaunch, which is the failure
- * this phase exists to catch, and must FAIL with a message naming what was lost.
+ * It does NOT prove that a real third-party site's login survives, and says so: credentials must never be
+ * in CI. It proves the mechanism.
+ *
+ * Red run: `VFOX_E2E_BREAK=durability-userdata` deletes the profile's `userdata` between the stop and the
+ * relaunch, and must FAIL naming what was lost.
  */
 
 import { rmSync } from 'node:fs'
@@ -44,58 +47,95 @@ const STORAGE_KEY = 'vfox_durable'
 /** A day out, so the value that comes back had to be written to the profile's cookies.sqlite. */
 const COOKIE_EXPIRY_SECONDS = 86_400
 
-/** Served to the browser: sets an expiring cookie and a localStorage entry, from the page itself. */
-function probePage() {
+/** Served at `/set`: writes the state, from the page itself. */
+function setterPage() {
   const expires = new Date(Date.now() + COOKIE_EXPIRY_SECONDS * 1000).toUTCString()
   return `<!doctype html>
 <meta charset="utf-8">
-<title>vfox durability</title>
+<title>vfox durability: set</title>
 <script>
   document.cookie = '${COOKIE}=durable; expires=${expires}; path=/'
   localStorage.setItem('${STORAGE_KEY}', 'durable')
   document.title = 'vfox durability: set'
 </script>
-<body>durability probe</body>
+<body>durability setter</body>
 `
 }
 
-/** Runs in the page. */
+/**
+ * Served everywhere else: reads only. It must never set anything, or the assertions downstream would be
+ * satisfied by this page rather than by what the profile kept.
+ */
+const READER_PAGE = `<!doctype html>
+<meta charset="utf-8">
+<title>vfox durability: read</title>
+<body>durability reader</body>
+`
+
+/** Runs in the page. Reads; never writes. */
 const READ_DOCUMENT_STATE = () => ({
   cookie: document.cookie,
   storage: localStorage.getItem('vfox_durable'),
 })
 
 async function startOrigin() {
-  const server = createServer((_request, response) => {
+  const server = createServer((request, response) => {
+    const route = (request.url ?? '/').split('?')[0]
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    response.end(probePage())
+    response.end(route === '/set' ? setterPage() : READER_PAGE)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
-  return { server, url: `http://127.0.0.1:${port}/` }
+  const base = `http://127.0.0.1:${port}`
+  return { server, setter: `${base}/set`, reader: `${base}/` }
 }
 
-/** Everything the browser holds for this origin: the document's view and the context's own store. */
-async function readState(page, url) {
-  await page.goto(url, { waitUntil: 'domcontentloaded' })
+/** What the browser holds for this origin: the document's view, plus the context's cookie store. */
+async function readState(page, reader) {
+  await page.goto(reader, { waitUntil: 'domcontentloaded' })
   const document = await page.evaluate(READ_DOCUMENT_STATE)
-  const jar = await page.context().cookies(url)
-  const cookie = jar.find(entry => entry.name === COOKIE)
-  return { document, cookie }
+  const jar = await page.context().cookies(reader)
+  return { document, cookie: jar.find(entry => entry.name === COOKIE) }
 }
 
 /**
- * Run the phase.
+ * Is the cookie row already in the profile's `cookies.sqlite`?
  *
- * The interface is exactly what the runner already has at module scope — no context object, matching the
- * existing inline phases:
+ * `true` / `false` / `'unknown: …'`. The third state matters: a locked or unreadable database must not be
+ * reported as "not durable" — they are different defects and only one of them is ours.
+ */
+async function cookieRowOnDisk(userdata, timeoutMs = 5000) {
+  const file = path.join(userdata, 'cookies.sqlite')
+  const until = Date.now() + timeoutMs
+  let lastError = null
+  while (Date.now() < until) {
+    try {
+      const { DatabaseSync } = await import('node:sqlite')
+      const database = new DatabaseSync(file, { readOnly: true })
+      try {
+        const row = database
+          .prepare('SELECT COUNT(*) AS n FROM moz_cookies WHERE name = ?')
+          .get(COOKIE)
+        if (row && Number(row.n) > 0) {
+          return true
+        }
+      } finally {
+        database.close()
+      }
+    } catch (error) {
+      lastError = error
+    }
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  return lastError ? `unknown: ${lastError.message}` : false
+}
+
+/**
+ * Run the phase against the runner's own module-scope helpers: `api`, `profiles`, `dataDir`,
+ * `connect`, `user32` and the `pass`/`fail`/`note` reporters.
  *
- *   api(route, init)        the runner's HTTP helper
- *   profiles                the profiles phase 3 created; [0] and [1] are used
- *   dataDir                 the packaged app's data directory
- *   connect(wsEndpoint)     playwright-core `firefox.connect`
- *   user32                  the shared user32 module, for the best-effort process check
- *   step/pass/fail/note     the runner's reporters
+ * Returns `{ unread, checks }` so a phase that proved nothing is visible in the summary rather than only
+ * inside the log — `note` alone cannot be told apart from ordinary information.
  */
 export async function runDurabilityPhase({
   api,
@@ -103,13 +143,14 @@ export async function runDurabilityPhase({
   dataDir,
   connect,
   user32,
-  step,
   pass,
   fail,
   note,
 }) {
   const breakMode = process.env.VFOX_E2E_BREAK ?? ''
   const [profileA, profileB] = profiles
+  const unread = []
+  const checks = []
 
   note(
     'NOT PROVEN by this phase: that a real third-party site login survives a restart. Credentials must ' +
@@ -118,6 +159,7 @@ export async function runDurabilityPhase({
   )
 
   const userdataDir = id => path.join(dataDir, 'profiles', id, 'userdata')
+  const endpointOf = launched => launched?.wsEndpoint ?? launched?.data?.wsEndpoint
 
   /** Best-effort: the GitHub runner has no CIM, so "could not enumerate" is a note, never a pass. */
   const checkNoEngineProcesses = async label => {
@@ -135,43 +177,62 @@ export async function runDurabilityPhase({
     }
   }
 
-  const { server, url } = await startOrigin()
+  const { server, setter, reader } = await startOrigin()
   try {
-    step('6b. a profile keeps its cookies and localStorage across a stop and relaunch')
     if (!profileA || !profileB) {
       fail('this phase needs two profiles; phase 3 created fewer')
-      return
+      return { unread, checks }
     }
 
     const launched = await api(`/api/v1/profiles/${profileA.id}/launch`, {
       method: 'POST',
       body: '{}',
     })
-    const wsEndpoint = launched?.wsEndpoint ?? launched?.data?.wsEndpoint
+    const wsEndpoint = endpointOf(launched)
     if (!wsEndpoint) {
       fail(`profile ${profileA.name} exposed no wsEndpoint, so its page state cannot be read`)
-      return
+      return { unread, checks }
     }
 
     let browser = await connect(wsEndpoint)
+    let seeded
     try {
       const page = await browser.newPage()
-      const set = await readState(page, url)
-      if (!set.cookie || set.document.storage !== 'durable') {
-        note(
-          `UNREAD: the probe page could not set its state on a plain-HTTP loopback origin — ` +
-            `document.cookie=${JSON.stringify(set.document.cookie)} storage=${JSON.stringify(set.document.storage)}`,
-        )
-        return
-      }
-      pass(
-        `profile ${profileA.name}: cookie ${COOKIE} and localStorage set (expiry in ${COOKIE_EXPIRY_SECONDS}s)`,
-      )
+      // The SETTER route, once. Every later navigation uses the reader.
+      await page.goto(setter, { waitUntil: 'domcontentloaded' })
+      seeded = await page.evaluate(READ_DOCUMENT_STATE)
     } finally {
       await browser.close()
     }
+    if (!seeded.cookie.includes(COOKIE) || seeded.storage !== 'durable') {
+      unread.push(
+        `the probe page could not set its state on a plain-HTTP loopback origin — ` +
+          `document.cookie=${JSON.stringify(seeded.cookie)} storage=${JSON.stringify(seeded.storage)}`,
+      )
+      note(`UNREAD: ${unread.at(-1)}`)
+      return { unread, checks }
+    }
+    checks.push('state set')
+    pass(
+      `profile ${profileA.name}: cookie ${COOKIE} and localStorage set (expiry in ${COOKIE_EXPIRY_SECONDS}s)`,
+    )
 
-    // The app's own stop route, then the process-tree check.
+    // The flush check: makes "not durable" distinguishable from "killed before flushing".
+    const onDisk = await cookieRowOnDisk(userdataDir(profileA.id))
+    if (onDisk === true) {
+      checks.push('cookie row on disk before the stop')
+      pass(`profile ${profileA.name}: the cookie row is already in cookies.sqlite before the stop`)
+    } else if (onDisk === false) {
+      note(
+        'the cookie row was NOT observed in cookies.sqlite before the stop, so a later failure cannot ' +
+          'distinguish a profile that is not durable from an engine killed before it flushed',
+      )
+    } else {
+      note(
+        `could not read the profile's cookies.sqlite (${onDisk}) — the flush question is undecided`,
+      )
+    }
+
     await api(`/api/v1/profiles/${profileA.id}/stop`, { method: 'POST', body: '{}' })
     await checkNoEngineProcesses(`after stopping ${profileA.name}`)
 
@@ -187,17 +248,18 @@ export async function runDurabilityPhase({
       method: 'POST',
       body: '{}',
     })
-    const secondEndpoint = relaunched?.wsEndpoint ?? relaunched?.data?.wsEndpoint
+    const secondEndpoint = endpointOf(relaunched)
     if (!secondEndpoint) {
       fail(`profile ${profileA.name} exposed no wsEndpoint after the relaunch`)
-      return
+      return { unread, checks }
     }
 
     browser = await connect(secondEndpoint)
     let after
     try {
       const page = await browser.newPage()
-      after = await readState(page, url)
+      // The READER route: it sets nothing, so anything observed here came from the profile's own store.
+      after = await readState(page, reader)
     } finally {
       await browser.close()
     }
@@ -219,14 +281,20 @@ export async function runDurabilityPhase({
       lost.push(`localStorage['${STORAGE_KEY}']`)
     }
     if (lost.length > 0) {
+      const attribution =
+        onDisk === true
+          ? 'the row was on disk before the stop, so the profile did not read back what it had written'
+          : 'the row was NOT observed on disk before the stop, so this cannot distinguish a profile that ' +
+            'is not durable from an engine killed before it flushed cookies.sqlite'
       fail(
-        `profile ${profileA.name} lost its state across a stop and relaunch: ${lost.join('; ')}` +
+        `profile ${profileA.name} lost its state across a stop and relaunch: ${lost.join('; ')} — ${attribution}` +
           (breakMode === 'durability-userdata'
             ? ' (userdata was removed between stop and relaunch)'
             : ''),
       )
-      return
+      return { unread, checks }
     }
+    checks.push('state survived the restart')
     pass(`profile ${profileA.name}: cookie and localStorage survived a full stop and relaunch`)
 
     // Isolation, in the same phase: durability with a shared directory would pass everything above.
@@ -234,16 +302,17 @@ export async function runDurabilityPhase({
       method: 'POST',
       body: '{}',
     })
-    const endpointB = launchedB?.wsEndpoint ?? launchedB?.data?.wsEndpoint
+    const endpointB = endpointOf(launchedB)
     if (!endpointB) {
       fail(`profile ${profileB.name} exposed no wsEndpoint`)
-      return
+      return { unread, checks }
     }
     browser = await connect(endpointB)
     let other
     try {
       const page = await browser.newPage()
-      other = await readState(page, url)
+      // Read-only, so B's page cannot manufacture the very state this check looks for.
+      other = await readState(page, reader)
     } finally {
       await browser.close()
       await api(`/api/v1/profiles/${profileB.id}/stop`, { method: 'POST', body: '{}' })
@@ -254,12 +323,14 @@ export async function runDurabilityPhase({
         `profile ${profileB.name} sees profile ${profileA.name}'s state — the two profiles share a ` +
           `browser directory: cookie=${JSON.stringify(other.cookie)} storage=${JSON.stringify(other.document.storage)}`,
       )
-      return
+      return { unread, checks }
     }
+    checks.push('state isolated between profiles')
     pass(
       `profile ${profileB.name} sees neither the cookie nor the localStorage entry of ${profileA.name}`,
     )
   } finally {
     await new Promise(resolve => server.close(resolve))
   }
+  return { unread, checks }
 }

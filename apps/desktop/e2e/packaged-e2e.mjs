@@ -688,7 +688,7 @@ executed.push(
 /* -- 6b. a profile keeps its state across a restart, and does not share it ---------------------- */
 
 step('6b. a profile keeps its cookies and localStorage across a stop and relaunch')
-await runDurabilityPhase({
+const durability = await runDurabilityPhase({
   api,
   profiles,
   dataDir,
@@ -697,11 +697,16 @@ await runDurabilityPhase({
     return firefox.connect(wsEndpoint)
   },
   user32,
-  step,
   pass,
   fail,
   note,
 })
+if (durability.unread.length > 0) {
+  // A phase that proved nothing must be visible in the summary, not only inside the log.
+  note(
+    `durability: ${durability.unread.length} propert(ies) UNREAD — ${durability.unread.join('; ')}`,
+  )
+}
 step('7. stopping everything, and nothing is left behind')
 for (const profile of profiles) {
   await api(`/api/v1/profiles/${profile.id}/stop`, { method: 'POST', body: '{}' })
