@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url'
 import { startServer } from '@vfox/server'
 import { seedDemoData } from './demo-data.mjs'
 import { createStaticServer } from './static-server.mjs'
+import { assertBridgeParses, bridgeData, installBridge } from './ui-bridge.mjs'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
 const appRoot = resolve(here, '..')
@@ -81,72 +82,8 @@ assertBridgeParses(
 
 /* ------------------------------------------------------------------- bridge injection */
 
-/**
- * Mirrors what `src/preload/index.ts` exposes through contextBridge. The renderer cannot tell the
- * difference except for the capabilities that need Electron, listed in the file header.
- *
- * Playwright serialises this function and runs it in the page, so it must not close over anything:
- * everything it needs arrives in `bridge`, which is plain data.
- */
-function installBridge(bridge) {
-  window.vfox = {
-    apiBase: bridge.apiBase,
-    token: bridge.token,
-    version: bridge.version,
-    platform: bridge.platform,
-    dataDir: bridge.dataDir,
-    dataMode: bridge.dataMode,
-    serviceError: bridge.serviceError,
-    openPath: async () => '',
-    revealPath: async () => true,
-    openHomepage: async () => 'https://github.com/teddyli18000/vitrual_browser',
-    probeProxy: async () => ({ ok: true, ms: 18, message: 'TCP 连接成功' }),
-    restartService: async () => ({
-      ok: false,
-      url: bridge.apiBase,
-      token: '',
-      error: '截图环境无法重启主进程',
-    }),
-    profileDir: async () => bridge.profileDir,
-    profileUsage: async () => bridge.usage,
-    saveExport: async () => ({ saved: false, path: null }),
-    saveText: async () => ({ saved: false, path: null }),
-    pickImport: async () => null,
-  }
-}
-
-/** Plain data only — Playwright JSON-serialises this into the page as the function's argument. */
-function bridgeData(info) {
-  const profileDir = join(info.dataDir, 'profiles', 'demo-profile', 'userdata')
-  return {
-    apiBase: info.apiBase,
-    token: info.token,
-    version: info.version,
-    platform: info.platform,
-    dataDir: info.dataDir,
-    dataMode: info.dataMode,
-    serviceError: info.serviceError,
-    profileDir,
-    usage: { path: profileDir, exists: true, bytes: 189_743_104, files: 4213 },
-  }
-}
-
-/**
- * Reproduces Playwright's own serialisation — `coreBundle.js`: `(${fun.toString()})(${argString})` —
- * and parses it, without a browser and without executing it. This is the guard that would have
- * caught the unparenthesised-arrow-body bug here instead of in CI, and it costs microseconds.
- */
-function assertBridgeParses(data, label) {
-  const source = `(${installBridge.toString()})(${JSON.stringify(data)})`
-  try {
-    // Parses the source without running it; `new Function` is the cheapest real parser available.
-    new Function(source)
-  } catch (error) {
-    console.error(`The injected bridge script for "${label}" does not parse: ${error.message}`)
-    console.error(source)
-    process.exit(2)
-  }
-}
+/* `installBridge`, `bridgeData` and `assertBridgeParses` live in `ui-bridge.mjs` so this harness and
+ * `flow-ui.mjs` cannot drift apart. */
 
 /* ------------------------------------------------------------------- browser preflights */
 
