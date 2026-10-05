@@ -195,7 +195,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     options.logger ?? silentLogger,
   )
   const { token, generated, source } = await resolveToken({ dataDir, token: options.token })
-  const core = options.core ?? (await loadCore(dataDir, logger))
+  const core = options.core ?? (await loadCore(dataDir, logger, options.workArea))
   // Exactly one synchroniser for the whole process: it owns the master/slave links and the session
   // state, so a second instance would fight this one for the same windows.
   const sync = await loadSync(core, logger)
@@ -284,9 +284,13 @@ async function loadSync(core: Core, logger: CoreLogger): Promise<SyncHandle> {
  * Loaded lazily so that embedding or testing this package never pulls the engine in: the tests
  * always inject a fake core, and the CLI's `--help` must work before `@vfox/core` is built.
  */
-async function loadCore(dataDir: string, logger: CoreLogger): Promise<Core> {
+async function loadCore(
+  dataDir: string,
+  logger: CoreLogger,
+  workArea?: { width: number; height: number },
+): Promise<Core> {
   const { createCore } = await import('@vfox/core')
-  return createCore({ dataDir, logger })
+  return createCore({ dataDir, logger, ...(workArea ? { workArea } : {}) })
 }
 
 function isProtected(request: FastifyRequest): boolean {

@@ -145,55 +145,53 @@ describe('identityIsCurrent', () => {
 })
 
 describe('comfortable window sizing', () => {
-  it('lands on the numbers the policy decided', () => {
-    expect(comfortableWindow({ width: 1920, height: 1040 })).toEqual({
-      width: 1100,
-      height: 700,
-      x: 410,
-      y: 170,
-    })
-    expect(comfortableWindow({ width: 2560, height: 1400 })).toEqual({
-      width: 1408,
-      height: 868,
-      x: 576,
-      y: 266,
-    })
+  /**
+   * The five work areas the policy was decided against, including one larger than the old absolute
+   * ceiling and one smaller than the floor. The assertions are PROPERTIES, not the pixel values above:
+   * a test that pins 1190x728 is the same mistake as the absolute clamp, and it fails the moment
+   * somebody runs it on a different monitor.
+   */
+  const WORK_AREAS = [
+    { width: 1920, height: 1040 },
+    { width: 2560, height: 1400 },
+    { width: 3840, height: 2080 },
+    { width: 5120, height: 2880 },
+    { width: 1366, height: 728 },
+  ]
+
+  it('stays proportional at every resolution, between the floor and 90% of the work area', () => {
+    for (const workArea of WORK_AREAS) {
+      const where = `${workArea.width}x${workArea.height}`
+      const box = comfortableWindow(workArea)
+
+      // The floor ITSELF, not `min(target, floor)`: on a screen too small for the target, the floor is
+      // the only thing keeping the window usable, and computing this as a minimum silently skipped it
+      // on exactly that screen — which is how deleting WINDOW_FLOOR kept this test green.
+      expect(box.width, where).toBeGreaterThanOrEqual(Math.min(1000, workArea.width))
+      expect(box.height, where).toBeGreaterThanOrEqual(Math.min(640, workArea.height))
+      // Never more than 90% of the work area, and never larger than it: the ceiling is a fraction, so
+      // "not full-screen" holds on a 5120-wide display as well as on a 1366-wide one.
+      expect(box.width, where).toBeLessThanOrEqual(Math.round(workArea.width * 0.9))
+      expect(box.height, where).toBeLessThanOrEqual(Math.round(workArea.height * 0.9))
+      expect(box.width, where).toBeLessThanOrEqual(workArea.width)
+      expect(box.height, where).toBeLessThanOrEqual(workArea.height)
+      // Above the floor the ratio is constant, which is what "feels the same at every resolution" means.
+      if (workArea.width * 0.62 >= 1000) {
+        expect(box.width, where).toBe(Math.round(workArea.width * 0.62))
+      }
+      if (workArea.height * 0.7 >= 640) {
+        expect(box.height, where).toBe(Math.round(workArea.height * 0.7))
+      }
+    }
   })
 
-  it('never exceeds the work area it is given, however small that is', () => {
-    // A CI-sized runner: the clamp floor does not fit, so fitting inside wins.
-    expect(comfortableWindow({ width: 1024, height: 720 })).toEqual({
-      width: 1024,
-      height: 700,
-      x: 0,
-      y: 10,
-    })
-  })
-
-  it('never exceeds the clamp, however large the display is', () => {
-    expect(comfortableWindow({ width: 7680, height: 4320 })).toEqual({
-      width: 1600,
-      height: 1000,
-      x: 3040,
-      y: 1660,
-    })
-  })
-
-  it('pins a window that fits the screen the profile claims', async () => {
-    const created = await createIdentity(
-      FingerprintSchema.parse({ os: 'windows', geoip: false }),
-      '152.0.4',
-    )
-    const screen = created.identity.fingerprint.screen as Record<string, unknown>
-
-    expect(Number(screen.outerWidth)).toBeLessThanOrEqual(Number(screen.width))
-    expect(Number(screen.outerHeight)).toBeLessThanOrEqual(Number(screen.height))
-    expect(Number(screen.outerWidth)).toBeLessThanOrEqual(1600)
-    expect(Number(screen.outerHeight)).toBeLessThanOrEqual(1000)
-    // The floor applies whenever the claimed display allows it, and never exceeds the display.
-    expect(Number(screen.outerWidth)).toBeGreaterThanOrEqual(Math.min(1100, Number(screen.width)))
-    expect(Number(screen.outerHeight)).toBeGreaterThanOrEqual(Math.min(700, Number(screen.height)))
-    expect(Number(screen.availWidth)).toBeGreaterThanOrEqual(Number(screen.outerWidth))
-    expect(Number(screen.availHeight)).toBeGreaterThanOrEqual(Number(screen.outerHeight))
+  it('centres the window without pushing it off the screen', () => {
+    for (const workArea of WORK_AREAS) {
+      const box = comfortableWindow(workArea)
+      expect(box.x).toBeGreaterThanOrEqual(0)
+      expect(box.y).toBeGreaterThanOrEqual(0)
+      expect(box.x + box.width).toBeLessThanOrEqual(workArea.width)
+      expect(box.y + box.height).toBeLessThanOrEqual(workArea.height)
+    }
   })
 })

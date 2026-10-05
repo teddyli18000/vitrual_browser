@@ -21,6 +21,8 @@ export interface ServerOptions {
   /** Defaults to `VFOX_API_TOKEN`, then `<dataDir>/api-token`, then a freshly generated token. */
   token?: string
   logger?: CoreLogger
+  /** The primary display's work area, when the host can see it. See `CoreOptions.workArea`. */
+  workArea?: { width: number; height: number }
   /**
    * Test/embedding hook: reuse an already constructed core instead of creating one. The server
    * still closes it on `close()`, exactly as it closes the one it created itself.

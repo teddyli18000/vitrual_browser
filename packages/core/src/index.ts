@@ -32,6 +32,14 @@ export interface CoreOptions {
   dataDir: string
   /** Engine install directory. Defaults to the CAMOUFOX_INSTALL_DIR env var / user cache. */
   kernelDir?: string
+  /**
+   * The primary display's work area, when the caller can see it — the desktop main process can, the
+   * CLI and the server cannot. New profiles are sized to a comfortable fraction of it and pinned
+   * there, so a profile window always fits the screen it will open on. When it is absent, the sizing
+   * falls back to the display the fingerprint itself claims, which is what every caller did before
+   * this field existed.
+   */
+  workArea?: { width: number; height: number }
   logger?: CoreLogger
 }
 

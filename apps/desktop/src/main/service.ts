@@ -1,3 +1,4 @@
+import { screen } from 'electron'
 /**
  * In-process lifecycle of the VFox core service.
  *
@@ -65,7 +66,11 @@ export async function startService(dataDir: string): Promise<ServiceState> {
 
   try {
     const { startServer } = await import('@vfox/server')
-    const started = await startServer({ dataDir, logger: log })
+    const started = await startServer({
+      dataDir,
+      logger: log,
+      workArea: screen.getPrimaryDisplay().workAreaSize,
+    })
     handle = started
     log.info(`API listening on ${started.url}`)
     return stateOf(started)

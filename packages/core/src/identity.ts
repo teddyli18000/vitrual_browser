@@ -67,11 +67,7 @@ export function identityInputs(fingerprint: FingerprintConfig): string {
   })
 }
 
-/** Size a profile window to 55% x 62% of the work area, clamped and centred. */
-const COMFORT = { widthFraction: 0.55, heightFraction: 0.62 } as const
-
-/** The clamp that makes "never full-screen" true on a big monitor and "never tiny" true on a small one. */
-const WINDOW_CLAMP = { minWidth: 1100, minHeight: 700, maxWidth: 1600, maxHeight: 1000 } as const
+const COMFORT = { widthFraction: 0.62, heightFraction: 0.7, maxFraction: 0.9 } as const
 
 export interface WindowBox {
   width: number
@@ -81,27 +77,23 @@ export interface WindowBox {
 }
 
 /**
- * Size and centre a profile window inside a work area.
- *
- * 55% x 62% of the work area, clamped to [1100x700, 1600x1000], centred, never maximised. On a
- * 1920x1040 desktop that is 1100x700 (clamped up from 1056x645); on 2560x1400 it is 1408x868. The
- * clamp is what keeps a window usable on a small screen without letting it fill a large one.
- *
- * When the work area is smaller than the floor, fitting inside it wins: a window wider than the
- * display is the exact defect this replaces, so the result is never larger than the area given, and
- * being slightly cramped is survivable where being full-screen is not. A 1024x720 runner therefore
- * gets 1024x700.
+ * The floor is in pixels, but never larger than the work area, so a small screen still gets a usable
+ * window rather than something absurd. The ceiling is a *fraction* of the work area, not a pixel count:
+ * an absolute cap makes a window look small on a high-resolution display — 1600px is 42% of a 3840px
+ * desktop — which is the mistake this rule exists to avoid. A proportion feels the same everywhere.
  */
+const WINDOW_FLOOR = { width: 1000, height: 640 } as const
+
 export function comfortableWindow(workArea: { width: number; height: number }): WindowBox {
-  const width = Math.min(
-    Math.max(Math.round(workArea.width * COMFORT.widthFraction), WINDOW_CLAMP.minWidth),
-    WINDOW_CLAMP.maxWidth,
-    workArea.width,
+  const width = clampTo(
+    Math.round(workArea.width * COMFORT.widthFraction),
+    Math.min(WINDOW_FLOOR.width, workArea.width),
+    Math.round(workArea.width * COMFORT.maxFraction),
   )
-  const height = Math.min(
-    Math.max(Math.round(workArea.height * COMFORT.heightFraction), WINDOW_CLAMP.minHeight),
-    WINDOW_CLAMP.maxHeight,
-    workArea.height,
+  const height = clampTo(
+    Math.round(workArea.height * COMFORT.heightFraction),
+    Math.min(WINDOW_FLOOR.height, workArea.height),
+    Math.round(workArea.height * COMFORT.maxFraction),
   )
   return {
     width,
@@ -110,15 +102,28 @@ export function comfortableWindow(workArea: { width: number; height: number }): 
     y: Math.max(Math.round((workArea.height - height) / 2), 0),
   }
 }
+
+/** `Math.min(Math.max(...))`, named so the operands read as target, floor and ceiling. */
+function clampTo(target: number, floor: number, ceiling: number): number {
+  return Math.max(Math.min(target, ceiling), floor)
+}
 /**
  * Pin a fingerprint's window to a comfortable box inside the screen it already claims.
+ *
+ * When the caller cannot see the real display — the CLI and the server cannot — the window is sized
+ * from the display this fingerprint claims, and may therefore exceed a smaller real screen. That is
+ * what `verify-window.mjs`'s size assertion reports: the input was missing, not the sizing wrong.
  *
  * Only the outer size and the position are touched. `innerWidth`/`innerHeight` are deliberately left
  * as browserforge produced them - 0, which `_castToProperties` drops, so the browser reports its own
  * true viewport rather than a value derived from a chrome allowance. `availWidth`/`availHeight` are
  * raised to fit the window, so a profile never claims a window larger than its own available area.
  */
-function applyComfortableWindow(screen: Record<string, unknown> | undefined): void {
+function applyComfortableWindow(
+  screen: Record<string, unknown> | undefined,
+  /** The real work area when the caller knows it; the claimed display otherwise. */
+  workArea?: { width: number; height: number },
+): void {
   if (!screen) {
     return
   }
@@ -127,7 +132,7 @@ function applyComfortableWindow(screen: Record<string, unknown> | undefined): vo
   if (!(width > 0) || !(height > 0)) {
     return
   }
-  const box = comfortableWindow({ width, height })
+  const box = comfortableWindow(workArea ?? { width, height })
   screen.outerWidth = box.width
   screen.outerHeight = box.height
   screen.screenX = box.x
@@ -144,6 +149,8 @@ export async function createIdentity(
   engine: string | null,
   /** WebGL pairs other profiles already report, so a new profile does not repeat one. */
   takenWebgl: ReadonlySet<string> = new Set(),
+  /** The real work area, when the caller knows it. See `CoreOptions.workArea`. */
+  workArea?: { width: number; height: number },
 ): Promise<CreatedIdentity> {
   const { fromBrowserforge, generateFingerprint } = await import(
     camoufoxModule('dist/fingerprints.js')
@@ -185,7 +192,7 @@ export async function createIdentity(
   // of the fingerprint already describes, so the window can never exceed the screen it reports.
   // Sizing against the machine's REAL work area would be better still and is not possible from here -
   // see the note in the PR; it needs a caller that can see the display.
-  applyComfortableWindow(generated.screen)
+  applyComfortableWindow(generated.screen, workArea)
   // `fromBrowserforge()` is where the last per-launch random lives: `handleScreenXY` picks
   // `window.screenY` with `randrange` whenever the fingerprint's screenX is far from zero
   // (dist/fingerprints.js:31-54). Running the mapper once and pinning what it produced keeps the
