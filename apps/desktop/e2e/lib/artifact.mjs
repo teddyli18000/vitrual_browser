@@ -376,6 +376,49 @@ export function checkNoTestCode(artifact) {
  * @param {{ unpackedRoot: string }} options
  * @returns {{ ok: boolean, failures: string[], checked: number }}
  */
+/** Bare builtins Node resolves without the `node:` prefix, which the docs recommend but do not
+ * require: `escalade` imports from "fs" and "path" and works everywhere. */
+const BARE_NODE_BUILTINS = new Set([
+  'assert',
+  'buffer',
+  'child_process',
+  'cluster',
+  'console',
+  'constants',
+  'crypto',
+  'dgram',
+  'dns',
+  'domain',
+  'events',
+  'fs',
+  'http',
+  'http2',
+  'https',
+  'inspector',
+  'module',
+  'net',
+  'os',
+  'path',
+  'perf_hooks',
+  'process',
+  'punycode',
+  'querystring',
+  'readline',
+  'repl',
+  'stream',
+  'string_decoder',
+  'sys',
+  'timers',
+  'tls',
+  'tty',
+  'url',
+  'util',
+  'v8',
+  'vm',
+  'worker_threads',
+  'zlib',
+])
+
 export function checkUnpackedResolution(artifact, options) {
   const { unpackedRoot } = options
   const nm = path.join(unpackedRoot, 'node_modules')
@@ -425,17 +468,30 @@ export function checkUnpackedResolution(artifact, options) {
         continue
       }
       if (!['.js', '.mjs', '.cjs'].some(ext => entry.name.endsWith(ext))) continue
+      // Strip comments and template literals first: playwright-core documents its bundled
+      // dependencies with a JSDoc line reading `import { Ajv } from 'ajv'`, and reporting a
+      // sentence about an import as an import is how a guard loses the reader on its first run.
       const source = readFileSync(full, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/[^\n]*/gm, '')
+        .replace(/`(?:\\.|[^`\\])*`/g, '')
       checked += 1
       for (const match of source.matchAll(
         /(?:import|export)\s[^\n]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
       )) {
         const specifier = match[1] ?? match[2]
         if (!specifier) continue
+        // Skip relative paths, absolute paths, and Node builtins - which exist with or without the
+        // `node:` prefix (`escalade` imports from "fs" and "path" and resolves everywhere). Also skip
+        // other runtime schemes: `camoufox-js` imports `bun:sqlite` as an alternative-runtime path,
+        // Electron never loads it, and no package can ship a `bun:` module, so it is not a packaging
+        // question.
         if (
           specifier.startsWith('.') ||
           specifier.startsWith('/') ||
-          specifier.startsWith('node:')
+          specifier.startsWith('node:') ||
+          specifier.includes(':') ||
+          BARE_NODE_BUILTINS.has(specifier)
         ) {
           continue
         }
