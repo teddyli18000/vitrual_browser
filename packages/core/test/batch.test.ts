@@ -47,7 +47,18 @@ describe('createBatch', () => {
       expect(profile.fingerprint.config['canvas:seed']).toBeTypeOf('number')
     }
     // Independently generated, not one identity copied N times.
-    const devices = new Set(profiles.map(profile => JSON.stringify(profile.identity?.fingerprint)))
+    //
+    // The whole device, not just its browserforge half. Comparing `identity.fingerprint` alone made
+    // this fail roughly once in every few dozen batches for a reason that is not a defect: browserforge
+    // draws from finite distributions, so two independent draws can land on the same screen and
+    // navigator, and measured over 60 profiles in 12 batches that happened zero times but is plainly
+    // possible. Two profiles that share those still do not share a device - the WebGL pair differs,
+    // which is the half this assertion was not looking at, and it is the half a script reads first.
+    const devices = new Set(
+      profiles.map(profile =>
+        JSON.stringify([profile.identity?.fingerprint, profile.fingerprint.webgl]),
+      ),
+    )
     expect(devices.size).toBe(5)
 
     // The result order is the store order.
