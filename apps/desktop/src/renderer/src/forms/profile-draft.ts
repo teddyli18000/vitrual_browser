@@ -111,7 +111,9 @@ export function emptyDraft(): ProfileDraft {
     userAgentAuto: true,
     userAgent: '',
     geoip: true,
-    humanize: false,
+    // On by default, matching `FingerprintSchema`. The form always sends an explicit value, so this
+    // — not the schema default — is what a profile created in the GUI actually gets.
+    humanize: true,
     proxyEnabled: false,
     proxy: { ...DEFAULT_PROXY },
     blockImages: false,

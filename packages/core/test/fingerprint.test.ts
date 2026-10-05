@@ -55,7 +55,9 @@ describe('toEngineOptions', () => {
       fonts: undefined,
       locale: undefined,
       geoip: true,
-      humanize: false,
+      // `base` is `FingerprintSchema.parse({})`, so this is the *default* the engine is handed;
+      // `humanize` defaults to true (see the humanize-default test in packages/shared).
+      humanize: true,
       block_images: false,
       block_webrtc: false,
       block_webgl: false,

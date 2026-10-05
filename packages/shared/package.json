@@ -17,8 +17,9 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run --passWithNoTests",
-    "lint": "biome check src"
+    "//test": "`tsc -b` first so the .mjs tests read a fresh dist; the launcher answers the sandbox's `net use` probe and uses --pool=threads. Same recipe as packages/{server,cli,sync}.",
+    "test": "tsc -b && node test/run-vitest.mjs run --passWithNoTests --pool=threads",
+    "lint": "biome check src test"
   },
   "dependencies": {
     "zod": "^4.1.13"
