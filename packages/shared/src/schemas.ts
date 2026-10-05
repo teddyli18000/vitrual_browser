@@ -302,6 +302,65 @@ export const TileRequestSchema = z.object({
 })
 export type TileRequest = z.infer<typeof TileRequestSchema>
 
+/* ---------------------------------------------------------------------- addons */
+
+/**
+ * Per-profile browser addons.
+ *
+ * The engine's unit is an **extracted addon directory**, not an `.xpi`. `camoufox-js` requires every
+ * path passed as `addons` to be an existing directory containing `manifest.json` (`dist/addons.js`
+ * `confirmPaths` throws `InvalidAddonPath` otherwise), and the engine's own `properties.json`
+ * declares `addons` as an accepted config key. VFox therefore extracts an `.xpi`/`.zip` at install
+ * time, stores the extracted tree, and hands the launcher absolute paths.
+ */
+
+/**
+ * One addon a profile will load, as it exists on disk.
+ *
+ * Every field except `source` is read from the addon's own `manifest.json`, so the record cannot
+ * drift from what the engine will actually load, and an addon directory copied in by hand still
+ * lists correctly.
+ */
+export const ProfileAddonSchema = z.object({
+  /** Directory name inside the profile's addon store, derived from the gecko id so it is stable. */
+  slug: z.string().min(1),
+  /** Gecko id from the manifest, when it has one. This is what Firefox keys the addon on. */
+  id: z.string().min(1).nullable().default(null),
+  name: z.string().min(1),
+  version: z.string().min(1),
+  /**
+   * `vfox` — installed into this profile by the user.
+   * `engine` — supplied by the engine itself (the bundled uBlock Origin). Read-only in v1: it is
+   * loaded because the engine's launcher adds it, and excluding it needs per-profile state that
+   * does not exist yet.
+   */
+  source: z.enum(['vfox', 'engine']).default('vfox'),
+  /** Files and bytes on disk, so the UI can show what a profile carries. */
+  files: z.number().int().nonnegative(),
+  bytes: z.number().int().nonnegative(),
+  installedAt: z.string(),
+})
+export type ProfileAddon = z.infer<typeof ProfileAddonSchema>
+
+/**
+ * Caps applied while unpacking an `.xpi`. They are guards against a pathological archive, not a
+ * judgement about the addon: a real addon is a few hundred files and a few MB.
+ */
+export const MAX_ADDON_FILES = 20_000
+export const MAX_ADDON_BYTES = 512 * 1024 * 1024
+
+export const AddonInstallRequestSchema = z.object({
+  /**
+   * Path to an extracted addon directory (containing `manifest.json`), or to an `.xpi`/`.zip` file
+   * that VFox extracts for you. Local by design: the API is loopback-only behind a token and the
+   * caller is on this machine.
+   */
+  path: z.string().min(1),
+  /** Replace an addon already installed under the same slug instead of refusing. */
+  replace: z.boolean().default(false),
+})
+export type AddonInstallRequest = z.infer<typeof AddonInstallRequestSchema>
+
 /* ------------------------------------------------------------------ api envelope */
 
 export const ApiErrorSchema = z.object({

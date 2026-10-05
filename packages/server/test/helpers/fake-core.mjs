@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { ProfileSchema } from '@vfox/shared'
+import { ProfileAddonSchema, ProfileSchema } from '@vfox/shared'
 
 export function createFakeCore(options) {
   const dataDir = options.dataDir
@@ -73,6 +73,35 @@ export function createFakeCore(options) {
       skipped: [],
       hasCookieStore: true,
     },
+    addonLists: [],
+    addonInstalls: [],
+    addonRemoves: [],
+    addonListError: undefined,
+    addonInstallError: undefined,
+    addonRemoveError: undefined,
+    /** One of each: an addon the user installed, and one the engine supplies read-only. */
+    addonRecords: [
+      {
+        slug: 'probe@vfox.test',
+        id: 'probe@vfox.test',
+        name: 'VFox probe',
+        version: '1.0.0',
+        source: 'vfox',
+        files: 2,
+        bytes: 128,
+        installedAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        slug: 'engine:UBO',
+        id: 'uBlock0@raymondhill.net',
+        name: 'uBlock Origin',
+        version: '1.60.0',
+        source: 'engine',
+        files: 900,
+        bytes: 4096,
+        installedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ],
 
     profiles: {
       list: async () => [...profilesById.values()],
@@ -265,6 +294,49 @@ export function createFakeCore(options) {
           removed: mode === 'replace' ? 7 : 0,
           skipped: [],
         }
+      },
+    },
+
+    /**
+     * Addons. The store itself — extraction, zip-slip refusal, the atomic swap — is `@vfox/core`'s
+     * business and is tested there. What the server tests need is a record of what the routes asked
+     * for, the shape the contract promises, and the ability to fail.
+     */
+    addons: {
+      list: async id => {
+        core.addonLists.push(id)
+        if (core.addonListError) throw core.addonListError
+        return core.addonRecords.map(record => ProfileAddonSchema.parse(record))
+      },
+
+      install: async (id, sourcePath, options) => {
+        core.addonInstalls.push({ id, sourcePath, replace: options?.replace ?? false })
+        if (core.addonInstallError) throw core.addonInstallError
+        return ProfileAddonSchema.parse({
+          slug: 'installed@vfox.test',
+          id: 'installed@vfox.test',
+          name: 'Installed addon',
+          version: '2.0.0',
+          source: 'vfox',
+          files: 3,
+          bytes: 256,
+          installedAt: now(),
+        })
+      },
+
+      remove: async (id, slugOrId) => {
+        core.addonRemoves.push({ id, slugOrId })
+        if (core.addonRemoveError) throw core.addonRemoveError
+        return ProfileAddonSchema.parse({
+          slug: 'probe@vfox.test',
+          id: 'probe@vfox.test',
+          name: 'VFox probe',
+          version: '1.0.0',
+          source: 'vfox',
+          files: 2,
+          bytes: 128,
+          installedAt: '2026-01-01T00:00:00.000Z',
+        })
       },
     },
 

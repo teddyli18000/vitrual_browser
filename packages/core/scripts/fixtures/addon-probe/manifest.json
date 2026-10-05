@@ -1,0 +1,19 @@
+{
+  "manifest_version": 2,
+  "name": "VFox addon probe",
+  "version": "1.0.0",
+  "description": "Test fixture: proves that an addon VFox installed for a profile is really loaded by the engine.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "vfox-addon-probe@vfox.local"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*"],
+      "js": ["probe.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

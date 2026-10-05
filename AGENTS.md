@@ -115,6 +115,26 @@ rule, a trap, or neither? If neither, it does not go here.
   `camoufoxModule()`, which already handles the `app.asar.unpacked` redirect.
 - **The smoke script imports `packages/core/dist`**, so `pnpm --filter @vfox/core build` must run first;
   it exits 2 with a `build-missing` stage rather than an ENOENT.
+- **An addon's unit is an extracted directory, never an `.xpi`.** `camoufox-js` requires every path in
+  `addons` to be an existing directory containing `manifest.json` (`dist/addons.js` `confirmPaths`
+  otherwise throws `InvalidAddonPath`), and `addons` is a key the engine's own `properties.json`
+  declares. Extract an `.xpi` at install time (adm-zip is already a dependency); store the directory.
+- **`addons` is an *input* to camoufox-js, not a return value.** It assigns `config.addons` itself
+  (`dist/utils.js:384-390`), so writing `options.addons` after `launchOptions()` returns reaches nothing
+  — the addon never gets into `CAMOU_CONFIG` and only the engine's own default loads; the raw `config`
+  escape hatch is overwritten too. It also **pushes the default addons into the array it was given**, so
+  every launch and every retry needs a fresh array or the defaults accumulate. Assert on the `addons`
+  inside `CAMOU_CONFIG`, never on the option object.
+- **Addon paths must be absolute.** A relative path produces no error at all: the browser starts and the
+  addon simply never loads (camoufox#399).
+- **Addons live in the profile's own directory** (`<userdata>/vfox-addons/<slug>/`), so they exist for
+  that profile's launches, are invisible to other profiles, and travel with `clone` / `export` /
+  `import`. Do **not** put them in `<userdata>/extensions/`: that is Firefox's own sideload directory,
+  where one gecko id would be loaded twice — once by the engine's `addons` option and once by Firefox's
+  XPIProvider.
+- **A profile zip is executable content.** Addons sit inside the profile directory, so importing someone
+  else's profile imports their extensions and the engine loads them. That is a consequence of the
+  layout, written down here so nobody has to learn it from an incident.
 
 ### Sandbox
 
@@ -129,6 +149,19 @@ rule, a trap, or neither? If neither, it does not go here.
   `--pool=threads` on the command line (no config file), and tests written as `.mjs` importing the built
   `dist/`. See `packages/server/test/{run-vitest.mjs,sandbox-preload.mjs}`. Otherwise fall back to `tsc` +
   `biome` + a throwaway harness over `dist`.
+- **The engine never finishes starting here.** Spawning `camoufox.exe` directly (`stdio: 'ignore'` does
+  start the process) leaves a fresh `-profile` directory **empty** after 22 s: no `prefs.js`, no
+  `extensions.json`, while the process stays alive (~2 s CPU, 39 threads), stderr is clean and `MOZ_LOG`
+  writes not one byte. Every variant behaves the same — `-headless`, no flags, `-foreground`,
+  `-wait-for-browser`, and CI's argv minus `-juggler-pipe` — as does pointing `APPDATA`/`LOCALAPPDATA`
+  into the workspace and disabling the crash reporter and the three subprocess sandboxes. **Anything that
+  needs a real launch can only be concluded in CI**; locally only on-disk state and the option object are
+  provable.
+- **A test that reads the machine is a coin flip.** The CLI suite passed locally and failed in CI because
+  `vfox addons list` includes the engine's read-only default when an engine is installed and prints
+  `(none)` when none is: same code, two environments, two outputs. Pin `CAMOUFOX_INSTALL_DIR` at an empty
+  directory (or a fixture engine directory) inside the case, and assert the empty state *and* the table
+  shape in cases the test creates itself.
 
 ### Packaging and release
 
