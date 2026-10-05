@@ -249,6 +249,25 @@ try {
   )
   console.log(`  renderer shows : ${afterLaunch.status} (${await domStatusText(row)})`)
 
+  /*
+   * The same check the stop step does, and for the same reason: the wait above compares against a
+   * snapshot taken *before* it, so a row that reached the right status and then stopped receiving
+   * pushes would pass it. Re-read the server and require the row to still agree with its **current**
+   * answer.
+   *
+   * A bounded re-wait rather than a bare comparison, because the server can legitimately move between
+   * the two reads (`starting` is transient) and a renderer is allowed a few hundred milliseconds to
+   * follow a push. A dead stream still fails, because nothing ever arrives.
+   */
+  const settled = await api(API_ROUTES.runtimeFor(fromServer.id))
+  await waitForRowStatus(
+    row,
+    settled.status,
+    `the row to still agree with the server's "${settled.status}" after the launch settled`,
+    fromServer.id,
+    10_000,
+  )
+
   /* 3 — stop */
   step('stop it')
   const stopButton = row.getByRole('button', { name: '停止', exact: true })

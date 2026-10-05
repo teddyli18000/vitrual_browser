@@ -1,18 +1,18 @@
 /**
- * Proves the flow test's agreement assertion can fail, without a browser.
+ * Pins the behaviour of the status wait the flow test is built from, without a browser.
  *
- * `AGENTS.md` is explicit: a test that has never failed has not been shown to test anything. The
- * flow harness cannot run on the sandboxed development machine — Chromium needs piped stdio for
- * `--remote-debugging-pipe`, which the file sandbox denies — so its red run can only happen in CI.
- * That leaves a gap: nothing local would notice if the assertion were quietly reduced to "wait for
- * some status", which is exactly the shape that passes while the wiring is broken.
+ * **Read the scope before the results.** `waitForAgreement` resolves as soon as the renderer reaches
+ * `expected`; it does not compare the two sides. So the cases below assert what it *does* — it
+ * resolves on the expected status, and it fails, naming both sides, when the status never arrives.
+ * The case that shows the boundary is `dom reaches expected while the server disagrees`, which
+ * resolves **successfully**: that is the function's scope, and agreement is asserted by the
+ * *composite* in `flow-ui.mjs` (read the server → wait for the row to reach it → re-read and require
+ * it to still agree). See the header of `flow-assert.mjs`.
  *
- * This drives `waitForAgreement` from `flow-assert.mjs` with fake readers and asserts that it
- * **fails** on the two conditions the harness exists to catch, and passes on the healthy one:
- *
- *   1. dead SSE        — the row stays on `已停止` while the server has moved to `异常`
- *   2. optimistic paint — the row shows `运行中`, a state the server never reported
- *   3. healthy         — the row shows exactly what the server reports
+ * Why this file exists at all: no browser can run on the sandboxed development machine — Chromium's
+ * Mojo platform channel is a named pipe and the file sandbox denies those — so the flow harness's red
+ * run can only happen in CI. That would leave nothing local to notice if the wait were quietly
+ * reduced to something that passes while the wiring is broken.
  *
  * Runs in a few hundred milliseconds and needs no browser, no renderer build and no server.
  *
@@ -32,6 +32,8 @@ const cases = [
     shouldFail: false,
   },
   {
+    // The composite's step 1 catches this: the flow reads the server, sees `error`, and waits for the
+    // row to reach it. Here the row never does, so the wait times out and names both sides.
     name: 'dead SSE: the row is stuck on 已停止 while the server moved on',
     expected: 'error',
     dom: () => ({ status: 'stopped', text: '已停止' }),
@@ -40,6 +42,10 @@ const cases = [
     mustMention: ['renderer shows : stopped', 'server says    : error', 'they disagree'],
   },
   {
+    // A timeout too, and worth being precise about: this fails only because `expected` is `error`,
+    // which an optimistically-painted `running` row can never reach. It is NOT this function
+    // detecting disagreement — the boundary case at the end of this list is the honest statement of
+    // what the function does, and the composite is what makes the paint impossible to miss.
     name: 'optimistic paint: the row shows 运行中, which the server never reported',
     expected: 'error',
     dom: () => ({ status: 'running', text: '运行中' }),
@@ -73,6 +79,26 @@ const cases = [
     shouldFail: true,
     mustMention: ['renderer shows : stopped', 'server says    : unreadable (connection refused)'],
   },
+  {
+    // THE BOUNDARY, asserted rather than claimed — and it is the only case here whose expectation is
+    // "resolves".
+    //
+    // The row satisfies `expected` while the server says something else entirely, and the wait
+    // resolves successfully, because comparing the two sides is not its job. `readServer` is not
+    // consulted at all on this path.
+    //
+    // If someone later makes the function check agreement here, this case goes red and tells them the
+    // property lives in the composite: `flow-ui.mjs` reads the server and passes its status as
+    // `expected`, so a row painting `运行中` on its own can never reach a server reporting `异常`; and
+    // each step re-reads the server after the wait, so a row that stops receiving pushes is caught
+    // too. Do not "fix" this by loosening the expectation — move the property, or leave it where it
+    // is and keep this case as the record of the boundary.
+    name: 'boundary: the row reaches expected while the server disagrees — the wait still resolves',
+    expected: 'running',
+    dom: () => ({ status: 'running', text: '运行中' }),
+    server: () => ({ status: 'stopped', lastError: null }),
+    shouldFail: false,
+  },
 ]
 
 let failures = 0
@@ -82,7 +108,9 @@ for (const testCase of cases) {
   try {
     await waitForAgreement({
       expected: testCase.expected,
-      what: 'the row to agree with the server',
+      // Deliberately not "the row to agree with the server": reaching the status is what this waits
+      // for, and the message should not describe a condition the function does not test.
+      what: 'the row to reach the expected status',
       timeoutMs: TIMEOUT_MS,
       pollMs: 50,
       readDom: async () => testCase.dom(),
@@ -123,8 +151,11 @@ if (failures > 0) {
 }
 
 const wrongWays = cases.filter(testCase => testCase.shouldFail).length
-const healthyWays = cases.length - wrongWays
+const resolves = cases.length - wrongWays
 
+// Deliberately NOT "the assertion resolves on agreement": it does not, and saying so was the
+// overclaim this file now documents. Agreement is the composite's property (see flow-assert.mjs).
 console.log(
-  `OK — the assertion resolves on agreement (${healthyWays} case(s)) and fails, naming both sides, on all ${wrongWays} ways the wiring can be wrong.`,
+  `OK — the status wait resolves on the expected status (${resolves} case(s), including the boundary where the server disagrees) ` +
+    `and fails, naming both sides, on all ${wrongWays} ways the status can fail to arrive.`,
 )

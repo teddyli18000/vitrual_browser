@@ -1,16 +1,30 @@
 /**
- * The agreement assertion the flow test rests on, with its readers injected.
+ * The status wait the flow test is built from, with its readers injected.
  *
- * The whole point of `flow-ui.mjs` is that the **server** is the authority: a row that shows a status
- * the server does not have is a renderer that invented it, and a row still showing `已停止` while the
- * server has moved on is a dead SSE stream. Both are invisible to a screenshot and to the server
- * suite, and both must fail loudly with the two values named.
+ * **WHAT THIS FUNCTION ACTUALLY DOES — read this before trusting its name.** It resolves as soon as
+ * `readDom()` satisfies `expected`. It does **not** compare the two sides: `readServer` is called
+ * only on the timeout path, to build a failure message that names both. So it detects *"the renderer
+ * never reached X"*. It does **not** detect *"the renderer reached X while the server says Y"*.
  *
- * This lives in its own module, taking `readDom`/`readServer` as arguments rather than a Playwright
- * locator, for one reason: **the browser cannot run on the sandboxed development machine** (Chromium
- * needs piped stdio for `--remote-debugging-pipe`, which the file sandbox denies). With the readers
- * injected, the discrimination can be exercised from Node against fakes — so the assertion is shown
- * failing on exactly the conditions it exists to catch, instead of being trusted until CI.
+ * Agreement is a property of the **composite** in `flow-ui.mjs`, which is the point of the flow test:
+ *
+ *   1. read the server, then wait for the row to reach *that* status (`expected = server.status`);
+ *   2. wait for the row to leave `已停止` (`expected = status => status !== 'stopped'`);
+ *   3. after the wait, re-read the server and require the row to still agree.
+ *
+ * Step 1 is what catches an optimistic paint: a row that paints `运行中` on its own can never reach a
+ * server that reports `异常`. Step 3 is what catches a row that reached the right status and then
+ * stopped receiving pushes. Neither is this function's job.
+ *
+ * Making this function verify agreement itself was considered and rejected: a renderer legitimately
+ * lags a push by a few hundred milliseconds, so it would need a tolerance, and a flaky tolerance is
+ * worse than an accurate name. The name and this comment are the fix — `check-flow-assert.mjs`
+ * asserts the boundary so it cannot drift back into a claim.
+ *
+ * It lives in its own module, taking `readDom`/`readServer` as arguments rather than a Playwright
+ * locator, because **no browser can run on the sandboxed development machine**: Chromium's Mojo
+ * platform channel is a named pipe, and the file sandbox denies those. With the readers injected the
+ * behaviour can be exercised from Node against fakes, instead of being trusted until CI.
  */
 
 /**
