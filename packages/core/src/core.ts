@@ -99,7 +99,12 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
           `regenerating the device identity of profile ${id} against the new engine`,
       )
     }
-    const created = await createIdentity(profile.fingerprint, engine, await takenWebglPairs())
+    const created = await createIdentity(
+      profile.fingerprint,
+      engine,
+      await takenWebglPairs(),
+      options.workArea,
+    )
     logger.info(`profile ${id}: generated a device identity (engine ${engine ?? 'unknown'})`)
     return store.applyIdentity(id, created.identity, {
       config: created.config,
@@ -113,7 +118,12 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     async create(input) {
       const profile = await store.createProfile(input)
       const engine = (await kernelManager.info()).version
-      const created = await createIdentity(profile.fingerprint, engine, await takenWebglPairs())
+      const created = await createIdentity(
+        profile.fingerprint,
+        engine,
+        await takenWebglPairs(),
+        options.workArea,
+      )
       logger.info(`profile ${profile.id}: created with a generated device identity`)
       return store.applyIdentity(profile.id, created.identity, {
         config: created.config,
@@ -133,7 +143,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
       const taken = await takenWebglPairs()
       const entries: BatchEntry[] = []
       for (let index = 0; index < batch.count; index += 1) {
-        const created = await createIdentity(fingerprint, engine, taken)
+        const created = await createIdentity(fingerprint, engine, taken, options.workArea)
         if (created.webgl) {
           taken.add(webglPairKey(created.webgl))
         }

@@ -66,8 +66,6 @@ const MIN_WIDTH = 800
 const MIN_HEIGHT = 600
 const WINDOW_WAIT_MS = 30_000
 /** The chrome between `outer*` and `inner*`: 0–120 px wide, 0–200 px tall is a normal browser. */
-const CHROME_MAX_WIDTH = 120
-const CHROME_MAX_HEIGHT = 200
 
 class WindowFailure extends Error {
   constructor(stage, reason, exitCode, hint, details) {
@@ -108,8 +106,100 @@ function refuse(stage, reason, exitCode, hint) {
 
 /* ------------------------------------------------------------------------------- arguments */
 
+import { checkViewportAgainstOs } from './lib/window-geometry.mjs'
+
+/* ------------------------------------------------------------------------------- fixtures */
+
+/**
+ * Fixtures for the geometry checks, so that "this assertion can fail" is one command rather than a
+ * claim that only CI can settle. The live path refuses headless by design and the development sandbox
+ * cannot spawn a browser, so without these the red run is unverifiable locally.
+ *
+ * A fixture shows only that an assertion is wired to the operands it names. It is not evidence about
+ * the engine — the headings below name which real run each set of numbers came from.
+ */
+const FIXTURES = {
+  /**
+   * The TARGET geometry for a 1024x720 work area, carrying the chrome measured in CI run
+   * 37266596880 (16x65). The CHROME is a measurement; the window is what the sizing policy produces
+   * for that work area - which is why this fixture passes by construction: it cannot fail while its
+   * operands are self-consistent, and it therefore carries no evidence. An earlier version of this
+   * comment claimed the window was that run's own, and that run's window was 1786x1311, which is the
+   * neighbouring fixture. The evidence in this file is `window-larger-than-screen`, `zero-viewport`
+   * and the unit test's REAL case, not this one.
+   */
+  good: {
+    os: { width: 1000, height: 640 },
+    inner: { width: 984, height: 575 },
+    devicePixelRatio: 1,
+    workArea: { width: 1024, height: 720 },
+  },
+  /** The same run's actual window: larger than the work area, which is what the owner calls 满屏. */
+  'window-larger-than-screen': {
+    os: { width: 1786, height: 1311 },
+    inner: { width: 1770, height: 1246 },
+    devicePixelRatio: 1,
+    workArea: { width: 1024, height: 720 },
+  },
+  /** The defect the viewport guard exists for: a page that reports nothing. */
+  'zero-viewport': {
+    os: { width: 1786, height: 1311 },
+    inner: { width: 0, height: 0 },
+    devicePixelRatio: 1,
+    workArea: { width: 1920, height: 1040 },
+  },
+}
+
+/** Run the pure geometry checks against a fixture: exit 0 when they pass, 1 when one fails. */
+function runFixture(name) {
+  const fixture = FIXTURES[name]
+  if (!fixture) {
+    refuse(
+      'arguments',
+      `unknown fixture "${name}"`,
+      2,
+      `use --fixture <${Object.keys(FIXTURES).join('|')}>`,
+    )
+  }
+  const viewport = checkViewportAgainstOs({
+    osRect: fixture.os,
+    innerWidth: fixture.inner.width,
+    innerHeight: fixture.inner.height,
+    devicePixelRatio: fixture.devicePixelRatio,
+  })
+  const sizeFailures = []
+  if (fixture.os.width < MIN_WIDTH || fixture.os.height < MIN_HEIGHT) {
+    sizeFailures.push(
+      `the window is ${fixture.os.width}x${fixture.os.height}, below ${MIN_WIDTH}x${MIN_HEIGHT}`,
+    )
+  }
+  if (
+    fixture.os.width > fixture.workArea.width + WORK_AREA_TOLERANCE ||
+    fixture.os.height > fixture.workArea.height + WORK_AREA_TOLERANCE
+  ) {
+    sizeFailures.push(
+      `the window is ${fixture.os.width}x${fixture.os.height}, larger than the ` +
+        `${fixture.workArea.width}x${fixture.workArea.height} work area`,
+    )
+  }
+  const ok = viewport.ok && sizeFailures.length === 0
+  console.log(
+    `VFOX_WINDOW_FIXTURE ${JSON.stringify({
+      fixture: name,
+      ok,
+      viewport: { ok: viewport.ok, chrome: viewport.chrome, failures: viewport.failures },
+      size: { ok: sizeFailures.length === 0, failures: sizeFailures },
+    })}`,
+  )
+  process.exit(ok ? 0 : 1)
+}
 const argv = process.argv.slice(2)
 let screenshotPath = null
+// --without-work-area creates the verified profile the way the CLI and the server do — with no work
+// area — so the window is sized from the claimed display and the size assertion below can be seen
+// failing on a REAL window, not only in a fixture. It is the live-path counterfactual.
+let withoutWorkArea = false
+let fixtureName = null
 for (let index = 0; index < argv.length; index += 1) {
   const argument = argv[index]
   if (argument === '--screenshot') {
@@ -118,9 +208,26 @@ for (let index = 0; index < argv.length; index += 1) {
     if (!screenshotPath) {
       refuse('arguments', '--screenshot needs a path', 2, 'use --screenshot <path.png>')
     }
+  } else if (argument === '--fixture') {
+    fixtureName = argv[index + 1] ?? null
+    index += 1
+    if (!fixtureName) {
+      refuse(
+        'arguments',
+        '--fixture needs a name',
+        2,
+        'use --fixture <good|window-larger-than-screen|zero-viewport>',
+      )
+    }
+  } else if (argument === '--without-work-area') {
+    withoutWorkArea = true
   } else {
     refuse('arguments', `unknown argument "${argument}"`, 2, 'usage: [--screenshot <path.png>]')
   }
+}
+
+if (fixtureName) {
+  runFixture(fixtureName)
 }
 
 /* ------------------------------------------------------------------ headless must be refused */
@@ -285,7 +392,16 @@ try {
     )
   }
 
-  core = await createCore({ dataDir, kernelDir: process.env.CAMOUFOX_INSTALL_DIR })
+  // Read before the core exists: the identity is created when the profile is, and the profile is
+  // sized from this work area. Without it the window is sized from the display the fingerprint
+  // merely claims, which is how a 1616x916 window ended up on a 1600x900 desktop.
+  const api = await loadUser32()
+  const workArea = api.workArea()
+  core = await createCore({
+    dataDir,
+    kernelDir: process.env.CAMOUFOX_INSTALL_DIR,
+    ...(withoutWorkArea ? {} : { workArea: workArea ?? undefined }),
+  })
 
   const kernel = await core.kernel.info()
   if (!kernel.installed) {
@@ -337,8 +453,6 @@ try {
     )
   }
 
-  const api = await loadUser32()
-  const workArea = api.workArea()
   report.workArea = workArea
   if (!workArea) {
     fail('window', 'could not read the desktop work area (SPI_GETWORKAREA failed)', 2)
@@ -394,20 +508,16 @@ try {
     width > workArea.width + WORK_AREA_TOLERANCE ||
     height > workArea.height + WORK_AREA_TOLERANCE
   ) {
-    report.findings ??= {}
-    report.findings.overflowsWorkArea = {
-      window: { width, height },
-      workArea: { width: workArea.width, height: workArea.height },
-      overshoot: { width: width - workArea.width, height: height - workArea.height },
-      matchedBy: lookup.matchedBy,
-    }
-    log(
-      `FINDING: the engine window (${width}x${height}) is larger than the ` +
-        `${workArea.width}x${workArea.height} work area. The engine sizes the real window to the ` +
-        "profile's spoofed screen, so this is expected on a small runner desktop — but it also " +
-        "means a profile whose generated screen exceeds the user's real display opens a window " +
-        'that runs off the screen. Reported, not failed; the geometry checks below decide whether ' +
-        'the spoof is coherent.',
+    // An assertion, not a finding: the identity is now sized from the REAL work area when the
+    // caller has one, so a window larger than it means the sizing is broken rather than the input
+    // missing. A profile created without a work area (CLI, server) can fail here, and that is the
+    // correct reading — the input was missing. `--without-work-area` reproduces it on a real window.
+    fail(
+      'size',
+      `the engine window is ${width}x${height}, larger than the ${workArea.width}x${workArea.height} ` +
+        `work area (tolerance ${WORK_AREA_TOLERANCE}px, matched by ${lookup.matchedBy})`,
+      1,
+      'a profile window must fit the display it opens on — the owner sees this as 满屏',
     )
   }
   report.checks.size = { ok: true, width, height }
@@ -521,20 +631,25 @@ try {
     )
   }
 
-  // (b) chrome thickness: this is the derived value a detector reads.
-  if (
-    chrome.width < 0 ||
-    chrome.height < 0 ||
-    chrome.width > CHROME_MAX_WIDTH ||
-    chrome.height > CHROME_MAX_HEIGHT
-  ) {
+  // (b) the viewport, measured against the OS rectangle rather than against our own numbers.
+  //
+  // There used to be a check here comparing `outerWidth - innerWidth` against a 120px band. It was
+  // self-referential — both operands came from the page — and tighter than the OS-anchored band, so it
+  // could fail a profile whose spoofed outer size is simply smaller than the real window. Comparing our
+  // number to our number cannot catch a wrong allowance, which is the only failure this block exists
+  // for, so it is gone; the check below anchors on the one source that cannot move with our values.
+  const viewport = checkViewportAgainstOs({
+    osRect: { width, height },
+    innerWidth: view.innerWidth,
+    innerHeight: view.innerHeight,
+    devicePixelRatio: view.devicePixelRatio,
+  })
+  if (!viewport.ok) {
     fail(
       'geometry',
-      `implausible browser chrome: outer-inner is ${chrome.width}x${chrome.height}, expected ` +
-        `0–${CHROME_MAX_WIDTH} wide and 0–${CHROME_MAX_HEIGHT} tall ` +
-        `(outer ${view.outerWidth}x${view.outerHeight} vs inner ${view.innerWidth}x${view.innerHeight})`,
+      `the page viewport disagrees with the real window: ${viewport.failures.join('; ')}`,
       1,
-      'the spoofed window size and the real window disagree — a detector can see this',
+      'the reported viewport does not match the window the OS gave us — a detector can see this',
     )
   }
 

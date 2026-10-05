@@ -67,12 +67,90 @@ export function identityInputs(fingerprint: FingerprintConfig): string {
   })
 }
 
+const COMFORT = { widthFraction: 0.62, heightFraction: 0.7, maxFraction: 0.9 } as const
+
+export interface WindowBox {
+  width: number
+  height: number
+  x: number
+  y: number
+}
+
+/**
+ * The floor is in pixels, but never larger than the work area, so a small screen still gets a usable
+ * window rather than something absurd. The ceiling is a *fraction* of the work area, not a pixel count:
+ * an absolute cap makes a window look small on a high-resolution display — 1600px is 42% of a 3840px
+ * desktop — which is the mistake this rule exists to avoid. A proportion feels the same everywhere.
+ */
+const WINDOW_FLOOR = { width: 1000, height: 640 } as const
+
+export function comfortableWindow(workArea: { width: number; height: number }): WindowBox {
+  const width = clampTo(
+    Math.round(workArea.width * COMFORT.widthFraction),
+    Math.min(WINDOW_FLOOR.width, workArea.width),
+    Math.round(workArea.width * COMFORT.maxFraction),
+  )
+  const height = clampTo(
+    Math.round(workArea.height * COMFORT.heightFraction),
+    Math.min(WINDOW_FLOOR.height, workArea.height),
+    Math.round(workArea.height * COMFORT.maxFraction),
+  )
+  return {
+    width,
+    height,
+    x: Math.max(Math.round((workArea.width - width) / 2), 0),
+    y: Math.max(Math.round((workArea.height - height) / 2), 0),
+  }
+}
+
+/** `Math.min(Math.max(...))`, named so the operands read as target, floor and ceiling. */
+function clampTo(target: number, floor: number, ceiling: number): number {
+  return Math.max(Math.min(target, ceiling), floor)
+}
+/**
+ * Pin a fingerprint's window to a comfortable box inside the screen it already claims.
+ *
+ * When the caller cannot see the real display — the CLI and the server cannot — the window is sized
+ * from the display this fingerprint claims, and may therefore exceed a smaller real screen. That is
+ * what `verify-window.mjs`'s size assertion reports: the input was missing, not the sizing wrong.
+ *
+ * Only the outer size and the position are touched. `innerWidth`/`innerHeight` are deliberately left
+ * as browserforge produced them - 0, which `_castToProperties` drops, so the browser reports its own
+ * true viewport rather than a value derived from a chrome allowance. `availWidth`/`availHeight` are
+ * raised to fit the window, so a profile never claims a window larger than its own available area.
+ */
+function applyComfortableWindow(
+  screen: Record<string, unknown> | undefined,
+  /** The real work area when the caller knows it; the claimed display otherwise. */
+  workArea?: { width: number; height: number },
+): void {
+  if (!screen) {
+    return
+  }
+  const width = Number(screen.width)
+  const height = Number(screen.height)
+  if (!(width > 0) || !(height > 0)) {
+    return
+  }
+  const box = comfortableWindow(workArea ?? { width, height })
+  screen.outerWidth = box.width
+  screen.outerHeight = box.height
+  screen.screenX = box.x
+  screen.screenY = box.y
+  screen.availWidth = Math.max(Number(screen.availWidth) || 0, box.width)
+  screen.availHeight = Math.max(Number(screen.availHeight) || 0, box.height)
+  // Invariant, not adjustment: the box is already inside the display, and this makes that structural.
+  screen.width = Math.max(width, box.width)
+  screen.height = Math.max(height, box.height)
+}
 /** Generate a profile's device identity. Pure computation — no browser and no engine needed. */
 export async function createIdentity(
   fingerprint: FingerprintConfig,
   engine: string | null,
   /** WebGL pairs other profiles already report, so a new profile does not repeat one. */
   takenWebgl: ReadonlySet<string> = new Set(),
+  /** The real work area, when the caller knows it. See `CoreOptions.workArea`. */
+  workArea?: { width: number; height: number },
 ): Promise<CreatedIdentity> {
   const { fromBrowserforge, generateFingerprint } = await import(
     camoufoxModule('dist/fingerprints.js')
@@ -88,6 +166,33 @@ export async function createIdentity(
     },
   )
 
+  // The viewport in this fingerprint is `0`, and that is correct and harmless — do not "repair" it.
+  //
+  // `innerWidth: "window.innerWidth"` in the mapping table is never reached for a falsy value:
+  // `_castToProperties` skips them (`if (!data) continue`, dist/fingerprints.js:13), so the key is
+  // absent from CAMOU_CONFIG, `properties.json` has no default for it, and the engine overrides
+  // nothing. Firefox reports its own true viewport — measured on the CI runner at 1770x1246 inside a
+  // 1786x1311 window. Writing a non-zero value here would START it being mapped, replacing that
+  // measured viewport with a guess derived from a chrome allowance that is not exactly right.
+  //
+  // If a geometry value ever does need correcting, correct it at launch, on a clone of the stored
+  // fingerprint, and never by re-rolling the identity — a re-roll costs the user the device they have
+  // been presenting, which is the one thing pinning exists to prevent.
+
+  // The window a profile opens must fit the display it claims, and must not be the whole of it.
+  //
+  // Until now nothing consulted the display: browserforge drew a screen and an outer size
+  // independently, which is how the CI runner ended up with a 1786x1311 window inside a 1024x720
+  // work area - what Windows presents as full-screen, and a fingerprint tell on its own, since no
+  // real user has a window larger than their screen. The engine sizes the real window to these values
+  // (measured: os 1786x1311 == outer 1786x1311), so pinning a comfortable box here is what makes the
+  // reported geometry equal to the window a person sees.
+  //
+  // The display it consults is the one the profile claims: `screen.width/height` is the draw the rest
+  // of the fingerprint already describes, so the window can never exceed the screen it reports.
+  // Sizing against the machine's REAL work area would be better still and is not possible from here -
+  // see the note in the PR; it needs a caller that can see the display.
+  applyComfortableWindow(generated.screen, workArea)
   // `fromBrowserforge()` is where the last per-launch random lives: `handleScreenXY` picks
   // `window.screenY` with `randrange` whenever the fingerprint's screenX is far from zero
   // (dist/fingerprints.js:31-54). Running the mapper once and pinning what it produced keeps the

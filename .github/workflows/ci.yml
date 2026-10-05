@@ -53,11 +53,18 @@ jobs:
 
       # Instant, static, and needs no build: it catches a broken Element Plus component
       # registration before any of the slow steps run.
-      - name: Check the UI component registration
+      #
+      # It runs the CHAIN (`apps/desktop` `check:ui`), not one script. This step used to invoke
+      # `check-ui-registration.mjs` directly, and that was the only UI guard CI ran — so
+      # `check-ui.mjs` (the silent-blank-UI classes) and `check-fingerprint-fields.mjs` (the only
+      # coverage of the GUI half of the `humanize` default) ran for nobody but a human. Naming the
+      # individual scripts here is what caused that, so `scripts/check-ui-chain.mjs` reads the chain
+      # out of `apps/desktop/package.json` instead and this step stays a single line.
+      - name: Check the UI guards
         uses: ./.github/actions/gated-script
         with:
           label: check-ui
-          script: apps/desktop/scripts/check-ui-registration.mjs
+          script: scripts/check-ui-chain.mjs
 
       # Builds packages/* and the desktop renderer BEFORE the tests. Several packages' `test`
       # scripts run `tsc -b` first, so without this a compile error in @vfox/core would be
