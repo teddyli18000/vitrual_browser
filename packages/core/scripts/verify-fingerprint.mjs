@@ -78,7 +78,6 @@ const SITE_TARGETS = [
     url: 'https://abrahamjuliot.github.io/creepjs/',
     kind: 'oracle',
     parse: 'creepjs',
-    waitMs: 25_000,
     scope: ['#lies', '.lies', '[class*="lie"]', '#fingerprint', 'main'],
     // WAIT FOR A PANEL, NOT FOR A DURATION. The live run proved the content is worker-driven: the
     // header (FP ID, fuzzy hash, `3008.00 ms`) is in the DOM while every analysis panel is absent and
