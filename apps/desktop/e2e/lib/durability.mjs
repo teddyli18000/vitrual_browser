@@ -159,7 +159,12 @@ export async function runDurabilityPhase({
   )
 
   const userdataDir = id => path.join(dataDir, 'profiles', id, 'userdata')
-  const endpointOf = launched => launched?.wsEndpoint ?? launched?.data?.wsEndpoint
+  // The API client returns `{ status, body }`, so the runtime lives at `body.data`. Reading the wrong
+  // level is what made the first real run report "no wsEndpoint" for a 200 response that contained one —
+  // the launch path was fine and this helper was not. The shallower shapes stay as fallbacks so a client
+  // that unwraps the envelope does not break it again.
+  const endpointOf = response =>
+    response?.body?.data?.wsEndpoint ?? response?.data?.wsEndpoint ?? response?.wsEndpoint
 
   /** Best-effort: the GitHub runner has no CIM, so "could not enumerate" is a note, never a pass. */
   const checkNoEngineProcesses = async label => {
