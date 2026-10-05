@@ -257,6 +257,35 @@ Teammates edit files and report; the Lead creates branches, pushes, opens PRs, a
 CI is green on the same commit. The Lead independently re-runs the relevant gate before merging
 rather than trusting a summary — a summary is a claim, and claims are what reviews are for.
 
+## Fingerprint spread is a property, not a threshold
+
+- **The engine's WebGL sampler is weighted by real-world GPU market share, and that is a defect in
+  this product even though it is correct as a simulation.** `camoufox-js/dist/webgl/sample.js` draws
+  with `Math.random()` over `data-files/webgl_data.db`, whose `win` / `mac` / `lin` columns are
+  **floats, not flags** — the engine's estimate of how common each GPU is. Measured over 2000 draws:
+  only **15 of the 32 pairs are ever produced**, the top three cover **81%**, and a single NVIDIA
+  GTX 980 row alone is **45%**, so three profiles collided **61.3%** of the time. Nearly half of a
+  user's profiles reported the identical GPU, which is a link between accounts rather than an
+  aesthetic overlap: the WebGL vendor and renderer are among the first values a fingerprinting script
+  reads.
+- **Do not fix that by flattening the weights.** The distribution of GPUs across real machines is
+  itself a fingerprint; a uniform one trades a link between two profiles for an implausible
+  population. `packages/core/src/identity.ts` draws from the engine's own table but only over the
+  pairs **no other profile holds yet**, so the weights are kept wherever they can be. `createBatch`
+  carries one set for the whole batch and adds to it as it goes — de-duplicating against the store
+  alone still lets the profiles of one batch collide with each other, which is the case a batch of
+  twenty actually hits.
+- **Re-drawing is not a fix.** With the popular pairs taken, what remains is rare, and a bounded
+  number of draws frequently fails to land on a survivor: that is how a ten-profile run still ended
+  with a repeat after the first attempt at this fix. Select from the table, do not re-roll.
+- **Assert it as a property.** The packaged suite used to require "at least 4 of 11 dimensions
+  differ", a threshold that passes by luck — and did, intermittently, on two runs of the same code
+  twenty minutes apart (six differing dimensions, then three). It now also asserts that **no two
+  profiles report the same WebGL vendor and renderer**, which is the property that matters.
+- **Reading the table from the app is fine**: `node:sqlite` with `readOnly: true`, through
+  `camoufoxModule()`, which already handles the `app.asar.unpacked` redirect. Only the *pair* has to
+  be chosen here; camoufox-js resolves `webgl_config` back to the row's full `data` fragment at
+  launch.
 ## License
 
 MIT for this repository's own code. Camoufox (MPL-2.0) and camoufox-js (MPL-2.0) are consumed as
@@ -264,7 +293,19 @@ external dependencies and are not modified; their binaries are downloaded at run
 
 ## Packaging gotchas (learned from the first two release runs)
 
-- **The repository root `package.json` must NOT declare `"type": "module"`.** electron-builder
+- **A build step belongs in `electron.vite.config.ts`, not in a package script.**
+  `scripts/build-installer.mjs` runs `electron-vite build` **directly** and never calls
+  `apps/desktop`'s `build` script, so anything chained onto that script (`cmd && node extra.mjs`)
+  silently does not run in CI or in a release. This shipped a real defect twice: the engine
+  extraction worker is started with `new Worker(new URL('./unzip-worker.js', import.meta.url))`,
+  which resolves next to the **bundled** main process (`out/main/index.cjs`) rather than inside
+  `packages/core`, so v0.3.0 failed every install with `Cannot find module
+  …\out\main\unzip-worker.js`. The first fix chained a copy onto the `build` script and changed
+  nothing; it is now a plugin in `electron.vite.config.ts`, which no path that produces a main
+  bundle can skip. **If a step must happen for the packaged app to work, put it in the build
+  config.**
+
+**The repository root `package.json` must NOT declare `"type": "module"`.** electron-builder
   extracts helper tools (e.g. `icons@1.1.0/icon-tool.js`) into `<repo>/.cache/electron-builder/`,
   which is *inside* the repo, so a root-level `"type": "module"` makes Node parse those CommonJS
   files as ESM and the packaging step dies with `ReferenceError: require is not defined in ES module
