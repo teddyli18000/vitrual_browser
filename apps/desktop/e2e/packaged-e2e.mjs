@@ -41,6 +41,7 @@ import {
   checkWebglDatabase,
   describeArtifact,
 } from './lib/artifact.mjs'
+import { runDurabilityPhase } from './lib/durability.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..', '..', '..')
@@ -684,6 +685,23 @@ executed.push(
 )
 
 // ------------------------------------------------------- 7. state survives, nothing left behind
+/* -- 6b. a profile keeps its state across a restart, and does not share it ---------------------- */
+
+step('6b. a profile keeps its cookies and localStorage across a stop and relaunch')
+await runDurabilityPhase({
+  api,
+  profiles,
+  dataDir,
+  connect: async wsEndpoint => {
+    const { firefox } = await import('playwright-core')
+    return firefox.connect(wsEndpoint)
+  },
+  user32,
+  step,
+  pass,
+  fail,
+  note,
+})
 step('7. stopping everything, and nothing is left behind')
 for (const profile of profiles) {
   await api(`/api/v1/profiles/${profile.id}/stop`, { method: 'POST', body: '{}' })
