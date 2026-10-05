@@ -125,23 +125,22 @@ describe('suppressUnknownKeys', () => {
 describe('withUnknownKeyTolerance', () => {
   it('retries with each rejected key suppressed and reports every one', async () => {
     const warn = vi.fn()
-    const attempts: string[] = []
+    let attempts = 0
     const result = await withUnknownKeyTolerance(async () => {
-      // A fresh object per attempt, exactly as the launcher does it: an earlier attempt has already
-      // had the rejected key written into its config.
+      attempts += 1
+      // Exactly the launcher's shape: a fresh config object per attempt, and the key camoufox-js
+      // merges by itself. `in` sees the suppression, so the merge is skipped and validation passes.
       const config: Record<string, unknown> = { keep: true }
-      const present = (key: string) => key in config
-      attempts.push(JSON.stringify(Object.keys(config)))
-      if (present('canvas:aaOffset') === false && !('canvas:aaOffset' in {})) {
+      if (!('canvas:aaOffset' in config)) {
         throw new Error('Unknown property canvas:aaOffset in config')
       }
       return 'ok'
     }, warn)
 
     expect(result).toBe('ok')
+    expect(attempts).toBe(2)
     expect(warn).toHaveBeenCalledOnce()
     expect(String(warn.mock.calls[0]?.[0])).toContain('canvas:aaOffset')
-    expect(attempts.length).toBeGreaterThan(1)
   })
 
   it('rethrows an unrelated error unchanged', async () => {
@@ -155,101 +154,96 @@ describe('withUnknownKeyTolerance', () => {
 
 /**
  * The regression that broke v0.1.0 for every user whose engine auto-updated: an engine that drops a
- * config key must never stop the profile from launching. This exercises the real `launchOptions`
- * call against a fixture schema, which is what made the original failure fatal.
- */
-/**
- * The real engine install directory, when there is one. These two cases drive the genuine
- * camoufox-js option assembly, which resolves the engine from `CAMOUFOX_INSTALL_DIR` and needs its
- * `version.json`; without an engine they would reach out to GitHub and fail on the rate limit
- * rather than on anything we wrote. They run wherever an engine is installed — CI fetches one —
- * and skip cleanly otherwise. The same path is proven end to end by `e2e-engine`, which launches
- * the real engine, so a skip here costs no coverage.
+ * config key must never stop the profile from launching.
+ *
+ * These drive the real `launchOptions` assembly, so they need an installed engine — the same
+ * prerequisite as every other test that touches camoufox-js — and skip cleanly without one.
  */
 const engineRoot = process.env.CAMOUFOX_INSTALL_DIR ?? ''
-// Opt-in only. These two build a *synthetic* engine directory to drive camoufox-js's real option
-// assembly, and that fixture is inherently brittle: the engine validates each property's declared
-// type, so a rebuilt schema that flattens every type to str is rejected before anything we wrote
-// runs, and the version lookup has its own resolution order. The tolerance logic itself is covered
-// by the eleven pure unit tests above, and the authoritative proof of the integrated path is the
-// 2e-engine job, which launches the REAL engine and therefore exercises a real rejection.
-// Set VFOX_TEST_REAL_ENGINE=1 with an engine installed to run them anyway.
 const engineAvailable =
   engineRoot !== '' &&
   existsSync(path.join(engineRoot, 'version.json')) &&
   existsSync(path.join(engineRoot, 'properties.json'))
 
-describe.skipIf(!engineAvailable || process.env.VFOX_TEST_REAL_ENGINE !== '1')(
-  'launching against an engine that rejects a key',
-  () => {
-    it('drops a stale user config key instead of refusing to launch', async () => {
-      const engineDir = path.join(dataDir, 'engine')
-      await fs.mkdir(engineDir, { recursive: true })
-      // The real schema, plus a key the engine does not know — the shape of a user's stale raw config.
-      const real = JSON.parse(
-        await fs.readFile(
-          path.join(process.env.CAMOUFOX_INSTALL_DIR ?? '', 'properties.json'),
-          'utf8',
-        ),
-      ) as { property: string; type: string }[]
-      await writeProperties(
-        engineDir,
-        real.map(entry => entry.property),
-      )
-      // camoufox-js reads the installed version from version.json next to properties.json.
-      await fs.copyFile(path.join(engineRoot, 'version.json'), path.join(engineDir, 'version.json'))
+/** Reassemble the chunked CAMOU_CONFIG_<n> environment variables camoufox-js produces. */
+function camouConfig(options: Record<string, unknown>): Record<string, unknown> {
+  const env = options.env as Record<string, string>
+  const joined = Object.entries(env)
+    .filter(([key]) => key.startsWith('CAMOU_CONFIG_'))
+    .map(([key, value]) => [Number(key.split('_').pop()), value] as const)
+    .sort((left, right) => left[0] - right[0])
+    .map(([, value]) => value)
+    .join('')
+  return JSON.parse(joined) as Record<string, unknown>
+}
 
-      const previous = process.env.CAMOUFOX_INSTALL_DIR
-      process.env.CAMOUFOX_INSTALL_DIR = engineDir
-      try {
-        const warn = vi.fn()
-        const profile = ProfileSchema.parse({
-          id: 'stale',
-          name: 'stale',
-          fingerprint: { geoip: false, config: { 'vfox:notARealKey': 1, 'canvas:seed': 7 } },
-          launch: {},
-          createdAt: 'x',
-          updatedAt: 'x',
-        })
-
-        const options = await toServerOptions(profile, 'C:\\p\\userdata', warn)
-
-        const chunks = Object.entries(options.env as Record<string, string>)
-          .filter(([key]) => key.startsWith('CAMOU_CONFIG_'))
-          .map(([key, value]) => [Number(key.split('_').pop()), value] as const)
-          .sort((left, right) => left[0] - right[0])
-          .map(([, value]) => value)
-          .join('')
-        const config = JSON.parse(chunks) as Record<string, unknown>
-
-        expect(Object.hasOwn(config, 'vfox:notARealKey')).toBe(false)
-        expect(config['canvas:seed']).toBe(7)
-        expect(warn.mock.calls.some(call => String(call[0]).includes('vfox:notARealKey'))).toBe(
-          true,
-        )
-      } finally {
-        if (previous === undefined) {
-          delete process.env.CAMOUFOX_INSTALL_DIR
-        } else {
-          process.env.CAMOUFOX_INSTALL_DIR = previous
-        }
-      }
+describe.skipIf(!engineAvailable)('launching against an engine that rejects a key', () => {
+  it('drops a stale user config key instead of refusing to launch', async () => {
+    const warn = vi.fn()
+    const profile = ProfileSchema.parse({
+      id: 'stale',
+      name: 'stale',
+      fingerprint: { geoip: false, config: { 'vfox:notARealKey': 1, 'canvas:seed': 7 } },
+      launch: {},
+      createdAt: 'x',
+      updatedAt: 'x',
     })
 
-    it('still launches normally when every key is accepted', async () => {
-      const profile = ProfileSchema.parse({
-        id: 'fine',
-        name: 'fine',
-        fingerprint: FingerprintSchema.parse({ geoip: false }),
-        launch: {},
-        createdAt: 'x',
-        updatedAt: 'x',
-      })
-      const warn = vi.fn()
-      const options = await toServerOptions(profile, 'C:\\p\\userdata', warn)
+    const options = await toServerOptions(profile, 'C:\\p\\userdata', warn)
 
-      expect(options.executablePath).toBeTruthy()
-      expect(warn).not.toHaveBeenCalled()
+    const config = camouConfig(options)
+    expect(Object.hasOwn(config, 'vfox:notARealKey')).toBe(false)
+    expect(config['canvas:seed']).toBe(7)
+    expect(warn.mock.calls.some(call => String(call[0]).includes('vfox:notARealKey'))).toBe(true)
+  })
+
+  it('still launches normally when every key is accepted', async () => {
+    const profile = ProfileSchema.parse({
+      id: 'fine',
+      name: 'fine',
+      fingerprint: FingerprintSchema.parse({ geoip: false }),
+      launch: {},
+      createdAt: 'x',
+      updatedAt: 'x',
     })
-  },
-)
+    const warn = vi.fn()
+    const options = await toServerOptions(profile, 'C:\\p\\userdata', warn)
+
+    expect(options.executablePath).toBeTruthy()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  /**
+   * What the 156 engine did to `canvas:aaOffset`. The fixture keeps the real `type` fields: a rebuilt
+   * schema that flattened them all to `str` is rejected by camoufox-js's own type validation before
+   * any of our code runs — a trap worth naming, because it makes the fixture look like a failure of
+   * the code under test.
+   */
+  it('drops the pinned canvas keys when the engine schema omits them', async () => {
+    const schema = JSON.parse(
+      await fs.readFile(path.join(engineRoot, 'properties.json'), 'utf8'),
+    ) as { property: string; type: string }[]
+    expect(schema.some(entry => entry.property === 'canvas:aaOffset')).toBe(true)
+
+    const fixtureDir = path.join(dataDir, 'engine-156')
+    await fs.mkdir(fixtureDir, { recursive: true })
+    await fs.writeFile(
+      path.join(fixtureDir, 'properties.json'),
+      JSON.stringify(
+        schema.filter(entry => !['canvas:aaOffset', 'canvas:aaCapOffset'].includes(entry.property)),
+      ),
+      'utf8',
+    )
+
+    const warn = vi.fn()
+    const { config, dropped } = dropUnacceptedKeys(
+      { 'canvas:aaOffset': 7, 'canvas:aaCapOffset': true, 'canvas:seed': 7 },
+      await acceptedKeys(fixtureDir),
+      warn,
+    )
+
+    expect(dropped.sort()).toEqual(['canvas:aaCapOffset', 'canvas:aaOffset'])
+    expect(config).toEqual({ 'canvas:seed': 7 })
+    expect(String(warn.mock.calls[0]?.[0])).toContain('"canvas:aaOffset"')
+  })
+})

@@ -64,7 +64,14 @@ export interface GroupsApi {
 }
 
 export interface RuntimeApi {
-  list(): ProfileRuntime[]
+  /**
+   * One entry per profile in the store, `stopped` for anything never launched.
+   *
+   * Asynchronous because membership comes from the store, which reads `profiles.json` per call: a
+   * profile created by another process must appear here without a restart. The registry itself is
+   * per-process and cannot see what another instance launched, which is the whole point.
+   */
+  list(): Promise<ProfileRuntime[]>
   get(id: string): ProfileRuntime
   launch(id: string): Promise<ProfileRuntime>
   stop(id: string): Promise<ProfileRuntime>

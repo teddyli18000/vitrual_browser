@@ -13,7 +13,8 @@ export async function buildHealth(core: Core): Promise<Health> {
     version: packageVersion(),
     pid: process.pid,
     kernel: await core.kernel.info(),
-    runningProfiles: core.runtime.list().filter(runtime => runtime.status === 'running').length,
+    runningProfiles: (await core.runtime.list()).filter(runtime => runtime.status === 'running')
+      .length,
   }
 }
 

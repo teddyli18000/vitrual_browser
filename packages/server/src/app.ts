@@ -263,13 +263,17 @@ async function loadSync(core: Core, logger: CoreLogger): Promise<SyncHandle> {
     /**
      * The runtime registry is the only place that knows a profile's live `wsEndpoint` and pid.
      * `runtime.get()` answers with a synthetic `stopped` runtime for an id the store does not
-     * know, so membership is decided by `runtime.list()` instead: an unknown profile has to
-     * resolve to `undefined` (-> SyncError `unknown_profile`, 404) rather than to "not running"
-     * (409), which is a different failure the user fixes differently.
+     * know, so membership is decided by the store instead: an unknown profile has to resolve to
+     * `undefined` (-> SyncError `unknown_profile`, 404) rather than to "not running" (409), which
+     * is a different failure the user fixes differently.
+     *
+     * Asynchronous because the store reads `profiles.json` per call, so a profile created by
+     * another process is reachable here without restarting the server.
      */
-    resolve: profileId => {
-      const runtime = core.runtime.list().find(entry => entry.profileId === profileId)
-      if (!runtime) return undefined
+    resolve: async profileId => {
+      const profile = await core.profiles.get(profileId)
+      if (!profile) return undefined
+      const runtime = core.runtime.get(profile.id)
       return { wsEndpoint: runtime.wsEndpoint, pid: runtime.pid }
     },
     logger,

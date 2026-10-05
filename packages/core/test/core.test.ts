@@ -75,7 +75,7 @@ describe('runtime', () => {
   it('reports every profile as stopped without ever launching a browser', async () => {
     const created = await core.profiles.create({ name: 'Acme' })
 
-    expect(core.runtime.list()).toEqual([
+    expect(await core.runtime.list()).toEqual([
       {
         profileId: created.id,
         status: 'stopped',

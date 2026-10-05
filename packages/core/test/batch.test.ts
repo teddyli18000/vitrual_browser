@@ -115,7 +115,7 @@ describe('all or nothing', () => {
 
       await expect(store.createProfiles(entries)).rejects.toThrow()
 
-      expect(store.listProfiles()).toEqual([])
+      expect(await store.listProfiles()).toEqual([])
       // No profile directory was left behind, and the table was never written.
       await expect(fs.access(path.join(dir, 'profiles'))).rejects.toThrow()
       await expect(fs.access(path.join(dir, 'profiles.json'))).rejects.toThrow()
@@ -153,12 +153,12 @@ describe('all or nothing', () => {
         store.createProfiles([entry('ok 1'), entry('ok 2'), entry('')]),
       ).rejects.toThrow()
 
-      expect(store.listProfiles().map(profile => profile.name)).toEqual(['keep me'])
+      expect((await store.listProfiles()).map(profile => profile.name)).toEqual(['keep me'])
       // And on disk, which is what a restart would read.
       const reopened = new Store(dir, logger())
       await reopened.load()
-      expect(reopened.listProfiles().map(profile => profile.name)).toEqual(['keep me'])
-      expect(reopened.getProfile(existing.id)?.name).toBe('keep me')
+      expect((await reopened.listProfiles()).map(profile => profile.name)).toEqual(['keep me'])
+      expect((await reopened.getProfile(existing.id))?.name).toBe('keep me')
     } finally {
       await fs.rm(dir, { recursive: true, force: true })
     }

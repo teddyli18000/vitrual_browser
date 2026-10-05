@@ -107,7 +107,7 @@ describe('export/import round trip', () => {
     expect(imported.proxy).toEqual(source.proxy)
     expect(imported.launch).toEqual(source.launch)
     expect(imported.notes).toBe(source.notes)
-    expect(store.getProfile(imported.id)).toEqual(imported)
+    expect(await store.getProfile(imported.id)).toEqual(imported)
 
     expect(await fs.readFile(path.join(store.userDataDir(imported.id), 'prefs.js'), 'utf8')).toBe(
       'user_pref();',
@@ -173,7 +173,7 @@ describe('rejection', () => {
     await expect(importProfileZip(zipFile, undefined, insert())).rejects.toThrow(
       /unexpected entry "hello.txt"/,
     )
-    expect(store.listProfiles()).toEqual([])
+    expect(await store.listProfiles()).toEqual([])
     // Nothing was created at all — not even the profiles directory.
     await expect(fs.access(path.join(dataDir, 'profiles'))).rejects.toThrow()
   })
@@ -185,7 +185,7 @@ describe('rejection', () => {
     await expect(importProfileZip(zipFile, undefined, insert())).rejects.toThrow(
       /has no profile\.json/,
     )
-    expect(store.listProfiles()).toEqual([])
+    expect(await store.listProfiles()).toEqual([])
   })
 
   it('rejects a foreign format or an unsupported version', async () => {
@@ -199,7 +199,7 @@ describe('rejection', () => {
         /Not a VFox profile export|Unsupported profile archive version/,
       )
     }
-    expect(store.listProfiles()).toEqual([])
+    expect(await store.listProfiles()).toEqual([])
   })
 
   it('rejects a profile config that does not validate', async () => {
@@ -214,7 +214,7 @@ describe('rejection', () => {
     await expect(importProfileZip(zipFile, undefined, insert())).rejects.toThrow(
       /Profile config inside .* is invalid/,
     )
-    expect(store.listProfiles()).toEqual([])
+    expect(await store.listProfiles()).toEqual([])
   })
 
   it('rejects path traversal instead of writing outside the profile directory', async () => {
@@ -240,7 +240,7 @@ describe('rejection', () => {
       await expect(importProfileZip(zipFile, undefined, insert())).rejects.toThrow(
         /escapes the extraction directory/,
       )
-      expect(store.listProfiles()).toEqual([])
+      expect(await store.listProfiles()).toEqual([])
     }
 
     await expect(fs.access(path.join(dataDir, 'escape.txt'))).rejects.toThrow()
@@ -258,7 +258,7 @@ describe('rejection', () => {
     ])
 
     await expect(importProfileZip(zipFile, undefined, insert())).rejects.toThrow(/absolute path/)
-    expect(store.listProfiles()).toEqual([])
+    expect(await store.listProfiles()).toEqual([])
   })
 
   it('reports a missing archive and a non-zip file clearly', async () => {

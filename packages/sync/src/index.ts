@@ -44,8 +44,17 @@ export interface SyncTarget {
 }
 
 export interface SyncOptions {
-  /** Supplied by the caller (the server). Resolve a profile id to its live browser endpoint. */
-  resolve: (profileId: string) => SyncTarget | undefined
+  /**
+   * Supplied by the caller (the server). Resolve a profile id to its live browser endpoint, or
+   * `undefined` when the profile does not exist.
+   *
+   * May be asynchronous. The membership half of the question ("is this a profile at all?") is
+   * answered from the profile store, which reads `profiles.json` per call so that a profile created
+   * by another process is visible without a restart — so a caller that has to hit the disk must be
+   * able to say so here rather than invent a cache. Returning `undefined` is `unknown_profile`
+   * (404); a known profile whose browser is not running is `not_running` (409).
+   */
+  resolve: (profileId: string) => SyncTarget | undefined | Promise<SyncTarget | undefined>
   logger?: CoreLogger
 }
 

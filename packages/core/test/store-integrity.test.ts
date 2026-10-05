@@ -57,7 +57,7 @@ describe('recovery from a corrupt store', () => {
     const reopened = new Store(dataDir, log)
     await reopened.load()
 
-    expect(reopened.listProfiles().map(profile => profile.name)).toEqual(['Acme'])
+    expect((await reopened.listProfiles()).map(profile => profile.name)).toEqual(['Acme'])
     expect(log.error).toHaveBeenCalledOnce()
     expect(String(log.error.mock.calls[0]?.[0])).toContain('restored from')
 
@@ -98,7 +98,7 @@ describe('recovery from a corrupt store', () => {
     const reopened = new Store(dataDir, logger())
     await reopened.load()
 
-    expect(reopened.listGroups().map(group => group.name)).toEqual(['Work'])
+    expect((await reopened.listGroups()).map(group => group.name)).toEqual(['Work'])
   })
 })
 
@@ -122,7 +122,7 @@ describe('applyIdentity', () => {
     expect(withIdentity.identity).toEqual(identity)
     expect(withIdentity.fingerprint.config).toEqual({ 'canvas:seed': 42 })
     expect(withIdentity.fingerprint.webgl).toEqual({ vendor: 'Google Inc.', renderer: 'ANGLE' })
-    expect(store.getProfile(created.id)?.identity).toEqual(identity)
+    expect((await store.getProfile(created.id))?.identity).toEqual(identity)
 
     const cleared = await store.applyIdentity(created.id, null)
     expect(cleared.identity).toBeNull()

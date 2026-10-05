@@ -15,7 +15,11 @@ export interface RuntimeRegistryOptions {
   /** Resolve a profile for launching; `undefined` means the id is unknown. */
   resolveProfile: (id: string) => Promise<Profile | undefined>
   userDataDir: (id: string) => string
-  profileIds: () => string[]
+  /**
+   * The ids the store currently knows. Asynchronous because the store reads `profiles.json` per
+   * call — a profile created by another process has to appear here without a restart.
+   */
+  profileIds: () => Promise<string[]>
   logger: CoreLogger
 }
 
@@ -39,8 +43,16 @@ export class RuntimeRegistry {
     this.#options = options
   }
 
-  list(): ProfileRuntime[] {
-    return this.#options.profileIds().map(id => this.get(id))
+  /**
+   * One entry per profile the store knows, `stopped` for anything never launched.
+   *
+   * Note the scope: this registry only knows about browsers *this process* started. Two servers on
+   * one data directory therefore each report their own running set, and a browser launched by the
+   * other one shows up as `stopped` here. That is a property of the registry, not of the store.
+   */
+  async list(): Promise<ProfileRuntime[]> {
+    const ids = await this.#options.profileIds()
+    return ids.map(id => this.get(id))
   }
 
   get(id: string): ProfileRuntime {
