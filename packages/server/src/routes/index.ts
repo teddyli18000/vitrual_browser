@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 
 import type { RouteDeps } from '../types.js'
+import { registerAddonRoutes } from './addons.js'
 import { registerCompatRoutes } from './compat.js'
 import { registerCookieRoutes } from './cookies.js'
 import { registerEventRoutes } from './events.js'
@@ -22,6 +23,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
   registerHealthRoutes(app, deps.core)
   registerProfileRoutes(app, deps)
   registerCookieRoutes(app, deps)
+  registerAddonRoutes(app, deps)
   registerRuntimeRoutes(app, deps)
   registerGroupRoutes(app, deps)
   registerKernelRoutes(app, deps)

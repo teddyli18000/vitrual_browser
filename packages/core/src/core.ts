@@ -2,13 +2,15 @@
  * Wiring: store + runtime registry + kernel manager behind the frozen `Core` surface.
  */
 
-import type { Profile } from '@vfox/shared'
+import type { Profile, ProfileAddon } from '@vfox/shared'
 import { CookieImportResultSchema, FingerprintSchema, ProfileBatchCreateSchema } from '@vfox/shared'
+import { installAddon, listAddons, listEngineAddons, removeAddon } from './addons.js'
 import { importProfileZip, writeProfileZip } from './archive.js'
 import { cookieDbPath, readJar, writeJar } from './cookies.js'
 import { createIdentity, identityInputs, identityIsCurrent, webglPairKey } from './identity.js'
 
 import type {
+  AddonsApi,
   CookiesApi,
   Core,
   CoreOptions,
@@ -17,7 +19,7 @@ import type {
   ProfilesApi,
   RuntimeApi,
 } from './index.js'
-import { applyKernelDir, KernelManager } from './kernel.js'
+import { applyKernelDir, KernelManager, resolveEngineDir } from './kernel.js'
 import { launchCamoufox } from './launcher.js'
 import { combineLoggers, createFileLogger } from './log.js'
 import { formatNetscape, parseNetscape } from './netscape.js'
@@ -257,6 +259,37 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     },
   }
 
+  const addons: AddonsApi = {
+    async list(id) {
+      const profile = await store.requireProfile(id)
+      // Deliberately NOT `requireStoppedForAddons`: this store is our own inert directory that no
+      // browser holds open, so disk is authoritative even while the profile runs. The cookie export
+      // refuses for the opposite reason — a live browser owns `cookies.sqlite` — and copying that
+      // rule here would only stop the UI from listing a running profile's addons.
+      const installed = await listAddons(store.userDataDir(profile.id))
+      return [...installed, ...(await engineAddons())]
+    },
+
+    async install(id, sourcePath, options) {
+      const profile = await store.requireProfile(id)
+      requireStoppedForAddons(registry, profile)
+      const installed = await installAddon(store.userDataDir(id), sourcePath, options)
+      logger.info(
+        `profile ${id}: installed addon ${installed.slug} (${installed.name} ${installed.version}, ` +
+          `${installed.files} file(s))`,
+      )
+      return installed
+    },
+
+    async remove(id, slugOrId) {
+      const profile = await store.requireProfile(id)
+      requireStoppedForAddons(registry, profile)
+      const removed = await removeAddon(store.userDataDir(id), slugOrId)
+      logger.info(`profile ${id}: removed addon ${removed.slug} (${removed.name})`)
+      return removed
+    },
+  }
+
   return {
     dataDir: store.dataDir,
     profiles,
@@ -264,10 +297,42 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     runtime,
     kernel,
     cookies,
+    addons,
     async close() {
       await registry.closeAll()
       await dataDirLock.release()
     },
+  }
+}
+
+/**
+ * The engine ships addons of its own and camoufox-js appends them to every launch, so they are part
+ * of what a profile loads whether or not the user asked. Reading them is best-effort: a missing or
+ * unreadable engine directory must not make `addons.list` fail, it just means there is nothing to
+ * report.
+ */
+async function engineAddons(): Promise<ProfileAddon[]> {
+  try {
+    return await listEngineAddons(await resolveEngineDir())
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Addons are read at launch and baked into the engine's environment, so the profile must not be
+ * running when the store changes. `error` is allowed through for the same reason as cookies: the
+ * registry only reaches it with no live process attached, and refusing would strand a profile whose
+ * launch failed.
+ */
+function requireStoppedForAddons(registry: RuntimeRegistry, profile: Profile): void {
+  const { status } = registry.get(profile.id)
+  if (status !== 'stopped' && status !== 'error') {
+    throw new Error(
+      `Profile "${profile.name}" is ${status} — stop it before installing or removing addons. ` +
+        'The engine reads the addon list when it starts, so a change now would only take effect ' +
+        'after a restart, and removing one could delete files the browser has loaded.',
+    )
   }
 }
 

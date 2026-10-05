@@ -13,6 +13,7 @@ import type {
   KernelInfo,
   KernelProgress,
   Profile,
+  ProfileAddon,
   ProfileBatchCreate,
   ProfileCreate,
   ProfileRuntime,
@@ -128,6 +129,41 @@ export interface CookiesApi {
   import(id: string, content: string, options?: CookieImportOptions): Promise<CookieImportResult>
 }
 
+export interface AddonInstallOptions {
+  /** Replace an addon already installed under the same slug instead of refusing. */
+  replace?: boolean
+}
+
+export interface AddonsApi {
+  /**
+   * The addons this profile will load: the ones VFox manages, plus the engine's own defaults
+   * (`source: 'engine'`, read-only in v1).
+   *
+   * **Readable while the profile runs.** Unlike the cookie jar this store is an inert directory on
+   * disk that no browser holds open, so what is on disk *is* the truth and refusing would only stop
+   * the UI from showing what a running profile carries.
+   */
+  list(id: string): Promise<ProfileAddon[]>
+  /**
+   * Install an addon from a local path: an extracted addon directory, or an `.xpi`/`.zip` that VFox
+   * extracts for you — the engine only loads directories.
+   *
+   * **The profile must be stopped.** The addon list is baked into the engine's launch environment,
+   * so an install while it runs would silently do nothing until the next launch, and a remove could
+   * delete a directory the browser has loaded. Throws when it is running, and when something is
+   * already installed under the same slug unless `replace` is set.
+   */
+  install(id: string, sourcePath: string, options?: AddonInstallOptions): Promise<ProfileAddon>
+  /**
+   * Remove one addon by slug or gecko id.
+   *
+   * **The profile must be stopped**, for the same reason as {@link install}. Throws for the engine's
+   * own defaults: they are loaded because the engine's launcher adds them, and excluding one needs
+   * per-profile state that does not exist yet.
+   */
+  remove(id: string, slugOrId: string): Promise<ProfileAddon>
+}
+
 export interface Core {
   readonly dataDir: string
   readonly profiles: ProfilesApi
@@ -135,6 +171,7 @@ export interface Core {
   readonly runtime: RuntimeApi
   readonly kernel: KernelApi
   readonly cookies: CookiesApi
+  readonly addons: AddonsApi
   close(): Promise<void>
 }
 

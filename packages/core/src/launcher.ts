@@ -43,6 +43,7 @@ import { spawnSync } from 'node:child_process'
 import type { Profile } from '@vfox/shared'
 import type { LaunchOptions } from 'camoufox-js'
 import { firefox } from 'playwright-core'
+import { addonPaths, excludeDefaultAddons, listAddons } from './addons.js'
 import { camoufoxModule } from './camoufox.js'
 import { acceptedKeys, dropUnacceptedKeys, withUnknownKeyTolerance } from './engine-config.js'
 import { type FingerprintWarning, toEngineOptions } from './fingerprint.js'
@@ -79,25 +80,35 @@ export type ServerOptions = Record<string, unknown>
 /**
  * Build the exact option object for `firefox.launchServer()`.
  *
- * Exported so the invariants below are testable without spawning a browser.
+ * Exported so the invariants below are testable without spawning a browser. `engineDirOverride`
+ * exists for the same reason: the addon wiring depends on what the *engine* ships (its default
+ * addons), and a test must be able to point that at a fixture rather than at a 500 MB install.
  */
 export async function toServerOptions(
   profile: Profile,
   userDataDir: string,
   warn: FingerprintWarning,
+  engineDirOverride?: string,
 ): Promise<ServerOptions> {
   // Imported lazily: camoufox-js resolves its install directory at module load time, and
   // `createCore({ kernelDir })` sets CAMOUFOX_INSTALL_DIR before the first launch.
   const { launchOptions } = (await import(camoufoxModule())) as typeof import('camoufox-js')
   const engine = toEngineOptions(profile.fingerprint, profile.proxy, warn)
+  const engineDir = engineDirOverride ?? (await resolveEngineDir())
 
   // Layer 1: never hand the engine a config key it does not accept. The engine's own
   // `properties.json` is the authority, and this covers both our pinned identity values and the
   // user's raw `fingerprint.config` escape hatch. Unreadable schema → launch as-is.
-  const { config } = dropUnacceptedKeys(
-    engine.config,
-    await acceptedKeys(await resolveEngineDir()),
-    warn,
+  const { config } = dropUnacceptedKeys(engine.config, await acceptedKeys(engineDir), warn)
+
+  // The addons this profile loads, read once. They must be handed to `launchOptions` **as an
+  // option**: camoufox-js turns them into `config.addons` itself, and assigning `options.addons`
+  // afterwards does nothing at all — the option is an input, not an output (measured: the addon
+  // never reached `CAMOU_CONFIG`, and only the engine's own default was loaded).
+  const installed = await listAddons(userDataDir)
+  const excludeDefaults = await excludeDefaultAddons(
+    engineDir,
+    installed.flatMap(addon => (addon.id === null ? [] : [addon.id])),
   )
 
   // Layer 2: `canvas:aaOffset`, `canvas:aaCapOffset` and `window.history.length` are merged by
@@ -118,6 +129,30 @@ export async function toServerOptions(
         // because it is whatever the engine's generator produced, hence the cast.
         fingerprint: profile.identity?.fingerprint as LaunchOptions['fingerprint'],
         headless: profile.launch.headless,
+        // 4. Addons. The engine loads addons from **paths given at launch** (`addons` is a Camoufox
+        //    config key), and it requires each path to be an extracted directory containing
+        //    manifest.json — `confirmPaths` throws `InvalidAddonPath` otherwise, which would fail
+        //    every launch. `listAddons` only returns directories whose manifest parses, so a
+        //    half-deleted addon cannot get that far.
+        //
+        //    Three traps live in these two lines, all of them read out of camoufox-js 0.12.0
+        //    (`dist/utils.js:384-390` and `:545-561`):
+        //
+        //    (a) It MUTATES the array it is given: `addDefaultAddons` pushes the engine's own default
+        //        addon paths into it, then assigns that same array to `config.addons`. So each
+        //        attempt must build a fresh array — including every retry below — or the defaults
+        //        accumulate, once per retry and once per launch.
+        //    (b) It OVERWRITES `config.addons` unconditionally, which is why the raw
+        //        `fingerprint.config` escape hatch silently does nothing here: our key is replaced
+        //        by the list built from this option. The option is the only working route.
+        //    (c) The paths must be ABSOLUTE. Camoufox issue #399 is exactly this failure: relative
+        //        paths launch a browser with no error and no addons.
+        addons: addonPaths(userDataDir, installed),
+        //    A profile that has its own copy of an addon the engine also ships would otherwise load
+        //    one gecko id twice, from two paths. Excluding the engine's copy is not a preference the
+        //    user expresses — it is the only correct outcome, so it is decided here, and the key
+        //    list is derived from the engine's own manifests rather than hard-coded.
+        exclude_addons: excludeDefaults,
       })) as ServerOptions,
     warn,
   )) as ServerOptions

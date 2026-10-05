@@ -9,6 +9,7 @@
 import { parseArgs, renderFlags, UsageError } from './args.js'
 import type { Command } from './command.js'
 import { GLOBAL_FLAGS } from './command.js'
+import { addonsCommand } from './commands/addons.js'
 import { cookiesCommand } from './commands/cookies.js'
 import { kernelCommand } from './commands/kernel.js'
 import { mcpCommand } from './commands/mcp.js'
@@ -32,6 +33,7 @@ export const COMMANDS: readonly Command[] = [
   exportCommand,
   importCommand,
   cookiesCommand,
+  addonsCommand,
   kernelCommand,
   syncCommand,
   mcpCommand,
