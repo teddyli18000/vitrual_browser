@@ -1021,7 +1021,7 @@ async function readWorkerSurface(page) {
               : gl.getParameter(gl.RENDERER)
           }
         } catch (error) {
-          out.webglError = String(error && error.message ? error.message : error)
+          out.webglError = String(error?.message ? error.message : error)
         }
         self.postMessage(out)
       }
@@ -1154,7 +1154,11 @@ async function resultText(page, target) {
       const textBudget = target.textTimeoutMs ?? 45_000
       const textDeadline = Date.now() + textBudget
       while (Date.now() < textDeadline && !appeared) {
-        const text = (await page.locator('body').innerText().catch(() => '')) || ''
+        const text =
+          (await page
+            .locator('body')
+            .innerText()
+            .catch(() => '')) || ''
         if (target.textPattern.test(text)) {
           appeared = 'text pattern'
           break
