@@ -421,6 +421,22 @@ if (profiles.length < profileNames.length) {
 assert(profiles.length === 3, `three profiles exist (${profiles.length})`)
 if (profiles.length < 3) report()
 
+// The portable promise is that the whole folder can be moved, and the way it breaks is a persisted
+// absolute path: `profiles.json` records where each profile browser directory lives, and if it
+// records the path on *this* machine then copying the folder to another drive leaves a store
+// pointing at a directory that is no longer there. `AGENTS.md` states the invariant - nothing may
+// persist an absolute path - and nothing checked it. This reads the store the app itself just wrote
+// rather than one the test prepared.
+const storeText = readFileSync(path.join(dataDir, 'profiles.json'), 'utf8')
+assert(
+  !storeText.includes(appDir),
+  'the profile store caches no absolute path, so the folder can be moved',
+)
+if (storeText.includes(appDir)) {
+  note(`profiles.json mentions ${appDir}, which will not exist after a move`)
+}
+executed.push('reading profiles.json to check that no absolute path was persisted')
+
 // ------------------------------------------------------------- 4. all three open real windows
 step('4. launching all three and looking for three visible OS windows')
 for (const profile of profiles) {
