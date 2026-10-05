@@ -145,7 +145,8 @@ if (!keepData) {
   rmSync(dataDir, { recursive: true, force: true })
   rmSync(engineDir, { recursive: true, force: true })
 }
-mkdirSync(dataDir, { recursive: true })
+// Deliberately NOT created here: portable mode is what must create it, and if the test made the
+// directory first then "the app chose the portable location" would be true for the wrong reason.
 mkdirSync(engineDir, { recursive: true })
 writeFileSync(path.join(appDir, 'portable'), 'written by apps/desktop/e2e/packaged-e2e.mjs\n')
 
@@ -170,7 +171,10 @@ const app = spawn(artifact.executable, [], {
   env: {
     ...process.env,
     ELECTRON_RUN_AS_NODE: '',
-    VFOX_DATA_DIR: dataDir,
+    // NOT `VFOX_DATA_DIR`. It is the first entry in the documented resolution order and would
+    // shadow the `portable` marker written above, so the suite would exercise the env-var branch
+    // while the zip a user downloads takes the marker branch. That is the configuration that
+    // actually ships, and until now nothing tested it.
     VFOX_API_PORT: apiPort,
     // The whole point of phase 2: the app must fetch the kernel itself, into a directory that has
     // never held one.
@@ -218,6 +222,13 @@ if (!token) {
   fail(`the application did not answer ${apiBase}/api/v1/health within 120s`)
   report()
 }
+// The token file only exists because the app wrote it, into the directory portable mode chooses.
+assert(
+  existsSync(path.join(dataDir, 'api-token')),
+  `portable mode put the store beside the executable: ${dataDir}`,
+)
+executed.push('asserting that the portable marker, not an environment variable, chose the store')
+
 pass(`the packaged application started and answered its own API on ${apiBase}`)
 executed.push('spawning the packaged VFox.exe and waiting for its loopback API')
 
