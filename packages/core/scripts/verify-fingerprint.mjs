@@ -1060,14 +1060,19 @@ async function exitIp() {
 
 /** The result region's text, or the whole body with a recorded caveat. */
 async function resultText(page, target) {
+  const tried = []
   for (const selector of target.scope ?? []) {
     try {
       const locator = page.locator(selector).first()
-      if ((await locator.count()) === 0) continue
+      if ((await locator.count()) === 0) {
+        tried.push(`${selector}: 0 matches`)
+        continue
+      }
       const text = await locator.innerText({ timeout: 5_000 })
-      if (text && text.trim().length > 0) return { text, scope: selector }
-    } catch {
-      // Try the next selector.
+      tried.push(`${selector}: ${text ? text.trim().length : 0} chars`)
+      if (text && text.trim().length > 0) return { text, scope: selector, tried }
+    } catch (error) {
+      tried.push(`${selector}: ${String(error?.message ?? error).split('\n')[0]}`)
     }
   }
   const body =
@@ -1075,7 +1080,90 @@ async function resultText(page, target) {
       .locator('body')
       .innerText()
       .catch(() => '')) || ''
-  return { text: body, scope: null }
+  tried.push(`body: ${body.trim().length} chars`)
+
+  // `body.innerText` does NOT include shadow-root content, and CreepJS renders its result blocks into
+  // shadow roots — the leading explanation for "3947 characters read and no lie count". The shadow
+  // text is collected and reported separately so the dump shows whether it contributed.
+  const shadow = await page
+    .evaluate(() => {
+      const parts = []
+      const walk = root => {
+        for (const element of root.querySelectorAll('*')) {
+          if (element.shadowRoot) {
+            parts.push(element.shadowRoot.textContent || '')
+            walk(element.shadowRoot)
+          }
+        }
+      }
+      walk(document)
+      return parts.join(' ').replace(/\s+/g, ' ').trim()
+    })
+    .catch(() => '')
+  tried.push(`shadow roots: ${shadow.length} chars`)
+
+  return { text: shadow.length > 0 ? `${body}\n${shadow}` : body, scope: null, tried }
+}
+
+/** Every public IPv4/IPv6-looking token on a page, for the WebRTC leak comparison. */
+function publicAddressesIn(text) {
+  const found = new Set()
+  for (const match of String(text).matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g)) found.add(match[0])
+  for (const match of String(text).matchAll(/\b(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{1,4}\b/gi)) {
+    found.add(match[0])
+  }
+  return [...found].filter(
+    address => !/^(?:0\.|127\.|10\.|192\.168\.|169\.254\.|::1$|fe80:)/i.test(address),
+  )
+}
+
+/**
+ * Read a DATA page — one that displays values and has no verdict to give.
+ *
+ * `browserleaks` is the case that taught us this: canvas, WebGL, WebRTC and fonts are *data* displays
+ * whose text is documentation prose plus a table, and expecting a pass/fail from them was a design
+ * error rather than an extraction bug. Rather than nine permanent UNREADs (which trains people to
+ * ignore the column), the values are extracted and asserted where something real is checkable.
+ */
+function checkDataTarget(target, text, ip) {
+  const flat = String(text ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (flat.length < 40) {
+    return { verdict: 'UNREAD', finding: `only ${flat.length} characters of data came back` }
+  }
+
+  if (target.assertNoForeignIp) {
+    const addresses = publicAddressesIn(flat)
+    if (addresses.length === 0) {
+      return {
+        verdict: 'UNREAD',
+        finding: `no address found in ${flat.length} characters, so no leak can be confirmed or denied`,
+      }
+    }
+    if (ip && addresses.includes(ip)) {
+      return {
+        verdict: 'PASS',
+        finding: `the page reports our exit address ${ip} and no other public address (found ${addresses.join(', ')})`,
+      }
+    }
+    const foreign = addresses.filter(address => address !== ip)
+    if (foreign.length > 0 && ip) {
+      return {
+        verdict: 'FAIL',
+        finding: `LEAK: the page reports ${foreign.join(', ')} while we exited from ${ip}`,
+      }
+    }
+    return {
+      verdict: 'PASS',
+      finding: `the page reports ${addresses.join(', ')} (exit IP unknown, so only one address is asserted)`,
+    }
+  }
+
+  return {
+    verdict: 'DATA',
+    finding: `${flat.length} characters of values read: ${flat.slice(0, 180)}`,
+  }
 }
 
 async function checkTargets(browser, propertiesHeld) {
