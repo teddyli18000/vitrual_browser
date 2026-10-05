@@ -85,7 +85,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
    * persists the result so the device a user sees is the device they keep.
    */
   async function ensureIdentity(id: string): Promise<Profile> {
-    const profile = store.requireProfile(id)
+    const profile = await store.requireProfile(id)
     const engine = (await kernelManager.info()).version
     if (identityIsCurrent(profile, engine)) {
       return profile
@@ -157,7 +157,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
       return profiles
     },
     async update(id, patch) {
-      const before = store.requireProfile(id)
+      const before = await store.requireProfile(id)
       const updated = await store.updateProfile(id, patch)
       // The identity describes the device browserforge generated. Editing the fields it was
       // generated from means the user wants a different device, so the identity is dropped and
@@ -180,7 +180,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     clone: (id, name) => store.cloneProfile(id, name),
     userDataDir: id => store.userDataDir(id),
     async exportZip(id, destFile) {
-      const profile = store.requireProfile(id)
+      const profile = await store.requireProfile(id)
       await writeProfileZip(profile, store.userDataDir(id), destFile)
     },
     importZip: (zipFile, name) =>
@@ -213,7 +213,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
 
   const cookies: CookiesApi = {
     async export(id) {
-      const profile = store.requireProfile(id)
+      const profile = await store.requireProfile(id)
       requireStoppedForCookies(registry, profile)
       const jar = await readJar(cookieDbPath(store.userDataDir(id)))
       return {
@@ -225,7 +225,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     },
 
     async import(id, content, options) {
-      const profile = store.requireProfile(id)
+      const profile = await store.requireProfile(id)
       requireStoppedForCookies(registry, profile)
 
       const mode = options?.mode ?? 'merge'

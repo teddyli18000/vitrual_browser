@@ -172,7 +172,18 @@ export function createFakeCore(options) {
     },
 
     runtime: {
-      list: () => [...runtimeById.values()],
+      // Async, like the real `RuntimeApi.list()`. It reads the store now, so a fake that answers
+      // synchronously cannot reproduce the failures that depend on the hub yielding before it
+      // hijacks the reply - which is exactly how the broken SSE route passed this suite.
+      list: async () => {
+        // It yields a MACROTASK, and that is the point rather than padding. The real implementation
+        // reads `profiles.json` from disk, so it does not resume in the same microtask; a fake that
+        // answers immediately makes the route look correct when it is not. This is the difference
+        // that let a broken SSE route pass this entire suite while every client of the app lost live
+        // updates - the fake was simply faster than any real store can be.
+        await new Promise(resolve => setImmediate(resolve))
+        return [...runtimeById.values()]
+      },
 
       get: id => runtimeById.get(id) ?? stoppedRuntime(id),
 

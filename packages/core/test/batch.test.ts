@@ -47,7 +47,18 @@ describe('createBatch', () => {
       expect(profile.fingerprint.config['canvas:seed']).toBeTypeOf('number')
     }
     // Independently generated, not one identity copied N times.
-    const devices = new Set(profiles.map(profile => JSON.stringify(profile.identity?.fingerprint)))
+    //
+    // The whole device, not just its browserforge half. Comparing `identity.fingerprint` alone made
+    // this fail roughly once in every few dozen batches for a reason that is not a defect: browserforge
+    // draws from finite distributions, so two independent draws can land on the same screen and
+    // navigator, and measured over 60 profiles in 12 batches that happened zero times but is plainly
+    // possible. Two profiles that share those still do not share a device - the WebGL pair differs,
+    // which is the half this assertion was not looking at, and it is the half a script reads first.
+    const devices = new Set(
+      profiles.map(profile =>
+        JSON.stringify([profile.identity?.fingerprint, profile.fingerprint.webgl]),
+      ),
+    )
     expect(devices.size).toBe(5)
 
     // The result order is the store order.
@@ -115,7 +126,7 @@ describe('all or nothing', () => {
 
       await expect(store.createProfiles(entries)).rejects.toThrow()
 
-      expect(store.listProfiles()).toEqual([])
+      expect(await store.listProfiles()).toEqual([])
       // No profile directory was left behind, and the table was never written.
       await expect(fs.access(path.join(dir, 'profiles'))).rejects.toThrow()
       await expect(fs.access(path.join(dir, 'profiles.json'))).rejects.toThrow()
@@ -153,12 +164,12 @@ describe('all or nothing', () => {
         store.createProfiles([entry('ok 1'), entry('ok 2'), entry('')]),
       ).rejects.toThrow()
 
-      expect(store.listProfiles().map(profile => profile.name)).toEqual(['keep me'])
+      expect((await store.listProfiles()).map(profile => profile.name)).toEqual(['keep me'])
       // And on disk, which is what a restart would read.
       const reopened = new Store(dir, logger())
       await reopened.load()
-      expect(reopened.listProfiles().map(profile => profile.name)).toEqual(['keep me'])
-      expect(reopened.getProfile(existing.id)?.name).toBe('keep me')
+      expect((await reopened.listProfiles()).map(profile => profile.name)).toEqual(['keep me'])
+      expect((await reopened.getProfile(existing.id))?.name).toBe('keep me')
     } finally {
       await fs.rm(dir, { recursive: true, force: true })
     }

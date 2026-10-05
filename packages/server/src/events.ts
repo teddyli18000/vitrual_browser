@@ -154,8 +154,13 @@ export class EventHub {
   /**
    * Turns a Fastify request into an event stream. The reply is hijacked: from here on the raw
    * `ServerResponse` owns the socket and Fastify must not touch it.
+   *
+   * The snapshot is read *before* the hijack, so a store that refuses to load still produces an
+   * ordinary error response instead of a half-open stream that never says anything.
    */
-  handle(request: FastifyRequest, reply: FastifyReply): void {
+  async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const runtimes = await this.#core.runtime.list()
+
     reply.hijack()
     const res = reply.raw
     const req = request.raw
@@ -172,7 +177,7 @@ export class EventHub {
     this.#startHeartbeat()
 
     // Snapshot on connect, so a late client is immediately consistent without polling anything.
-    for (const runtime of this.#core.runtime.list()) {
+    for (const runtime of runtimes) {
       this.#write(res, SSE_EVENT_RUNTIME, runtime)
     }
     if (this.#lastKernel && this.#lastKernel.phase !== 'idle') {

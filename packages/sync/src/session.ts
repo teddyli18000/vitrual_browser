@@ -87,11 +87,13 @@ class SyncEngine implements SyncHandle {
       )
     }
 
-    const masterTarget = this.#runningTarget(masterProfileId)
-    const slaveTargets = slaveProfileIds.map(profileId => ({
-      profileId,
-      target: this.#runningTarget(profileId),
-    }))
+    const masterTarget = await this.#runningTarget(masterProfileId)
+    const slaveTargets = await Promise.all(
+      slaveProfileIds.map(async profileId => ({
+        profileId,
+        target: await this.#runningTarget(profileId),
+      })),
+    )
     for (const slave of slaveTargets) {
       if (sameBrowser(slave.target, masterTarget)) {
         // The same browser on both ends would replay our own input back into the master.
@@ -174,7 +176,9 @@ class SyncEngine implements SyncHandle {
     if (profileIds.length === 0) {
       throw new SyncError('tile() requires at least one profile id', 'invalid_input')
     }
-    const entries = profileIds.map(profileId => ({ profileId, pid: this.#windowPid(profileId) }))
+    const entries = await Promise.all(
+      profileIds.map(async profileId => ({ profileId, pid: await this.#windowPid(profileId) })),
+    )
     const displayIndex = request.displayIndex ?? null
     const workArea = await this.#deps.tile.workArea(displayIndex)
     const rects = computeTileGrid(entries.length, layoutOf(request), workArea)
@@ -225,8 +229,8 @@ class SyncEngine implements SyncHandle {
     return this.#deps.now ? this.#deps.now() : Date.now()
   }
 
-  #runningTarget(profileId: string): SyncTarget & { wsEndpoint: string } {
-    const target = this.#options.resolve(profileId)
+  async #runningTarget(profileId: string): Promise<SyncTarget & { wsEndpoint: string }> {
+    const target = await this.#options.resolve(profileId)
     if (!target) {
       throw new SyncError(`unknown profile "${profileId}"`, 'unknown_profile')
     }
@@ -240,8 +244,8 @@ class SyncEngine implements SyncHandle {
     return { ...target, wsEndpoint }
   }
 
-  #windowPid(profileId: string): number {
-    const target = this.#options.resolve(profileId)
+  async #windowPid(profileId: string): Promise<number> {
+    const target = await this.#options.resolve(profileId)
     if (!target) {
       throw new SyncError(`unknown profile "${profileId}"`, 'unknown_profile')
     }

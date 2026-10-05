@@ -47,7 +47,7 @@ function setup(launch: BrowserLauncher, profiles = [profile('p1'), profile('p2')
     launch,
     resolveProfile: async id => profiles.find(item => item.id === id),
     userDataDir: id => path.join('data', 'profiles', id, 'userdata'),
-    profileIds: () => profiles.map(item => item.id),
+    profileIds: async () => profiles.map(item => item.id),
     logger: log,
   })
   return { registry, log }
@@ -201,7 +201,7 @@ describe('registry', () => {
     const { registry } = setup(async () => new FakeBrowser())
     await registry.launch('p1')
 
-    expect(registry.list().map(item => [item.profileId, item.status])).toEqual([
+    expect((await registry.list()).map(item => [item.profileId, item.status])).toEqual([
       ['p1', 'running'],
       ['p2', 'stopped'],
     ])
@@ -267,6 +267,6 @@ describe('registry', () => {
     await registry.closeAll()
 
     expect([...browsers.values()].map(browser => browser.closes)).toEqual([1, 1])
-    expect(registry.list().map(item => item.status)).toEqual(['stopped', 'stopped'])
+    expect((await registry.list()).map(item => item.status)).toEqual(['stopped', 'stopped'])
   })
 })

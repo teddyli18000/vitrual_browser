@@ -61,7 +61,7 @@ describe('profiles', () => {
     })
 
     const reopened = await openStore()
-    expect(reopened.getProfile(created.id)).toEqual(created)
+    expect(await reopened.getProfile(created.id)).toEqual(created)
   })
 
   it('updates with partial fingerprint/launch merges and never loses the other fields', async () => {
@@ -131,7 +131,7 @@ describe('clone and remove', () => {
 
     await store.removeProfile(profile.id)
 
-    expect(store.getProfile(profile.id)).toBeUndefined()
+    expect(await store.getProfile(profile.id)).toBeUndefined()
     await expect(fs.access(store.profileDir(profile.id))).rejects.toThrow()
     expect(JSON.parse(await fs.readFile(store.profilesFile, 'utf8'))).toEqual([])
   })
@@ -159,7 +159,7 @@ describe('persistence', () => {
 
     const onDisk = JSON.parse(await fs.readFile(store.profilesFile, 'utf8')) as unknown[]
     expect(onDisk).toHaveLength(12)
-    expect(store.listProfiles()).toHaveLength(12)
+    expect(await store.listProfiles()).toHaveLength(12)
   })
 
   it('fails loudly on a corrupt file and never rewrites it', async () => {
@@ -183,8 +183,8 @@ describe('persistence', () => {
 
   it('starts empty when the files do not exist yet', async () => {
     const store = await openStore()
-    expect(store.listProfiles()).toEqual([])
-    expect(store.listGroups()).toEqual([])
+    expect(await store.listProfiles()).toEqual([])
+    expect(await store.listGroups()).toEqual([])
   })
 })
 
@@ -199,7 +199,7 @@ describe('groups', () => {
     expect(renamed.createdAt).toBe(group.createdAt)
 
     await store.removeGroup(group.id)
-    expect(store.listGroups()).toEqual([])
+    expect(await store.listGroups()).toEqual([])
   })
 
   it('un-groups its profiles when the group is removed', async () => {
@@ -210,7 +210,7 @@ describe('groups', () => {
 
     await store.removeGroup(group.id)
 
-    expect(store.getProfile(profile.id)?.groupId).toBeNull()
+    expect((await store.getProfile(profile.id))?.groupId).toBeNull()
     expect(JSON.parse(await fs.readFile(store.groupsFile, 'utf8'))).toEqual([])
   })
 

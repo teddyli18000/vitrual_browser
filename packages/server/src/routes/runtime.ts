@@ -9,7 +9,7 @@ import { profileIdOf, RUNTIME_ID } from './params.js'
 export function registerRuntimeRoutes(app: FastifyInstance, deps: RouteDeps): void {
   const { core } = deps
 
-  app.get(API_ROUTES.runtime, async () => ok(core.runtime.list()))
+  app.get(API_ROUTES.runtime, async () => ok(await core.runtime.list()))
 
   app.get(RUNTIME_ID, async request => {
     const profile = await findProfile(core, profileIdOf(request))
