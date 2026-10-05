@@ -66,8 +66,6 @@ const MIN_WIDTH = 800
 const MIN_HEIGHT = 600
 const WINDOW_WAIT_MS = 30_000
 /** The chrome between `outer*` and `inner*`: 0–120 px wide, 0–200 px tall is a normal browser. */
-const CHROME_MAX_WIDTH = 120
-const CHROME_MAX_HEIGHT = 200
 
 class WindowFailure extends Error {
   constructor(stage, reason, exitCode, hint, details) {
@@ -108,8 +106,96 @@ function refuse(stage, reason, exitCode, hint) {
 
 /* ------------------------------------------------------------------------------- arguments */
 
+import { checkViewportAgainstOs } from './lib/window-geometry.mjs'
+
+/* ------------------------------------------------------------------------------- fixtures */
+
+/**
+ * Fixtures for the geometry checks, so that "this assertion can fail" is one command rather than a
+ * claim that only CI can settle. The live path refuses headless by design and the development sandbox
+ * cannot spawn a browser, so without these the red run is unverifiable locally.
+ *
+ * A fixture shows only that an assertion is wired to the operands it names. It is not evidence about
+ * the engine — the headings below name which real run each set of numbers came from.
+ */
+const FIXTURES = {
+  /**
+   * The TARGET geometry for a 1024x720 work area, carrying the chrome measured in CI run
+   * 37266596880 (16x65). The CHROME is a measurement; the window is what the sizing policy produces
+   * for that work area - which is why this fixture passes by construction: it cannot fail while its
+   * operands are self-consistent, and it therefore carries no evidence. An earlier version of this
+   * comment claimed the window was that run's own, and that run's window was 1786x1311, which is the
+   * neighbouring fixture. The evidence in this file is `window-larger-than-screen`, `zero-viewport`
+   * and the unit test's REAL case, not this one.
+   */
+  good: {
+    os: { width: 1024, height: 700 },
+    inner: { width: 1008, height: 635 },
+    devicePixelRatio: 1,
+    workArea: { width: 1024, height: 720 },
+  },
+  /** The same run's actual window: larger than the work area, which is what the owner calls 满屏. */
+  'window-larger-than-screen': {
+    os: { width: 1786, height: 1311 },
+    inner: { width: 1770, height: 1246 },
+    devicePixelRatio: 1,
+    workArea: { width: 1024, height: 720 },
+  },
+  /** The defect the viewport guard exists for: a page that reports nothing. */
+  'zero-viewport': {
+    os: { width: 1786, height: 1311 },
+    inner: { width: 0, height: 0 },
+    devicePixelRatio: 1,
+    workArea: { width: 1920, height: 1040 },
+  },
+}
+
+/** Run the pure geometry checks against a fixture: exit 0 when they pass, 1 when one fails. */
+function runFixture(name) {
+  const fixture = FIXTURES[name]
+  if (!fixture) {
+    refuse(
+      'arguments',
+      `unknown fixture "${name}"`,
+      2,
+      `use --fixture <${Object.keys(FIXTURES).join('|')}>`,
+    )
+  }
+  const viewport = checkViewportAgainstOs({
+    osRect: fixture.os,
+    innerWidth: fixture.inner.width,
+    innerHeight: fixture.inner.height,
+    devicePixelRatio: fixture.devicePixelRatio,
+  })
+  const sizeFailures = []
+  if (fixture.os.width < MIN_WIDTH || fixture.os.height < MIN_HEIGHT) {
+    sizeFailures.push(
+      `the window is ${fixture.os.width}x${fixture.os.height}, below ${MIN_WIDTH}x${MIN_HEIGHT}`,
+    )
+  }
+  if (
+    fixture.os.width > fixture.workArea.width + WORK_AREA_TOLERANCE ||
+    fixture.os.height > fixture.workArea.height + WORK_AREA_TOLERANCE
+  ) {
+    sizeFailures.push(
+      `the window is ${fixture.os.width}x${fixture.os.height}, larger than the ` +
+        `${fixture.workArea.width}x${fixture.workArea.height} work area`,
+    )
+  }
+  const ok = viewport.ok && sizeFailures.length === 0
+  console.log(
+    `VFOX_WINDOW_FIXTURE ${JSON.stringify({
+      fixture: name,
+      ok,
+      viewport: { ok: viewport.ok, chrome: viewport.chrome, failures: viewport.failures },
+      size: { ok: sizeFailures.length === 0, failures: sizeFailures },
+    })}`,
+  )
+  process.exit(ok ? 0 : 1)
+}
 const argv = process.argv.slice(2)
 let screenshotPath = null
+let fixtureName = null
 for (let index = 0; index < argv.length; index += 1) {
   const argument = argv[index]
   if (argument === '--screenshot') {
@@ -118,9 +204,24 @@ for (let index = 0; index < argv.length; index += 1) {
     if (!screenshotPath) {
       refuse('arguments', '--screenshot needs a path', 2, 'use --screenshot <path.png>')
     }
+  } else if (argument === '--fixture') {
+    fixtureName = argv[index + 1] ?? null
+    index += 1
+    if (!fixtureName) {
+      refuse(
+        'arguments',
+        '--fixture needs a name',
+        2,
+        'use --fixture <good|window-larger-than-screen|zero-viewport>',
+      )
+    }
   } else {
     refuse('arguments', `unknown argument "${argument}"`, 2, 'usage: [--screenshot <path.png>]')
   }
+}
+
+if (fixtureName) {
+  runFixture(fixtureName)
 }
 
 /* ------------------------------------------------------------------ headless must be refused */
@@ -521,20 +622,25 @@ try {
     )
   }
 
-  // (b) chrome thickness: this is the derived value a detector reads.
-  if (
-    chrome.width < 0 ||
-    chrome.height < 0 ||
-    chrome.width > CHROME_MAX_WIDTH ||
-    chrome.height > CHROME_MAX_HEIGHT
-  ) {
+  // (b) the viewport, measured against the OS rectangle rather than against our own numbers.
+  //
+  // There used to be a check here comparing `outerWidth - innerWidth` against a 120px band. It was
+  // self-referential — both operands came from the page — and tighter than the OS-anchored band, so it
+  // could fail a profile whose spoofed outer size is simply smaller than the real window. Comparing our
+  // number to our number cannot catch a wrong allowance, which is the only failure this block exists
+  // for, so it is gone; the check below anchors on the one source that cannot move with our values.
+  const viewport = checkViewportAgainstOs({
+    osRect: { width, height },
+    innerWidth: view.innerWidth,
+    innerHeight: view.innerHeight,
+    devicePixelRatio: view.devicePixelRatio,
+  })
+  if (!viewport.ok) {
     fail(
       'geometry',
-      `implausible browser chrome: outer-inner is ${chrome.width}x${chrome.height}, expected ` +
-        `0–${CHROME_MAX_WIDTH} wide and 0–${CHROME_MAX_HEIGHT} tall ` +
-        `(outer ${view.outerWidth}x${view.outerHeight} vs inner ${view.innerWidth}x${view.innerHeight})`,
+      `the page viewport disagrees with the real window: ${viewport.failures.join('; ')}`,
       1,
-      'the spoofed window size and the real window disagree — a detector can see this',
+      'the reported viewport does not match the window the OS gave us — a detector can see this',
     )
   }
 

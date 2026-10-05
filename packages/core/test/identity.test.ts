@@ -1,6 +1,11 @@
 import { FingerprintSchema, type Profile, ProfileSchema } from '@vfox/shared'
 import { describe, expect, it } from 'vitest'
-import { createIdentity, identityInputs, identityIsCurrent } from '../src/identity.js'
+import {
+  comfortableWindow,
+  createIdentity,
+  identityInputs,
+  identityIsCurrent,
+} from '../src/identity.js'
 
 function profile(overrides: Record<string, unknown> = {}): Profile {
   return ProfileSchema.parse({
@@ -136,5 +141,59 @@ describe('identityIsCurrent', () => {
     expect(identityIsCurrent(profile({ identity: { ...identity, engine: null } }), '152.0.4')).toBe(
       true,
     )
+  })
+})
+
+describe('comfortable window sizing', () => {
+  it('lands on the numbers the policy decided', () => {
+    expect(comfortableWindow({ width: 1920, height: 1040 })).toEqual({
+      width: 1100,
+      height: 700,
+      x: 410,
+      y: 170,
+    })
+    expect(comfortableWindow({ width: 2560, height: 1400 })).toEqual({
+      width: 1408,
+      height: 868,
+      x: 576,
+      y: 266,
+    })
+  })
+
+  it('never exceeds the work area it is given, however small that is', () => {
+    // A CI-sized runner: the clamp floor does not fit, so fitting inside wins.
+    expect(comfortableWindow({ width: 1024, height: 720 })).toEqual({
+      width: 1024,
+      height: 700,
+      x: 0,
+      y: 10,
+    })
+  })
+
+  it('never exceeds the clamp, however large the display is', () => {
+    expect(comfortableWindow({ width: 7680, height: 4320 })).toEqual({
+      width: 1600,
+      height: 1000,
+      x: 3040,
+      y: 1660,
+    })
+  })
+
+  it('pins a window that fits the screen the profile claims', async () => {
+    const created = await createIdentity(
+      FingerprintSchema.parse({ os: 'windows', geoip: false }),
+      '152.0.4',
+    )
+    const screen = created.identity.fingerprint.screen as Record<string, unknown>
+
+    expect(Number(screen.outerWidth)).toBeLessThanOrEqual(Number(screen.width))
+    expect(Number(screen.outerHeight)).toBeLessThanOrEqual(Number(screen.height))
+    expect(Number(screen.outerWidth)).toBeLessThanOrEqual(1600)
+    expect(Number(screen.outerHeight)).toBeLessThanOrEqual(1000)
+    // The floor applies whenever the claimed display allows it, and never exceeds the display.
+    expect(Number(screen.outerWidth)).toBeGreaterThanOrEqual(Math.min(1100, Number(screen.width)))
+    expect(Number(screen.outerHeight)).toBeGreaterThanOrEqual(Math.min(700, Number(screen.height)))
+    expect(Number(screen.availWidth)).toBeGreaterThanOrEqual(Number(screen.outerWidth))
+    expect(Number(screen.availHeight)).toBeGreaterThanOrEqual(Number(screen.outerHeight))
   })
 })
