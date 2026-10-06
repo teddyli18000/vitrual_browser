@@ -241,21 +241,21 @@ export const launchCamoufox: BrowserLauncher = async ({
       // Give the engine a moment to exit AND FLUSH before the hard kill. Firefox writes cookies
       // through a WAL that is only checkpointed during a clean shutdown: killing it the instant
       // server.close() resolves can orphan the row the page just set inside the -wal side file,
-      // which the next launch then discards - the profile loses state that WAS written. The
-      // window is short because the engine is already closing; polling the process bounds it.
+      // which the next launch then discards - the profile loses state that WAS written. The window
+      // is short because the engine is already closing; the wait ends the moment it is gone.
+      //
+      // Two things this must NOT do, both learned the hard way:
+      //   - Do not decide liveness from `tasklist`'s exit code. Measured on this machine, it exits 1
+      //     for a process that IS alive (and the dev sandbox makes it print "Access denied" for any
+      //     other process at all), so an exit-code probe ends the wait on its first iteration and the
+      //     grace period silently becomes a no-op. `process.kill(pid, 0)` sends no signal and only
+      //     reports whether the pid exists - one call, no child process, no parsing.
+      //   - Do not block the event loop waiting. A synchronous wait here would freeze the embedded
+      //     API and its SSE stream for the whole window, on every stop.
       if (browserProcess && browserProcess.pid) {
         const deadline = Date.now() + 5_000
-        while (Date.now() < deadline) {
-          try {
-            const probe = spawnSync('tasklist', ['/FI', `PID eq ${String(browserProcess.pid)}`], {
-              stdio: 'ignore',
-              windowsHide: true,
-            })
-            if (probe.status !== 0) break
-          } catch {
-            break
-          }
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200)
+        while (Date.now() < deadline && isProcessAlive(browserProcess.pid)) {
+          await new Promise(resolve => setTimeout(resolve, 200))
         }
       }
       killProcessTree(pid, debug)
@@ -302,6 +302,23 @@ async function openStartUrl(
  * after a graceful close fails or times out; the product requires zero orphans unconditionally.
  * A dead pid makes `taskkill` exit non-zero, which is expected and ignored.
  */
+/**
+ * Is this pid still running?
+ *
+ * `process.kill(pid, 0)` sends signal 0, which is not a signal: it performs the permission and
+ * existence checks and reports them as an error. It is one syscall with no child process, no exit
+ * code to interpret and no parsing - unlike `tasklist`, whose exit code is 1 for a live process on
+ * this machine, which is how a liveness probe can end up always answering "gone".
+ */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function killProcessTree(pid: number | null, debug?: (message: string) => void): void {
   if (pid === null || process.platform !== 'win32') {
     return
