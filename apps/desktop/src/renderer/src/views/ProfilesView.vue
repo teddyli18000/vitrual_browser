@@ -47,6 +47,24 @@ const OS_KEY: Record<OsTarget, MessageKey> = {
 const batching = ref(false)
 const batchDone = ref(0)
 const batchTotal = ref(0)
+/**
+ * The relative-time clock, updated once a minute rather than on every render.
+ *
+ * `lastStarted` formats a timestamp per row per render. Without a shared clock every SSE event
+ * re-runs `formatRelative` for every row, which is the shape of a table that feels slow as the
+ * list grows. A minute is the granularity the display already had, so nothing readable changes.
+ */
+const now = ref(Date.now())
+let minuteTicker: ReturnType<typeof setInterval> | undefined
+function startMinuteTicker(): void {
+  minuteTicker ??= setInterval(() => {
+    now.value = Date.now()
+  }, 60_000)
+}
+function stopMinuteTicker(): void {
+  clearInterval(minuteTicker)
+  minuteTicker = undefined
+}
 
 const filtered = computed(() => {
   const term = search.value.trim().toLowerCase()
@@ -81,7 +99,7 @@ const groupOptions = computed(() => [
 ])
 
 function lastStarted(profile: Profile): string {
-  return formatRelative(prefs.lastStartedOf(profile.id, runtime.startedAt(profile.id)))
+  return formatRelative(prefs.lastStartedOf(profile.id, runtime.startedAt(profile.id)), now.value)
 }
 
 /* ------------------------------------------------------------------------ actions */
@@ -363,10 +381,12 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   void store.load()
   void kernel.refresh()
+  startMinuteTicker()
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
+  stopMinuteTicker()
 })
 </script>
 

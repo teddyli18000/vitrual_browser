@@ -26,6 +26,14 @@ rule, a trap, or neither? If neither, it does not go here.
   Vue 3 + Vite + Element Plus + Pinia, nothing else without justification.
 - **Portable.** All data lives in the product's own folder and the folder can be moved as a whole;
   nothing may persist an absolute path.
+- **File management - where our bytes may land.** The owner's rule, and it is absolute:
+  **installed**: no litter outside the product's own data directory - no temp files in %TEMP%, no
+  caches in the user profile, no logs scattered anywhere. **portable**: **everything we produce stays
+  inside the portable folder** - every byte we write, including engine downloads, browser profiles,
+  cookie databases, caches and logs, must be inside it, and writing anywhere else is a defect.
+  **portable independence**: the folder copied to any location must work - nothing persists an absolute
+  path, nothing lives in the registry, no machine state outside the folder. A feature that writes outside
+  the boundary is wrong even if it works, because it breaks the promise that the folder is the product.
 - **No secrets in the repo.** Proxy credentials live in the user's local profile store only.
 - **Window sizing is a ratio of the real work area**, with the ceiling relative to that work area. An
   absolute pixel ceiling is a bug: it becomes a small window on a large display.
