@@ -282,7 +282,9 @@ export async function runDurabilityPhase({
       )
       return { unread, checks }
     }
-    pass(`profile ${profileA.name}: cookies.sqlite is FREE after the stop - no surviving engine holds the directory`)
+    pass(
+      `profile ${profileA.name}: cookies.sqlite is FREE after the stop - no surviving engine holds the directory`,
+    )
     checks.push('cookies.sqlite free after the stop')
 
     if (breakMode === 'durability-userdata') {
