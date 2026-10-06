@@ -123,7 +123,21 @@ for (let index = 0; index < PROFILE_COUNT; index += 1) {
 const browser = await chromium.launch()
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
 const page = await context.newPage()
-await page.addInitScript(installBridge, bridgeData({ ...api, dataDir, dataMode: 'custom' }))
+// `startServer` returns `url`; the bridge wants `apiBase`. Spreading the server object gave the
+// renderer an undefined `apiBase`, so it could not reach its own API and the only symptom was the
+// table never appearing - the 30 s selector timeout that ui-bridge.mjs warns about in its own header.
+await page.addInitScript(
+  installBridge,
+  bridgeData({
+    apiBase: api.url,
+    token: api.token,
+    version: '0.0.0-perf',
+    platform: process.platform,
+    dataDir,
+    dataMode: 'custom',
+    serviceError: null,
+  }),
+)
 
 // Installed before the app boots, so nothing that happens during startup is missed.
 await page.addInitScript(() => {
@@ -142,6 +156,27 @@ await page.addInitScript(() => {
 })
 
 await page.goto(baseUrl, { waitUntil: 'load' })
+
+// Assert the bridge is there BEFORE waiting on anything it enables. Without this, a mistake in the
+// bridge data is indistinguishable from a slow renderer until the selector times out 30 s later.
+const bridge = await page.evaluate(() => ({
+  apiBase: window.vfox?.apiBase ?? null,
+  hasApi: typeof window.vfox?.api === 'function',
+}))
+if (!bridge.apiBase || !bridge.hasApi) {
+  console.error(
+    'perf-ui: the renderer has no working bridge (apiBase=' +
+      String(bridge.apiBase) +
+      ', api=' +
+      String(bridge.hasApi) +
+      '). The page cannot reach its own API, so nothing will render. Check the bridgeData fields.',
+  )
+  await browser.close()
+  await new Promise(done => staticServer.close(done))
+  await api.close()
+  process.exit(1)
+}
+
 await page.locator('.el-table__row').first().waitFor({ timeout: 30_000 })
 const rows = await page.locator('.el-table__row').count()
 
