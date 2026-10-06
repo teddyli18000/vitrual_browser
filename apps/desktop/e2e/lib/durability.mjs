@@ -131,6 +131,27 @@ async function cookieRowOnDisk(userdata, timeoutMs = 5000) {
 }
 
 /**
+ * Can this process still open the profile's `cookies.sqlite` for writing?
+ *
+ * The one stop-liveness signal that does not depend on CIM. A live engine holds its profile's
+ * databases open, so an exclusive open failing with EBUSY/EPERM means AN ENGINE IS STILL RUNNING
+ * against this profile directory even though its window may be gone — which is exactly how a
+ * relaunch can come up against a directory the old process still owns. Returned as a string so
+ * the caller can print the OS error rather than a bare boolean.
+ */
+async function cookiesDbIsFree(userdata) {
+  const file = path.join(userdata, 'cookies.sqlite')
+  try {
+    const { open } = await import('node:fs/promises')
+    const handle = await open(file, 'r+')
+    await handle.close()
+    return 'free'
+  } catch (error) {
+    return `locked: ${error.code ?? error.message}`
+  }
+}
+
+/**
  * Run the phase against the runner's own module-scope helpers: `api`, `profiles`, `dataDir`,
  * `connect`, `user32` and the `pass`/`fail`/`note` reporters.
  *
@@ -248,6 +269,21 @@ export async function runDurabilityPhase({
     await api(`/api/v1/profiles/${profileA.id}/stop`, { method: 'POST', body: '{}' })
     await checkNoEngineProcesses(`after stopping ${profileA.name}`)
 
+    // STOP-LIVENESS, the check that does not need CIM. A live engine holds its profile's
+    // databases open; if cookies.sqlite is still locked after the stop, the process tree was
+    // NOT killed, and the relaunch below would race the survivor for the same directory.
+    // This is the failure that looks like "state was lost" while the state is fine on disk.
+    const lockState = await cookiesDbIsFree(userdataDir(profileA.id))
+    if (lockState !== 'free') {
+      fail(
+        `after stopping ${profileA.name}: the profile's cookies.sqlite is still ${lockState} — ` +
+          'an engine process survived the stop and still owns the profile directory. The relaunch ' +
+          'would race it, which is how a profile appears to lose its state without losing any data.',
+      )
+      return { unread, checks }
+    }
+    checks.push('cookies.sqlite free after the stop')
+
     if (breakMode === 'durability-userdata') {
       const target = userdataDir(profileA.id)
       rmSync(target, { recursive: true, force: true })
@@ -263,11 +299,17 @@ export async function runDurabilityPhase({
     const secondEndpoint = endpointOf(relaunched)
     if (!secondEndpoint) {
       fail(
-        `profile ${profileA.name}: the relaunch returned no wsEndpoint — ` +
-          `the API answered ${JSON.stringify(relaunched).slice(0, 300)}`,
+        `profile ${profileA.name}: the relaunch returned no wsEndpoint — the API answered ` +
+          `${JSON.stringify(relaunched).slice(0, 300)}`,
       )
       return { unread, checks }
     }
+    // Two different endpoints = a genuinely new engine instance. The same endpoint would mean the
+    // stop never happened at all, which the lock check above should already have caught.
+    note(
+      `relaunch: first endpoint ${JSON.stringify(wsEndpoint)} vs second ${JSON.stringify(secondEndpoint)}` +
+        `${secondEndpoint === wsEndpoint ? ' — IDENTICAL, the stop did not take effect' : ''}`,
+    )
 
     browser = await connect(secondEndpoint)
     let after
