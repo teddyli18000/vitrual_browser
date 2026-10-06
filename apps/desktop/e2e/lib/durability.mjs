@@ -39,6 +39,7 @@
  */
 
 import { rmSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
 
@@ -128,6 +129,29 @@ async function cookieRowOnDisk(userdata, timeoutMs = 5000) {
     await new Promise(resolve => setTimeout(resolve, 250))
   }
   return lastError ? `unknown: ${lastError.message}` : false
+}
+
+/**
+ * A stamp of the profile directory, so a relaunch can be shown to have USED it or not.
+ *
+ * The gap this closes: the lock check proves nothing holds `cookies.sqlite`, and the endpoints differ,
+ * so the relaunch is a new engine - but nothing so far proves the new engine opened THIS directory.
+ * Firefox touches `prefs.js`, `times.json` and its own `parent.lock` whenever it starts against a
+ * profile, so a stamp taken before and after the relaunch answers the only question left: did the
+ * second engine use this directory, or a different one?
+ */
+async function profileDirStamp(userdata) {
+  const files = ['cookies.sqlite', 'prefs.js', 'times.json', 'parent.lock', 'compatibility.ini']
+  const stamp = {}
+  for (const name of files) {
+    try {
+      const info = await stat(path.join(userdata, name))
+      stamp[name] = Math.round(info.mtimeMs)
+    } catch {
+      stamp[name] = null
+    }
+  }
+  return stamp
 }
 
 /**
@@ -295,6 +319,9 @@ export async function runDurabilityPhase({
       )
     }
 
+    const stampBefore = await profileDirStamp(userdataDir(profileA.id))
+    note(`profile directory before the relaunch: ${JSON.stringify(stampBefore)}`)
+
     const relaunched = await api(`/api/v1/profiles/${profileA.id}/launch`, {
       method: 'POST',
       body: '{}',
@@ -323,6 +350,27 @@ export async function runDurabilityPhase({
     } finally {
       await browser.close()
     }
+
+    // Did the second engine actually open this profile directory? Firefox writes these on startup.
+    const stampAfter = await profileDirStamp(userdataDir(profileA.id))
+    const touched = Object.keys(stampAfter).filter(
+      name => stampAfter[name] !== null && stampAfter[name] !== stampBefore[name],
+    )
+    note(`profile directory after the relaunch: ${JSON.stringify(stampAfter)}`)
+    if (touched.length === 0) {
+      note(
+        'NO file in the profile directory changed during the relaunch: the second engine never opened ' +
+          'this directory, so it launched against a different one. The state was never lost — it is in ' +
+          'a directory the relaunched browser does not use.',
+      )
+    } else {
+      note(
+        `the relaunch touched: ${touched.join(', ')} — the second engine DID open this directory`,
+      )
+    }
+    checks.push(
+      touched.length === 0 ? 'relaunch used a DIFFERENT directory' : 'relaunch used this directory',
+    )
 
     const lost = []
     if (!after.cookie) {
