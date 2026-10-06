@@ -379,8 +379,35 @@ export async function runDurabilityPhase({
     if (onDisk === true) {
       checks.push('cookie row on disk before the stop')
       // While the row is known to be there: is it a SESSION cookie? Firefox deletes those on a clean
-      // shutdown, which is exactly when this row disappears.
-      note(`cookie row columns before the stop: ${await cookieRowDetail(userdataDir(profileA.id))}`)
+      // shutdown, which is exactly when this row disappears - so if the browser stored ours as
+      // session-only, everything below would be blaming the product for a cookie it was always going
+      // to delete. This asserts the INPUT before it judges the outcome, which is the difference between
+      // a phase that reports a real defect and one that manufactures a false one.
+      const rowDetail = await cookieRowDetail(userdataDir(profileA.id))
+      note(`cookie row columns before the stop: ${rowDetail}`)
+      if (rowDetail !== 'no row' && !String(rowDetail).startsWith('unreadable')) {
+        const detail = JSON.parse(rowDetail)
+        if (detail.isSessionCookie) {
+          fail(
+            `the browser stored ${COOKIE} as a SESSION cookie (expiry 0) although the phase set a ` +
+              `${COOKIE_EXPIRY_SECONDS}s max-age on the page and an expires on context.addCookies. ` +
+              'Firefox deletes session cookies at shutdown, so this one could never survive the stop - ' +
+              'and the verdict below would be about the test, not the product. Either the browser is ' +
+              'dropping our expiry or this phase sets the cookie wrongly; until that is settled, nothing ' +
+              'here says a profile loses its state.',
+          )
+          return { unread, checks }
+        }
+        if (
+          detail.expiresInSeconds !== null &&
+          detail.expiresInSeconds < COOKIE_EXPIRY_SECONDS / 2
+        ) {
+          note(
+            `the stored expiry is only ${detail.expiresInSeconds}s away, not the ${COOKIE_EXPIRY_SECONDS}s ` +
+              'the phase asked for - worth knowing before reading anything into a later disappearance.',
+          )
+        }
+      }
       pass(`profile ${profileA.name}: the cookie row is already in cookies.sqlite before the stop`)
     } else if (onDisk === false) {
       note(
