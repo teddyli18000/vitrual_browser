@@ -93,7 +93,16 @@ async function startOrigin() {
   return { server, setter: `${base}/set`, reader: `${base}/` }
 }
 
-/** What the browser holds for this origin: the document's view, plus the context's cookie store. */
+/**
+ * What the profile's own store holds for the reader origin, as the page sees it and as the jar does.
+ *
+ * Used by the ISOLATION check, which asks whether profile B can see profile A's state: `cookie` is the
+ * Playwright cookie entry (truthy when the origin has one) and `document.storage` is the localStorage
+ * value. The post-relaunch check does NOT use this - it reads the page directly, because it compares
+ * against the strings the seeding step produced, and this shape is not those strings. That mismatch is
+ * what made the phase throw instead of reporting a verdict; the two readers are deliberately separate
+ * now, and each says which shape it returns.
+ */
 async function readState(page, reader) {
   await page.goto(reader, { waitUntil: 'domcontentloaded' })
   const document = await page.evaluate(READ_DOCUMENT_STATE)
@@ -362,11 +371,20 @@ export async function runDurabilityPhase({
     let after
     // Read inside the session: asking a closed browser for its cookies can only ever answer "none",
     // which would be a check that cannot pass.
+    //
+    // AND READ IT IN THE SHAPE THE ASSERTIONS EXPECT. `readState` returns `{ document, cookie }` where
+    // `cookie` is the Playwright cookie object - not the string `document.cookie` produces - so the
+    // assertions below, which ask `after.cookie.includes(...)` and `after.storage`, were reading fields
+    // that do not exist. On this code they do not fail, they throw: the phase died with
+    // "Cannot read properties of undefined (reading 'includes')" instead of reporting a verdict, which
+    // means it had never produced a valid post-relaunch result at all. This reads the page exactly the
+    // way the seeding step does, and takes the jar separately for the API-set cookie.
     let apiSurvived = false
     try {
       const page = await browser.newPage()
       // The READER route: it sets nothing, so anything observed here came from the profile's own store.
-      after = await readState(page, reader)
+      await page.goto(reader, { waitUntil: 'domcontentloaded' })
+      after = await page.evaluate(READ_DOCUMENT_STATE)
       const jar = await page.context().cookies(reader)
       apiSurvived = jar.some(entry => entry.name === API_COOKIE)
     } finally {
