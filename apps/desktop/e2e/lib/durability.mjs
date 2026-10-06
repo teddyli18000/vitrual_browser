@@ -372,6 +372,27 @@ export async function runDurabilityPhase({
       touched.length === 0 ? 'relaunch used a DIFFERENT directory' : 'relaunch used this directory',
     )
 
+    // Is the row STILL on disk after the relaunch? This separates the two remaining explanations:
+    // the browser opened the profile but did not read that database (row present), or something
+    // rewrote or cleared the database on startup (row gone). The directory stamp above already
+    // proved the engine opened this profile, so the answer decides whether the defect is a read
+    // path or an initialisation step.
+    const rowAfterRelaunch = await cookieRowOnDisk(userdataDir(profileA.id), 2000)
+    note(
+      `cookie row in cookies.sqlite after the relaunch: ${
+        rowAfterRelaunch === true
+          ? 'PRESENT'
+          : rowAfterRelaunch === false
+            ? 'GONE'
+            : rowAfterRelaunch
+      }`,
+    )
+    checks.push(
+      rowAfterRelaunch === true
+        ? 'the row is still on disk after the relaunch'
+        : 'the row is gone from disk after the relaunch',
+    )
+
     const lost = []
     if (!after.cookie) {
       lost.push(
