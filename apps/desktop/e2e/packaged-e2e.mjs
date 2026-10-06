@@ -42,6 +42,7 @@ import {
   describeArtifact,
 } from './lib/artifact.mjs'
 import { runDurabilityPhase } from './lib/durability.mjs'
+import { reportIdleCost } from './lib/idle-cost.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..', '..', '..')
@@ -685,6 +686,16 @@ executed.push(
 )
 
 // ------------------------------------------------------- 7. state survives, nothing left behind
+/* -- 6c. what the running engines cost while nobody is touching them ------------------------- */
+
+// The other half of the machine. Every other measurement in this file is about OUR work - the
+// renderer, the store, the event stream - and a profile is a real Firefox. A user who keeps two or
+// three open is running two or three browsers beside the Electron shell, and if the sluggishness they
+// report lives there, no renderer change can reach it. Reported, never asserted: this is a shared CI
+// runner and the engine's idle cost is the engine's, so failing a build over it would be failing our
+// code for someone else's behaviour. The number is here to be compared against a user's report.
+await reportIdleCost({ note, log, profilesRunning: profiles.length })
+
 /* -- 6b. a profile keeps its state across a restart, and does not share it ---------------------- */
 
 step('6b. a profile keeps its cookies and localStorage across a stop and relaunch')
