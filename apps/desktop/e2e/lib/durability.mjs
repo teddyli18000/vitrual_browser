@@ -143,6 +143,48 @@ async function cookieRowOnDisk(userdata, timeoutMs = 5000) {
 }
 
 /**
+ * The row's own columns, not just whether it exists.
+ *
+ * Where this comes from: the row is PRESENT before the stop (the phase's own check, with its five-second
+ * budget) and GONE after it - measured by enumerating the databases at both points. So the stop is what
+ * removes it, and Firefox deletes SESSION cookies on a clean shutdown. If the browser stored this cookie
+ * with `expiry = 0` despite the `max-age` and the `expires` we set, that single fact would explain the
+ * whole contradiction: CI loses it, and the owner's machine keeps 11 persistent cookies, because theirs
+ * are persistent and ours would not be.
+ *
+ * This reads the columns that decide it. Called BEFORE the stop, while the row still exists.
+ */
+async function cookieRowDetail(userdata) {
+  const file = path.join(userdata, 'cookies.sqlite')
+  try {
+    const { DatabaseSync } = await import('node:sqlite')
+    const database = new DatabaseSync(file, { readOnly: true })
+    try {
+      const row = database
+        .prepare(
+          'SELECT name, host, path, expiry, isSecure, isHttpOnly, originAttributes FROM moz_cookies WHERE name = ?',
+        )
+        .get(COOKIE)
+      if (!row) return 'no row'
+      const expiry = Number(row.expiry)
+      return JSON.stringify({
+        host: row.host,
+        path: row.path,
+        expiry,
+        expiryLooksLike: expiry > 1e12 ? 'milliseconds' : 'seconds',
+        // The two answers this exists for.
+        isSessionCookie: expiry === 0,
+        expiresInSeconds: expiry > 0 ? Math.round((expiry - Date.now()) / 1000) : null,
+      })
+    } finally {
+      database.close()
+    }
+  } catch (error) {
+    return `unreadable: ${error.message}`
+  }
+}
+
+/**
  * A stamp of the profile directory, so a relaunch can be shown to have USED it or not.
  *
  * The gap this closes: the lock check proves nothing holds `cookies.sqlite`, and the endpoints differ,
@@ -336,6 +378,9 @@ export async function runDurabilityPhase({
     const onDisk = await cookieRowOnDisk(userdataDir(profileA.id))
     if (onDisk === true) {
       checks.push('cookie row on disk before the stop')
+      // While the row is known to be there: is it a SESSION cookie? Firefox deletes those on a clean
+      // shutdown, which is exactly when this row disappears.
+      note(`cookie row columns before the stop: ${await cookieRowDetail(userdataDir(profileA.id))}`)
       pass(`profile ${profileA.name}: the cookie row is already in cookies.sqlite before the stop`)
     } else if (onDisk === false) {
       note(
