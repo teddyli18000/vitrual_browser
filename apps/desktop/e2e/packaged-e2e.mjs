@@ -701,6 +701,9 @@ const durability = await runDurabilityPhase({
   fail,
   note,
 })
+if (durability.checks.length > 0) {
+  for (const check of durability.checks) pass(`durability check: ${check}`)
+}
 if (durability.unread.length > 0) {
   // A phase that proved nothing must be visible in the summary, not only inside the log.
   note(
