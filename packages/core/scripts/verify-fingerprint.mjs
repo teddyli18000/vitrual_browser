@@ -1040,7 +1040,7 @@ async function readWorkerSurface(page) {
       URL.revokeObjectURL(url)
       return result
     } catch (error) {
-      return { error: String(error && error.message ? error.message : error) }
+      return { error: String(error?.message ? error.message : error) }
     }
   })
 }
