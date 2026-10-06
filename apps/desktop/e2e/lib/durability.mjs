@@ -230,7 +230,10 @@ async function cookieDatabases(userdata) {
       if (entry.isDirectory()) {
         await walk(full)
       } else if (entry.name === 'cookies.sqlite') {
-        const row = await cookieRowOnDisk(dir, 500)
+        // The same budget as the phase's own check. A shorter one reports GONE for a row that is
+        // merely slow to appear, because this function polls - which is how a measurement artefact
+        // almost became a finding.
+        const row = await cookieRowOnDisk(dir, 5000)
         found.push({ path: full, row: row === true ? 'PRESENT' : row === false ? 'GONE' : row })
       }
     }
@@ -451,6 +454,21 @@ export async function runDurabilityPhase({
 
     const dbsBefore = await cookieDatabases(userdataDir(profileA.id))
     note(`cookie databases before the relaunch: ${JSON.stringify(dbsBefore)}`)
+
+    // The comparison that has been missing: the row was found before the stop with a five-second
+    // budget, and nothing has ever asked whether it is still there immediately after - only whether the
+    // database is writable. Same budget, same function, so the two answers mean something together.
+    const rowAfterStop = await cookieRowOnDisk(userdataDir(profileA.id), 5000)
+    note(
+      `cookie row in cookies.sqlite after the stop: ${
+        rowAfterStop === true ? 'PRESENT' : rowAfterStop === false ? 'GONE' : rowAfterStop
+      }`,
+    )
+    checks.push(
+      rowAfterStop === true
+        ? 'the row is still on disk after the stop - the store keeps it, the relaunch loses it'
+        : 'the row is gone from disk after the stop - something removed it on the way out',
+    )
 
     const stampBefore = await profileDirStamp(userdataDir(profileA.id))
     note(`profile directory before the relaunch: ${JSON.stringify(stampBefore)}`)
