@@ -62,9 +62,11 @@ rule, a trap, or neither? If neither, it does not go here.
 6. **Verify the artifact that ships, not the directory that was built.** v0.3.4 passed every check
    against `release/win-unpacked` and failed every install on the owner's machine, because that directory
    let module resolution walk up into this repository's own `node_modules`. *Current state: `ci.yml` and
-   `release.yml` still run the packaged suite against `release/win-unpacked`; the zip and installer are
-   built, hashed and published without ever being extracted and run. Closing that is task-17 — until it
-   lands, this rule is a target, not a fact.*
+   `release.yml` still run the packaged suite against `release/win-unpacked`, so the zip and installer
+   are built, hashed and published without ever being extracted and run in CI. Closing that is task-17.
+   The rule has been executed once by hand, against the owner's own download of v0.3.6: the four
+   packaging guards pass on the extracted portable folder, and the resolution guard scanned 1153 files
+   there - which also disproved a claim that it was structurally blind. See the trap below.*
 7. Releases are cut from a green `main`, one at a time, never batched.
 8. Before pushing a branch assembled from the shared working tree, check **both** directions:
    ```powershell
@@ -176,6 +178,36 @@ rule, a trap, or neither? If neither, it does not go here.
   `(none)` when none is: same code, two environments, two outputs. Pin `CAMOUFOX_INSTALL_DIR` at an empty
   directory (or a fixture engine directory) inside the case, and assert the empty state *and* the table
   shape in cases the test creates itself.
+
+### Checks that cannot fail
+
+**This is the defect class this repository keeps rediscovering, and every instance looked green.** A
+check that cannot fail is worse than no check, because it is believed. Five instances, in the order they
+were found:
+
+- the packaging guard that scanned **zero modules** and returned green (its own comment records the
+  earlier version with the same symptom);
+- a linter that could not run where the code was written - biome refuses a path outside its root, and the
+  worktree had no `node_modules` - so "lint clean" was a claim nobody had tested;
+- a cookie comparison that ran **after `browser.close()`**, where asking a closed browser for its
+  cookies can only ever answer "none";
+- a liveness probe built on `tasklist`'s exit code, which is **1 for a process that is alive** on this
+  machine, so a five-second grace period ended on its first iteration and never waited;
+- a latency measurement that waited for a UI state the row was **already in**, so it reported about zero
+  milliseconds and could not fail.
+
+**What they have in common is not carelessness, it is the absence of a question: "what would this print
+if the thing it checks were broken?"** Ask it before shipping any assertion, and prove the answer by
+running it red. Two habits that follow:
+
+1. **Assert your inputs before your verdict.** A guard should say how many files it walked, how many
+   modules it loaded, how many targets it reached - and refuse to report a result when that count is
+   zero or implausibly small. A reduced fixture then reports "I walked 2 files, which is not the
+   artifact" instead of a green tick. The resolution guard's `checked: 0` was exactly this, and the
+   number that proved the guard fine was `checked: 1153` on a complete install.
+2. **Print the measurement even when it passes.** A verdict alone hides a trend; the numbers make a
+   regression visible before it becomes a failure, and they are what a reviewer can check without
+   re-running anything.
 
 ### Packaging and release
 
