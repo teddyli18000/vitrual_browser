@@ -372,19 +372,16 @@ export async function runDurabilityPhase({
     // Read inside the session: asking a closed browser for its cookies can only ever answer "none",
     // which would be a check that cannot pass.
     //
-    // AND READ IT IN THE SHAPE THE ASSERTIONS EXPECT. `readState` returns `{ document, cookie }` where
-    // `cookie` is the Playwright cookie object - not the string `document.cookie` produces - so the
-    // assertions below, which ask `after.cookie.includes(...)` and `after.storage`, were reading fields
-    // that do not exist. On this code they do not fail, they throw: the phase died with
-    // "Cannot read properties of undefined (reading 'includes')" instead of reporting a verdict, which
-    // means it had never produced a valid post-relaunch result at all. This reads the page exactly the
-    // way the seeding step does, and takes the jar separately for the API-set cookie.
+
     let apiSurvived = false
     try {
       const page = await browser.newPage()
       // The READER route: it sets nothing, so anything observed here came from the profile's own store.
-      await page.goto(reader, { waitUntil: 'domcontentloaded' })
-      after = await page.evaluate(READ_DOCUMENT_STATE)
+      // `readState` is the shape the checks below were written against: `after.cookie` is the
+      // Playwright cookie ENTRY (they ask it for `.expires`) and `after.document.cookie` is the string.
+      // Reading the page directly here - as an earlier attempt did - gives a string in `cookie` and no
+      // `document` at all, which is how a check ends up reading fields that are not there.
+      after = await readState(page, reader)
       const jar = await page.context().cookies(reader)
       apiSurvived = jar.some(entry => entry.name === API_COOKIE)
     } finally {
@@ -396,7 +393,7 @@ export async function runDurabilityPhase({
     // persisted at all, while only the page-set one gone means the store works and something about a
     // cookie set by a page on a plain-HTTP loopback origin is what does not survive.
     note(
-      `after the relaunch: page-set cookie ${after.cookie.includes(COOKIE) ? 'PRESENT' : 'GONE'}, ` +
+      `after the relaunch: page-set cookie ${after.document.cookie.includes(COOKIE) ? 'PRESENT' : 'GONE'}, ` +
         `API-set cookie ${apiSurvived ? 'PRESENT' : 'GONE'}`,
     )
     checks.push(
