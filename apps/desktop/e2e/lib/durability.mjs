@@ -39,7 +39,7 @@
  */
 
 import { rmSync } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
 
@@ -163,6 +163,38 @@ async function profileDirStamp(userdata) {
     }
   }
   return stamp
+}
+
+/**
+ * Every cookie database under the profile, with whether our row is in it.
+ *
+ * The root `cookies.sqlite` is where Firefox keeps them - verified on a real profile on the owner's
+ * machine - and the phase polls exactly that file. But two cookies are now gone across a relaunch while
+ * the engine demonstrably opens this profile, and on the owner's machine cookies DO persist, so the
+ * remaining question is whether we are looking at the database the engine uses. A second file under a
+ * subdirectory would answer it outright.
+ */
+async function cookieDatabases(userdata) {
+  const found = []
+  const walk = async dir => {
+    let entries = []
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(full)
+      } else if (entry.name === 'cookies.sqlite') {
+        const row = await cookieRowOnDisk(dir, 500)
+        found.push({ path: full, row: row === true ? 'PRESENT' : row === false ? 'GONE' : row })
+      }
+    }
+  }
+  await walk(userdata)
+  return found
 }
 
 /**
@@ -345,6 +377,9 @@ export async function runDurabilityPhase({
       )
     }
 
+    const dbsBefore = await cookieDatabases(userdataDir(profileA.id))
+    note(`cookie databases before the relaunch: ${JSON.stringify(dbsBefore)}`)
+
     const stampBefore = await profileDirStamp(userdataDir(profileA.id))
     note(`profile directory before the relaunch: ${JSON.stringify(stampBefore)}`)
 
@@ -443,6 +478,15 @@ export async function runDurabilityPhase({
         ? 'the row is still on disk after the relaunch'
         : 'the row is gone from disk after the relaunch',
     )
+
+    const dbsAfter = await cookieDatabases(userdataDir(profileA.id))
+    note(`cookie databases after the relaunch: ${JSON.stringify(dbsAfter)}`)
+    if (dbsAfter.length > 1) {
+      note(
+        `MORE THAN ONE cookie database exists under the profile (${dbsAfter.length}): the phase polls the \
+one at the root, and if the engine uses another, every verdict here has been about the wrong file.`,
+      )
+    }
 
     const lost = []
     if (!after.cookie) {
