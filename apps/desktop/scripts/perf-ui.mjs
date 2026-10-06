@@ -174,25 +174,51 @@ if ((await search.count()) > 0) {
 /* ------------------------------------------- B. event-to-DOM latency, through the real SSE stream */
 
 /**
- * Stop a profile that is already stopped. It is a real transition on the server (`stopping`/`stopped`
- * are pushed like any other), it spawns no browser, and it needs no engine - which is what makes this
- * measurable in a job that has neither.
+ * Measure a transition that ACTUALLY CHANGES the row.
+ *
+ * The first version of this stopped an already-stopped profile and waited for `.status.stopped`. The
+ * server does push an event for that - the registry emits on every set - but the row was ALREADY
+ * showing stopped, so the selector matched instantly, the number was always about zero and the check
+ * could not fail. That is the class of defect this repository keeps rediscovering, so the measurement
+ * now uses a launch (stopped -> starting -> error, which spawns nothing when no engine is installed),
+ * refuses to count a wait that was already satisfied, and skips itself loudly if an engine IS present,
+ * because then a launch would start a real browser.
  */
-const firstRow = page.locator('.el-table__row').first()
-const profileId = await firstRow.getAttribute('data-row-key').catch(() => null)
+const kernel = await call(API_ROUTES.kernel).catch(() => null)
+const engineInstalled = Boolean(kernel?.data?.installed)
 
-if (profileId) {
-  const started = Date.now()
-  await call(API_ROUTES.stopProfile.replace(':id', profileId), { method: 'POST', body: '{}' })
-  await page
-    .locator(`.el-table__row[data-row-key="${profileId}"] .status.stopped`)
-    .waitFor({ timeout: 15_000 })
-    .catch(() => {})
-  record('event to DOM, stop transition (ms)', Date.now() - started, MAX_EVENT_TO_DOM_MS)
+if (engineInstalled) {
+  console.log('perf-ui: an engine is installed, so the launch transition was skipped')
 } else {
-  console.log(
-    'perf-ui: the table exposes no data-row-key, so the event-to-DOM measurement was skipped',
-  )
+  const firstRow = page.locator('.el-table__row').first()
+  const profileId = await firstRow.getAttribute('data-row-key').catch(() => null)
+
+  if (!profileId) {
+    failures.push(
+      'the table exposes no data-row-key, so the event-to-DOM measurement could not run',
+    )
+  } else {
+    const rowSelector = `.el-table__row[data-row-key="${profileId}"]`
+    const before = await page.locator(`${rowSelector} .status`).first().getAttribute('class')
+    const started = Date.now()
+    await call(API_ROUTES.launchProfile(profileId), { method: 'POST', body: '{}' })
+    await page
+      .locator(`${rowSelector} .status.error`)
+      .waitFor({ timeout: 15_000 })
+      .catch(() => {})
+    const elapsed = Date.now() - started
+    const after = await page.locator(`${rowSelector} .status`).first().getAttribute('class')
+
+    // The guard against this degrading back into a check that cannot fail: the row must not already
+    // have been in the state the wait was for.
+    if ((before ?? '').includes('error') && before === after) {
+      failures.push(
+        'the event-to-DOM measurement waited for a state the row was already in - it measured nothing',
+      )
+    } else {
+      record('event to DOM, launch transition (ms)', elapsed, MAX_EVENT_TO_DOM_MS)
+    }
+  }
 }
 
 /* ------------------------------------------------------------------------ the verdict */
