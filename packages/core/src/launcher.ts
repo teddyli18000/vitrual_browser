@@ -237,9 +237,28 @@ export const launchCamoufox: BrowserLauncher = async ({
         await server.close()
       } catch (error) {
         warn(`profile ${profile.id}: browser server did not close cleanly: ${errorMessage(error)}`)
-      } finally {
-        killProcessTree(pid, debug)
       }
+      // Give the engine a moment to exit AND FLUSH before the hard kill. Firefox writes cookies
+      // through a WAL that is only checkpointed during a clean shutdown: killing it the instant
+      // server.close() resolves can orphan the row the page just set inside the -wal side file,
+      // which the next launch then discards - the profile loses state that WAS written. The
+      // window is short because the engine is already closing; polling the process bounds it.
+      if (browserProcess && browserProcess.pid) {
+        const deadline = Date.now() + 5_000
+        while (Date.now() < deadline) {
+          try {
+            const probe = spawnSync('tasklist', ['/FI', `PID eq ${String(browserProcess.pid)}`], {
+              stdio: 'ignore',
+              windowsHide: true,
+            })
+            if (probe.status !== 0) break
+          } catch {
+            break
+          }
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200)
+        }
+      }
+      killProcessTree(pid, debug)
     },
     onExit(listener) {
       exitListener = listener
