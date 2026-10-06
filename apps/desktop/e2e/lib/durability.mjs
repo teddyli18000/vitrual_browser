@@ -45,6 +45,8 @@ import path from 'node:path'
 
 const COOKIE = 'vfox_durable'
 const STORAGE_KEY = 'vfox_durable'
+/** Written through `context.addCookies`, so the two persistence paths can be told apart. */
+const API_COOKIE = 'vfox_durable_api'
 /** A day out, so the value that comes back had to be written to the profile's cookies.sqlite. */
 const COOKIE_EXPIRY_SECONDS = 86_400
 
@@ -258,6 +260,21 @@ export async function runDurabilityPhase({
       // The SETTER route, once. Every later navigation uses the reader.
       await page.goto(setter, { waitUntil: 'domcontentloaded' })
       seeded = await page.evaluate(READ_DOCUMENT_STATE)
+
+      // A SECOND cookie through the browser's own API, for the same origin and the same expiry.
+      // It exists to separate two very different failures that currently look identical: if BOTH
+      // cookies are gone after the relaunch, the profile's cookie store is not being persisted at
+      // all. If only the PAGE-set one is gone, the store works and something about setting a cookie
+      // from a page on a plain-HTTP loopback origin is what does not survive - a property of the
+      // engine or of the origin, not of the product's promise that a profile keeps its state.
+      await page.context().addCookies([
+        {
+          name: API_COOKIE,
+          value: 'durable-api',
+          url: reader,
+          expires: Math.floor(Date.now() / 1000) + COOKIE_EXPIRY_SECONDS,
+        },
+      ])
     } finally {
       await browser.close()
     }
@@ -343,13 +360,32 @@ export async function runDurabilityPhase({
 
     browser = await connect(secondEndpoint)
     let after
+    // Read inside the session: asking a closed browser for its cookies can only ever answer "none",
+    // which would be a check that cannot pass.
+    let apiSurvived = false
     try {
       const page = await browser.newPage()
       // The READER route: it sets nothing, so anything observed here came from the profile's own store.
       after = await readState(page, reader)
+      const jar = await page.context().cookies(reader)
+      apiSurvived = jar.some(entry => entry.name === API_COOKIE)
     } finally {
       await browser.close()
     }
+
+    // Which persistence path survived? The two answers mean different things and the combined failure
+    // message above cannot express the difference: both gone means the profile's cookie store is not
+    // persisted at all, while only the page-set one gone means the store works and something about a
+    // cookie set by a page on a plain-HTTP loopback origin is what does not survive.
+    note(
+      `after the relaunch: page-set cookie ${after.cookie.includes(COOKIE) ? 'PRESENT' : 'GONE'}, ` +
+        `API-set cookie ${apiSurvived ? 'PRESENT' : 'GONE'}`,
+    )
+    checks.push(
+      apiSurvived
+        ? 'the API-set cookie survived - the store persists, the page-set one is the difference'
+        : 'neither cookie survived - the profile cookie store is not being persisted',
+    )
 
     // Did the second engine actually open this profile directory? Firefox writes these on startup.
     const stampAfter = await profileDirStamp(userdataDir(profileA.id))
