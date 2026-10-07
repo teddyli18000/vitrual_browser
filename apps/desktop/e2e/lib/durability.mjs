@@ -175,6 +175,11 @@ async function cookieRowDetail(userdata) {
       const expiry = Number(row.expiry)
       return JSON.stringify({
         totalRows,
+        // The two columns that decide whether the scheme hypothesis is even live. The owner's eleven
+        // surviving cookies are all schemeMap = 2, and loopback is a secure context in Firefox - so if
+        // this reads 2 as well, there is no difference to explain.
+        schemeMap: row.schemeMap,
+        originAttributes: row.originAttributes,
         host: row.host,
         path: row.path,
         expiry,
@@ -222,6 +227,39 @@ async function profileDirStamp(userdata) {
  * checkpoint, so an empty -wal beside a missing row would itself be the finding. Sizes alone cannot say
  * which file held the row, but they can say whether there was anything in the -wal at all.
  */
+/**
+ * The shutdown-sanitisation preferences this profile carries, if any.
+ *
+ * A whole cookie jar going to zero across a clean stop has one obvious explanation in Firefox: the
+ * profile is configured to clear cookies when it closes. The owner's profile shows the shape of a healthy
+ * one - form data cleared, cookies not - so this reads the same lines out of the profile CI builds and
+ * reports them, before and after the stop, because a queued job is emptied once it has run.
+ */
+async function shutdownPrefs(userdata) {
+  const file = path.join(userdata, 'prefs.js')
+  let text = ''
+  try {
+    text = await readFile(file, 'utf8')
+  } catch (error) {
+    return `prefs.js unreadable: ${error.message}`
+  }
+  const wanted = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(
+      line =>
+        line.includes('clearOnShutdown') ||
+        line.includes('sanitize.pending') ||
+        line.includes('lifetimePolicy') ||
+        line.includes('cookie.') ||
+        line.includes('privacy.'),
+    )
+  if (wanted.length === 0) {
+    return 'no privacy or cookie preference at all in prefs.js'
+  }
+  return wanted.join(' | ')
+}
+
 async function cookieFileSizes(userdata) {
   const sizes = {}
   for (const name of ['cookies.sqlite', 'cookies.sqlite-wal', 'cookies.sqlite-shm']) {
@@ -505,6 +543,8 @@ export async function runDurabilityPhase({
       )
     }
 
+    note(`shutdown prefs before the stop: ${await shutdownPrefs(userdataDir(profileA.id))}`)
+
     const dbFilesBefore = await cookieFileSizes(userdataDir(profileA.id))
     note(`cookie files before the relaunch: ${JSON.stringify(dbFilesBefore)}`)
 
@@ -525,6 +565,8 @@ export async function runDurabilityPhase({
         ? 'the row is still on disk after the stop - the store keeps it, the relaunch loses it'
         : 'the row is gone from disk after the stop - something removed it on the way out',
     )
+
+    note(`shutdown prefs after the stop: ${await shutdownPrefs(userdataDir(profileA.id))}`)
 
     const dbFilesAfter = await cookieFileSizes(userdataDir(profileA.id))
     note(`cookie files after the stop: ${JSON.stringify(dbFilesAfter)}`)
