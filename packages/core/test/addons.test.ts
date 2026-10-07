@@ -298,19 +298,44 @@ async function convergeSchema(engineDir: string): Promise<Record<string, unknown
       return config
     } catch (error) {
       const message = String((error as Error)?.message ?? error)
-      // Indexed off the match rather than destructured: under `noUncheckedIndexedAccess` a capture group
-      // is `string | undefined`, and an empty capture would otherwise declare a key called "".
-      const unknownKey = /Unknown property (\S+) in config/.exec(message)?.[1]
+      // SHAPE 1 — ONE key, parsed by the PRODUCT'S OWN PARSER. `unknownPropertyKey`
+      // (`engine-config.ts:98`) does exactly what the regex here used to do, including "rethrow
+      // unchanged when it is something else". Hand-rolling it was the sixth time this PR reimplemented
+      // something the product exports, and this one was four lines from the code being fought.
+      const unknownKey = unknownPropertyKey(error)
+      if (unknownKey) {
+        declared.set(unknownKey, 'dict') // type unknown yet; the next error says so
+        continue
+      }
+      // SHAPE 2 — VFox intercepts `UnknownProperty`, drops the key, retries, and when the retry still
+      // fails it throws ITS OWN message naming a LIST (`engine-config.ts:164`). That is why the loop
+      // stalled after one key: the error stopped being camoufox-js's and stopped naming a single key.
+      // These are the keys `suppressUnknownKeys` re-adds after the drop, which is why dropping them
+      // does not help.
+      const listed = /even after dropping them:\s*(.+)$/m.exec(message)?.[1]
+      if (listed) {
+        let added = 0
+        for (const key of listed
+          .split(',')
+          .map(entry => entry.trim())
+          .filter(Boolean)) {
+          if (!declared.has(key)) {
+            declared.set(key, 'dict')
+            added += 1
+          }
+        }
+        if (added > 0) continue
+      }
+      // SHAPE 3 — the type. camoufox-js's `InvalidPropertyType` names the key AND the expected type, so
+      // `dict` is only ever a placeholder that this corrects.
       const wrongType = /Invalid type for property (\S+)\. Expected (\w+)/.exec(message)
       const wrongTypeKey = wrongType?.[1]
       const wrongTypeValue = wrongType?.[2]
-      if (unknownKey) {
-        declared.set(unknownKey, 'dict') // type unknown yet; the next error says so
-      } else if (wrongTypeKey && wrongTypeValue) {
+      if (wrongTypeKey && wrongTypeValue) {
         declared.set(wrongTypeKey, wrongTypeValue)
-      } else {
-        throw error
+        continue
       }
+      throw error
     }
   }
   throw new Error(
