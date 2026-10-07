@@ -21,7 +21,7 @@ import type {
 } from './index.js'
 import { applyKernelDir, KernelManager, resolveEngineDir } from './kernel.js'
 import { launchCamoufox } from './launcher.js'
-import { combineLoggers, createFileLogger } from './log.js'
+import { createFileLogger } from './log.js'
 import { formatNetscape, parseNetscape } from './netscape.js'
 import { acquireDataDirLock, reconcileOrphans } from './orphans.js'
 import { RuntimeRegistry } from './runtime.js'
@@ -32,9 +32,13 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
   applyKernelDir(options.kernelDir)
 
   const dataDir = options.dataDir
-  // The file log is written by the core itself, whatever the embedding application supplies, because
-  // with zero telemetry it is the only diagnostic channel the product has.
-  const logger = combineLoggers(createFileLogger(dataDir), options.logger)
+  // ONE SINK PER LOG LINE. The core writes its own file log when the embedding application supplies
+  // none - with zero telemetry that file is the only diagnostic channel the product has. When a logger
+  // IS supplied, it owns the sink: the desktop passes a file logger pointed at this very directory, so
+  // combining the two wrote every line twice, in two formats, into one file (measured in a user's log:
+  // 'INFO vfox api listening' immediately followed by 'INFO  vfox api listening'). Server and hub
+  // messages still reach the file through the logger the desktop hands to startServer.
+  const logger = options.logger ?? createFileLogger(dataDir)
 
   const store = new Store(dataDir, logger)
 
