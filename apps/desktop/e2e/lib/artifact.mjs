@@ -12,7 +12,6 @@
  * that can be run anywhere, including on the artifact that shipped the bug.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import { createInflateRaw } from 'node:zlib'
 
@@ -419,7 +418,7 @@ const BARE_NODE_BUILTINS = new Set([
   'zlib',
 ])
 
-export function checkUnpackedResolution(artifact, options) {
+export function checkUnpackedResolution(_artifact, options) {
   const { unpackedRoot } = options
   const nm = path.join(unpackedRoot, 'node_modules')
   const failures = []

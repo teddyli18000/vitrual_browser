@@ -14,7 +14,7 @@
  * disk, so it can be shown going red locally by corrupting a store file, which is the only way to
  * prove any of this without Electron.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -35,9 +35,13 @@ export function checkPortablePaths({ dataDir }) {
   /** Every string in a JSON document, with its path, so a violation can be named precisely. */
   const strings = (value, trail, out) => {
     if (typeof value === 'string') out.push([trail, value])
-    else if (Array.isArray(value)) value.forEach((item, index) => strings(item, `${trail}[${index}]`, out))
+    else if (Array.isArray(value))
+      value.forEach((item, index) => {
+        strings(item, `${trail}[${index}]`, out)
+      })
     else if (value && typeof value === 'object') {
-      for (const [key, child] of Object.entries(value)) strings(child, trail ? `${trail}.${key}` : key, out)
+      for (const [key, child] of Object.entries(value))
+        strings(child, trail ? `${trail}.${key}` : key, out)
     }
     return out
   }
@@ -163,7 +167,9 @@ export async function restartPhase({
   assert(
     missing.length === 0,
     `every profile created earlier is still listed by id (${expectedProfiles.length - missing.length}/${expectedProfiles.length})` +
-      (missing.length ? `; missing: ${missing.map(profile => `${profile.id} (${profile.name})`).join(', ')}` : ''),
+      (missing.length
+        ? `; missing: ${missing.map(profile => `${profile.id} (${profile.name})`).join(', ')}`
+        : ''),
   )
   assert(
     renamed.length === 0,
@@ -201,7 +207,7 @@ export async function restartPhase({
   await new Promise(resolve => setTimeout(resolve, 5_000))
   const leftover = await api('/api/v1/health').catch(() => null)
   assert(
-    !leftover || leftover.status !== 200,
+    leftover?.status !== 200,
     'the application stopped cleanly the second time: its API no longer answers',
   )
   if (leftover?.status === 200) {
