@@ -48,7 +48,7 @@ const typeOf = value =>
 const raw = generateFingerprint(undefined, { operatingSystems: ['windows'] })
 const mapped = fromBrowserforge(raw, '')
 
-console.log('=== from `fromBrowserforge(generateFingerprint(...), \'\')` — the CAMOU_CONFIG keys ===')
+console.log("=== from `fromBrowserforge(generateFingerprint(...), '')` — the CAMOU_CONFIG keys ===")
 const entries = Object.entries(mapped)
 for (const [key, value] of entries.sort(([a], [b]) => a.localeCompare(b))) {
   console.log(`  { property: ${JSON.stringify(key)}, type: ${JSON.stringify(typeOf(value))} },`)
@@ -56,7 +56,7 @@ for (const [key, value] of entries.sort(([a], [b]) => a.localeCompare(b))) {
 console.log(`  (${entries.length} keys)`)
 
 console.log('')
-console.log('=== for comparison: the product\'s pin set (`createIdentity(...).config`) ===')
+console.log("=== for comparison: the product's pin set (`createIdentity(...).config`) ===")
 const { createIdentity } = await import('../dist/identity.js')
 const identity = await createIdentity({ os: 'windows', config: {} }, null)
 const pinned = Object.entries(identity.config)
@@ -66,5 +66,7 @@ for (const [key, value] of pinned.sort(([a], [b]) => a.localeCompare(b))) {
 console.log(`  (${pinned.length} keys)`)
 
 console.log('')
-console.log('A key the mapper emits and the pin set does not is a value the config carries anyway —')
+console.log(
+  'A key the mapper emits and the pin set does not is a value the config carries anyway —',
+)
 console.log('declare both. A key that appears in NEITHER is one the fixture does not need.')
