@@ -18,7 +18,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { ProfileSchema } from '@vfox/shared'
 import AdmZip from 'adm-zip'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ADDON_STORE_DIR,
   addonDir,
@@ -510,19 +510,39 @@ describe('what the launcher is handed', () => {
    * a fixture engine directory) inside the case" - and the previous version of this block did the
    * opposite: it SKIPPED when the variable did not point at an engine, so CI asserted nothing at all.
    */
-  beforeEach(async () => {
-    // Written here rather than through `fakeEngine()`, because the file has to exist by the time the
-    // FIRST test body runs and this hook is the last thing that does. It creates the directory, both
-    // files, and then asserts they are there - a fixture that silently fails to materialise produces a
-    // camoufox-js error about a missing version.json, which reads like a product bug and is not one.
-    engineDir = path.join(root, 'engine')
-    await fs.mkdir(engineDir, { recursive: true })
+  /**
+   * ONE fixture directory for the whole block, created once and never removed between cases.
+   *
+   * This is not tidiness, it is the whole reason the block used to skip. camoufox-js resolves
+   * `CAMOUFOX_INSTALL_DIR` when it is LOADED, and every launch reaches its `camoufoxPath()` through the
+   * ADDON path - so the first value this process sets is the one every later test is measured against.
+   * A per-test fixture therefore works for the first case and points at a deleted directory for all the
+   * rest, which surfaces as `Version information not found at /tmp/vfox-addons-XXXX/engine/version.json`
+   * - an error about the fixture, wearing the library's words, three tests after the mistake.
+   *
+   * The per-test assertion is kept: if the fixture ever fails to materialise, that says so directly
+   * instead of arriving as a camoufox-js message about a missing version file.
+   */
+  beforeAll(async () => {
+    // Its OWN directory, not `root`: `beforeAll` runs before the outer `beforeEach` creates `root`, and
+    // the fixture has to outlive every case anyway - see the docblock above.
+    engineDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-fixture-engine-'))
     await writeEngineProperties(engineDir)
     for (const file of ['properties.json', 'version.json']) {
       if (!existsSync(path.join(engineDir, file))) {
         throw new Error(`the fixture engine is missing ${file} at ${engineDir}`)
       }
     }
+    process.env.CAMOUFOX_INSTALL_DIR = engineDir
+  })
+
+  afterAll(async () => {
+    await fs.rm(engineDir, { recursive: true, force: true })
+  })
+
+  beforeEach(() => {
+    // Re-asserted rather than re-created: the directory outlives every case, and this makes the
+    // dependency visible in the hook that needs it.
     process.env.CAMOUFOX_INSTALL_DIR = engineDir
   })
 
