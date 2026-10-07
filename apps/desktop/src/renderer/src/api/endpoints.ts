@@ -88,6 +88,18 @@ export function listRuntime(): Promise<ProfileRuntime[]> {
   return apiGet<ProfileRuntime[]>(API_ROUTES.runtime)
 }
 
+/**
+ * One profile's runtime state.
+ *
+ * Used after a failed action: `errorCode` is recorded by the registry before the failing request is
+ * answered, but it reaches the renderer on the SSE stream, which is a separate connection and may
+ * still be in flight when the request's promise rejects. This is a single read on an event, not a
+ * poll.
+ */
+export function getRuntime(id: string): Promise<ProfileRuntime> {
+  return apiGet<ProfileRuntime>(API_ROUTES.runtimeFor(id))
+}
+
 /* ---------------------------------------------------------------------------- groups */
 
 export function listGroups(): Promise<Group[]> {
@@ -162,6 +174,22 @@ export function getKernel(): Promise<KernelInfo> {
   return apiGet<KernelInfo>(API_ROUTES.kernel)
 }
 
-export function installKernel(): Promise<{ started: boolean }> {
-  return apiSend<{ started: boolean }>(API_ROUTES.kernelInstall, 'POST')
+/**
+ * Start installing one kernel. Answers as soon as the work is queued — a 550 MB download must never
+ * hold a response open — and progress arrives on the `kernel` SSE event. Omit `version` for the one
+ * this build prefers; an untested version is refused with a 400 before the 202.
+ */
+export function installKernel(version?: string): Promise<{ started: boolean }> {
+  return apiSend<{ started: boolean }>(API_ROUTES.kernelInstall, 'POST', version ? { version } : {})
+}
+
+/**
+ * Delete one installed kernel.
+ *
+ * Refused with HTTP 409 while any profile resolves to it — the message names those profiles, which is
+ * why it is surfaced verbatim rather than replaced with a generic failure. 404 means it was not there
+ * to begin with.
+ */
+export function removeKernel(version: string): Promise<KernelInfo> {
+  return apiSend<KernelInfo>(API_ROUTES.kernelRemove, 'POST', { version })
 }

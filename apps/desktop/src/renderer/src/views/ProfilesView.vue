@@ -86,7 +86,26 @@ const filtered = computed(() => {
 
 const hasProfiles = computed(() => store.items.length > 0)
 const isFiltered = computed(() => search.value.trim().length > 0 || groupFilter.value !== null)
-const kernelMissing = computed(() => kernel.info !== null && !kernel.info.installed)
+
+/**
+ * Rows whose launch is refused because their PINNED kernel is not installed.
+ *
+ * The condition is the runtime's `errorCode`, deliberately not "no engine is installed at all".
+ * Those are different questions, and only the first one is a per-profile refusal: a profile pinned to
+ * a kernel that was deleted is refused while a perfectly good default kernel is installed and
+ * working. Keying on the global flag left exactly that user with a message and no action (issue
+ * #110). The code is what makes the difference, which is why the core records it.
+ */
+const kernelMissingRows = computed(() =>
+  store.items.filter(profile => runtime.kernelMissing(profile.id)),
+)
+const kernelMissing = computed(() => kernelMissingRows.value.length > 0)
+/** Every pin that is missing, deduplicated, for the banner's one-line summary. */
+const missingPins = computed(() => [
+  ...new Set(
+    kernelMissingRows.value.map(profile => profile.kernel).filter((v): v is string => !!v),
+  ),
+])
 
 const groupOptions = computed(() => [
   { value: '__none__', label: t('profiles.ungrouped') },
@@ -146,17 +165,37 @@ async function stopOne(profile: Profile): Promise<void> {
   }
 }
 
+/**
+ * The action for a refusal the user can act on: the profile's pinned kernel is not installed.
+ *
+ * It routes to the engine panel with that version preselected rather than deciding for the user. The
+ * other way out — re-pointing the profile at a different engine — is in 编辑, and the interface must
+ * not do it silently: a different engine is a different fingerprint.
+ */
+async function fixKernel(profile: Profile): Promise<void> {
+  await router.push({ path: '/settings', query: profile.kernel ? { install: profile.kernel } : {} })
+}
+
 /** Errors must name the next step: a missing engine is the one failure a user can fix alone. */
 async function reportLaunchFailure(profile: Profile, err: unknown): Promise<void> {
-  await kernel.refresh()
-  if (kernelMissing.value) {
+  // The registry records `errorCode` before it answers, but it reaches the renderer on the SSE
+  // stream — a separate connection that may still be in flight here. One read, on a failure.
+  await runtime.refreshOne(profile.id)
+  if (runtime.kernelMissing(profile.id)) {
     try {
-      await ElMessageBox.confirm(t('error.kernelMissing'), t('settings.kernel'), {
-        confirmButtonText: t('error.goSettings'),
-        cancelButtonText: t('common.cancel'),
-        type: 'warning',
-      })
-      await router.push('/settings')
+      await ElMessageBox.confirm(
+        t('error.kernelMissingPinned', {
+          version: profile.kernel ?? '',
+          reason: errorMessage(err),
+        }),
+        t('settings.kernel'),
+        {
+          confirmButtonText: t('error.goSettings'),
+          cancelButtonText: t('common.cancel'),
+          type: 'warning',
+        },
+      )
+      await fixKernel(profile)
     } catch {
       // The user dismissed it; the banner at the top of the list stays visible.
     }
@@ -461,10 +500,19 @@ onUnmounted(() => {
       type="warning"
       :closable="false"
       show-icon
-      :title="t('error.kernelMissing')"
+      :title="
+        missingPins.length > 0
+          ? t('error.kernelMissingPinnedBanner', {
+              count: kernelMissingRows.length,
+              version: missingPins.join('、'),
+            })
+          : t('error.kernelMissing')
+      "
     >
       <template #default>
-        <ElButton link type="primary" @click="router.push('/settings')">{{ t('error.goSettings') }}</ElButton>
+        <ElButton link type="primary" @click="fixKernel(kernelMissingRows[0]!)">
+          {{ missingPins.length > 0 ? t('profiles.action.fixKernel') : t('error.goSettings') }}
+        </ElButton>
       </template>
     </ElAlert>
 
@@ -538,8 +586,22 @@ onUnmounted(() => {
           </template>
         </ElTableColumn>
 
-        <ElTableColumn :label="t('profiles.col.actions')" width="196" fixed="right">
+        <ElTableColumn :label="t('profiles.col.actions')" width="248" fixed="right">
           <template #default="{ row }">
+            <!--
+              The refusal path (issue #110). The runtime says this profile's pinned kernel is gone,
+              so the row offers the fix instead of only printing the message the core already wrote.
+            -->
+            <ElButton
+              v-if="runtime.kernelMissing(row.id)"
+              class="fix-kernel"
+              link
+              type="warning"
+              size="small"
+              @click="fixKernel(row)"
+            >
+              {{ t('profiles.action.fixKernel') }}
+            </ElButton>
             <ElButton
               v-if="runtime.isActive(row.id)"
               link
