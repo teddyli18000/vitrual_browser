@@ -468,7 +468,6 @@ describe.skipIf(!engineAvailable)('what the launcher is handed', () => {
 
     expect(addons.some(entry => entry.includes(ADDON_STORE_DIR))).toBe(false)
   })
-
 })
 
 /** The store must be invisible to a profile that never used it. */
