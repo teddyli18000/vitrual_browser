@@ -1120,6 +1120,17 @@ async function resultText(page, target) {
       tried.push(`expand failed: ${String(error?.message ?? error).split('\n')[0]}`)
     }
     tried.push(`expanded ${clicked} of ${matched} panel toggle(s) via ${target.expand}`)
+
+    // AND PRINTED UNCONDITIONALLY, which is the part that makes it evidence rather than a note.
+    //
+    // This line lived only in `tried`, and `tried` is surfaced only on an UNREAD verdict - so the
+    // regression it exists to expose, "opened nothing and passed anyway", was precisely the case where it
+    // was not printed. A run with `expanded 0 of 0` and a green verdict was indistinguishable from one
+    // that opened forty panels, which is the difference between a count and a guard. An independent
+    // review found this; the reasoning is theirs and it is worth keeping next to the line.
+    console.log(
+      `[fingerprint] ${target.kind}: expanded ${clicked} of ${matched} panel toggle(s) via ${target.expand}`,
+    )
   }
 
   // Wait for a PANEL to exist rather than for a duration, when the target declares one. A fixed wait on
