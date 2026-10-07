@@ -16,6 +16,7 @@ import { useKernelStore } from '../stores/kernel'
 import { usePrefsStore } from '../stores/prefs'
 import { useProfilesStore } from '../stores/profiles'
 import { useRuntimeStore } from '../stores/runtime'
+import { useMinuteClock } from '../utils/clock'
 import { countCookies } from '../utils/cookies'
 import { saveTextFile } from '../utils/download'
 import { formatRelative, proxyLabel } from '../utils/format'
@@ -48,23 +49,17 @@ const batching = ref(false)
 const batchDone = ref(0)
 const batchTotal = ref(0)
 /**
- * The relative-time clock, updated once a minute rather than on every render.
+ * The shared minute clock, and the reason the labels are computed in one map.
  *
- * `lastStarted` formats a timestamp per row per render. Without a shared clock every SSE event
- * re-runs `formatRelative` for every row, which is the shape of a table that feels slow as the
- * list grows. A minute is the granularity the display already had, so nothing readable changes.
+ * An earlier version of this change called itself a performance fix on the reasoning that a per-render
+ * `Date.now()` was recomputed for every row. An independent review showed that was wrong: `formatRelative`
+ * still ran per row, and a reactive `now` ADDS a dependency. What the shared clock buys is freshness - a
+ * label stops being stale until something else triggers a render - and agreement between this table and
+ * the detail panel. The per-render cost is addressed below, where it actually was: the template used to
+ * call the formatter TWICE for every row (`lastStarted(row)` in the class binding and again in the
+ * interpolation), and it now reads one computed map that is built once per change.
  */
-const now = ref(Date.now())
-let minuteTicker: ReturnType<typeof setInterval> | undefined
-function startMinuteTicker(): void {
-  minuteTicker ??= setInterval(() => {
-    now.value = Date.now()
-  }, 60_000)
-}
-function stopMinuteTicker(): void {
-  clearInterval(minuteTicker)
-  minuteTicker = undefined
-}
+const now = useMinuteClock()
 
 const filtered = computed(() => {
   const term = search.value.trim().toLowerCase()
@@ -98,9 +93,23 @@ const groupOptions = computed(() => [
   ...store.groups.map(group => ({ value: group.id, label: group.name })),
 ])
 
-function lastStarted(profile: Profile): string {
-  return formatRelative(prefs.lastStartedOf(profile.id, runtime.startedAt(profile.id)), now.value)
-}
+/**
+ * Every row's relative label, built once per change rather than per row per render.
+ *
+ * This is the change that addresses the actual cost. The template asks for a row's label in two places,
+ * so the old form called `formatRelative` twice per row on every render; a computed map means the work
+ * happens once per dependency change no matter how many times the template reads it.
+ */
+const relativeTimes = computed<Record<string, string>>(() => {
+  const labels: Record<string, string> = {}
+  for (const profile of store.items) {
+    labels[profile.id] = formatRelative(
+      prefs.lastStartedOf(profile.id, runtime.startedAt(profile.id)),
+      now.value,
+    )
+  }
+  return labels
+})
 
 /* ------------------------------------------------------------------------ actions */
 
@@ -381,12 +390,10 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   void store.load()
   void kernel.refresh()
-  startMinuteTicker()
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
-  stopMinuteTicker()
 })
 </script>
 
@@ -527,7 +534,7 @@ onUnmounted(() => {
 
         <ElTableColumn :label="t('profiles.col.lastStarted')" width="128">
           <template #default="{ row }">
-            <span :class="{ 'vfox-muted': !lastStarted(row) }">{{ lastStarted(row) || '—' }}</span>
+            <span :class="{ 'vfox-muted': !relativeTimes[row.id] }">{{ relativeTimes[row.id] || '—' }}</span>
           </template>
         </ElTableColumn>
 
