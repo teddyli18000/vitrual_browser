@@ -266,7 +266,7 @@ let engineSchemaOnce: Promise<Array<{ property: string; type: string }>> | null 
 
 function engineSchema(): Promise<Array<{ property: string; type: string }>> {
   engineSchemaOnce ??= (async () => {
-    const generated = await createIdentity({ os: 'windows' } as FingerprintConfig, null)
+    const generated = await createIdentity({ os: 'windows', config: {} } as FingerprintConfig, null)
     const typeOf = (value: unknown): string =>
       Array.isArray(value)
         ? 'array'
