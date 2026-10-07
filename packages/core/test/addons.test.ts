@@ -239,26 +239,7 @@ async function writeEngineProperties(engineDir: string): Promise<void> {
   // down with a message about the config rather than about the type. The string type is `str`, NOT
   // `string` — that is the first spelling anyone reaches for. Valid: str, int, uint, double, bool,
   // array, dict.
-  const generated = await createIdentity({ os: 'windows' } as FingerprintConfig, null)
-  const typeOf = (value: unknown): string =>
-    Array.isArray(value)
-      ? 'array'
-      : typeof value === 'number'
-        ? Number.isInteger(value)
-          ? 'int'
-          : 'double'
-        : typeof value === 'boolean'
-          ? 'bool'
-          : typeof value === 'object' && value !== null
-            ? 'dict'
-            : 'str'
-  const properties = [
-    { property: 'addons', type: 'array' },
-    ...Object.entries(generated.config).map(([property, value]) => ({
-      property,
-      type: typeOf(value),
-    })),
-  ]
+  const properties = await engineSchema()
   await fs.writeFile(path.join(engineDir, 'properties.json'), JSON.stringify(properties), 'utf8')
   // Two fields, not one: `formatKernelVersion()` joins them and `readKernelVersion()` splits them back.
   await fs.writeFile(
@@ -266,6 +247,47 @@ async function writeEngineProperties(engineDir: string): Promise<void> {
     JSON.stringify({ version: '152.0.4', release: 'beta.30' }),
     'utf8',
   )
+}
+
+/**
+ * The config keys the product sets, derived from a generated identity - computed ONCE for the file.
+ *
+ * WHY THIS IS SEPARATE AND MEMOISED, and it is not tidiness. `writeEngineProperties` is called by
+ * `fakeEngine()`, which `writeEngineAddon()` calls, which EVERY block in this file uses. Putting the
+ * derivation inline there meant `createIdentity` ran inside the fixture builder for blocks that have
+ * nothing to do with the launcher wiring - and six tests in `the engine's own addons`, which had been
+ * passing, started failing with a message about the config. A change to a shared helper reached past the
+ * block it was meant for, and that happened twice in one PR: the other time was the #79 guard duplicating
+ * this fixture instead of reusing it.
+ *
+ * The key set is a property of the PRODUCT and does not change between calls, so it is computed once.
+ */
+let engineSchemaOnce: Promise<Array<{ property: string; type: string }>> | null = null
+
+function engineSchema(): Promise<Array<{ property: string; type: string }>> {
+  engineSchemaOnce ??= (async () => {
+    const generated = await createIdentity({ os: 'windows' } as FingerprintConfig, null)
+    const typeOf = (value: unknown): string =>
+      Array.isArray(value)
+        ? 'array'
+        : typeof value === 'number'
+          ? Number.isInteger(value)
+            ? 'int'
+            : 'double'
+          : typeof value === 'boolean'
+            ? 'bool'
+            : typeof value === 'object' && value !== null
+              ? 'dict'
+              : 'str'
+    return [
+      { property: 'addons', type: 'array' },
+      ...Object.entries(generated.config).map(([property, value]) => ({
+        property,
+        type: typeOf(value),
+      })),
+    ]
+  })()
+  return engineSchemaOnce
 }
 
 describe('the addon store', () => {
