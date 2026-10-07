@@ -34,6 +34,8 @@ import { toServerOptions } from '../src/launcher.js'
 
 let root: string
 let userDataDir: string
+/** The fixture engine directory, created per test and pointed at by `CAMOUFOX_INSTALL_DIR`. */
+let engineDir: string
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-addons-'))
@@ -509,7 +511,18 @@ describe('what the launcher is handed', () => {
    * opposite: it SKIPPED when the variable did not point at an engine, so CI asserted nothing at all.
    */
   beforeEach(async () => {
-    const engineDir = await fakeEngine()
+    // Written here rather than through `fakeEngine()`, because the file has to exist by the time the
+    // FIRST test body runs and this hook is the last thing that does. It creates the directory, both
+    // files, and then asserts they are there - a fixture that silently fails to materialise produces a
+    // camoufox-js error about a missing version.json, which reads like a product bug and is not one.
+    engineDir = path.join(root, 'engine')
+    await fs.mkdir(engineDir, { recursive: true })
+    await writeEngineProperties(engineDir)
+    for (const file of ['properties.json', 'version.json']) {
+      if (!existsSync(path.join(engineDir, file))) {
+        throw new Error(`the fixture engine is missing ${file} at ${engineDir}`)
+      }
+    }
     process.env.CAMOUFOX_INSTALL_DIR = engineDir
   })
 
