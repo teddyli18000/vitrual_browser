@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { type Profile, type ProfileRuntime, ProfileSchema } from '@vfox/shared'
 import { describe, expect, it, vi } from 'vitest'
+import type { KernelResolution } from '../src/kernels.js'
 import type { BrowserExit, BrowserHandle, BrowserLauncher } from '../src/launcher.js'
 import { RuntimeRegistry } from '../src/runtime.js'
 
@@ -41,11 +42,22 @@ function logger() {
   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }
 
-function setup(launch: BrowserLauncher, profiles = [profile('p1'), profile('p2')]) {
+function setup(
+  launch: BrowserLauncher,
+  profiles = [profile('p1'), profile('p2')],
+  resolveKernel: (item: Profile) => Promise<KernelResolution> = async () => ({
+    ok: true,
+    version: '152.0.4-beta.30',
+    dir: path.join('engines', 'kernels', '152.0.4-beta.30'),
+    source: 'default',
+    warning: null,
+  }),
+) {
   const log = logger()
   const registry = new RuntimeRegistry({
     launch,
     resolveProfile: async id => profiles.find(item => item.id === id),
+    resolveKernel,
     userDataDir: id => path.join('data', 'profiles', id, 'userdata'),
     profileIds: async () => profiles.map(item => item.id),
     logger: log,

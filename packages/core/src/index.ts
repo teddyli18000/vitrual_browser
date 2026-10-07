@@ -89,8 +89,24 @@ export interface RuntimeApi {
 }
 
 export interface KernelApi {
+  /** Installed kernels, the default one, and their disk cost. */
   info(): Promise<KernelInfo>
-  install(): Promise<KernelInfo>
+  /**
+   * Install one engine version into `<kernelRoot>/kernels/<version>/`.
+   *
+   * Omit the version for the one this build prefers (`ENGINE_VERSION`). Installing a version that is
+   * already present is a no-op — no download, no second copy — and installing **never** re-points or
+   * re-engines an existing profile: the engine is the fingerprint, so a change of engine is the
+   * user's decision, not a side effect of installing.
+   */
+  install(version?: string): Promise<KernelInfo>
+  /**
+   * Delete one installed kernel.
+   *
+   * Refused while a profile pins it, or while a browser is running from it — the message names the
+   * profiles, because "in use" without a name is not actionable.
+   */
+  remove(version: string): Promise<KernelInfo>
   /**
    * Subscribe to install progress. Returns an unsubscribe function.
    * Mirrors `RuntimeApi.on('change')`; the HTTP layer forwards these to the `kernel` SSE event.

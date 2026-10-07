@@ -55,13 +55,22 @@ export const API_ROUTES = {
   groups: `${API_PREFIX}/groups`,
   group: (id: string) => `${API_PREFIX}/groups/${encodeURIComponent(id)}`,
 
-  /** Engine status: GET -> KernelInfo. */
+  /** Engine status: GET -> KernelInfo (every installed kernel, the default one, and their sizes). */
   kernel: `${API_PREFIX}/kernel`,
   /**
-   * POST -> `{ started: true }` immediately (409 when already installing); progress is pushed on
-   * the `kernel` SSE event. A 550 MB download must never block an HTTP response.
+   * POST `{ version? }` -> `{ started: true }` immediately (409 when already installing); progress is
+   * pushed on the `kernel` SSE event. A 550 MB download must never block an HTTP response.
+   *
+   * `version` must be one of the versions this build was tested against; omitting it installs the
+   * preferred one. Installing a version that is already present is a no-op, and installing never
+   * re-points an existing profile.
    */
   kernelInstall: `${API_PREFIX}/kernel/install`,
+  /**
+   * POST `{ version }` -> KernelInfo. 409 with the profile names when a profile pins that kernel or a
+   * browser is running from it, 404 when it is not installed.
+   */
+  kernelRemove: `${API_PREFIX}/kernel/remove`,
 
   /* Window synchroniser — input in the master profile is replayed into every slave profile. */
   /** GET -> SyncSession | null */

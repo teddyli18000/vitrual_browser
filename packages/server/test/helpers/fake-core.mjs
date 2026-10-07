@@ -28,6 +28,20 @@ export function createFakeCore(options) {
     version: '146.0.1',
     path: path.join(dataDir, 'kernel'),
     source: 'cache',
+    // The multi-kernel shape: one installed kernel, the default, and its measured disk cost.
+    defaultVersion: '146.0.1',
+    totalBytes: 1_073_741_824,
+    kernels: [
+      {
+        version: '146.0.1',
+        path: path.join(dataDir, 'kernel'),
+        location: 'legacy-root',
+        bytes: 1_073_741_824,
+        profileCount: 0,
+        isDefault: true,
+        problem: null,
+      },
+    ],
     ...options.kernel,
   }
 
@@ -60,6 +74,12 @@ export function createFakeCore(options) {
     kernelInfo,
     closed: false,
     installCalls: 0,
+    /** Versions the routes asked to install; `null` means "the preferred one". */
+    installedVersions: [],
+    /** Versions the routes asked to remove. */
+    removedVersions: [],
+    /** Set to the error `remove()` should throw, for the 404 and 409 branches. */
+    removeError: undefined,
     installError: undefined,
     installDelayMs: 0,
     installProgress: [],
@@ -247,8 +267,9 @@ export function createFakeCore(options) {
     kernel: {
       info: async () => kernelInfo,
 
-      install: async () => {
+      install: async version => {
         core.installCalls += 1
+        core.installedVersions.push(version ?? null)
         if (core.installDelayMs > 0) {
           await new Promise(resolve => setTimeout(resolve, core.installDelayMs))
         }
@@ -256,6 +277,12 @@ export function createFakeCore(options) {
           for (const subscriber of kernelSubscribers) subscriber(progress)
         }
         if (core.installError) throw core.installError
+        return kernelInfo
+      },
+
+      remove: async version => {
+        core.removedVersions.push(version)
+        if (core.removeError) throw core.removeError
         return kernelInfo
       },
 

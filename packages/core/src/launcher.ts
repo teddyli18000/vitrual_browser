@@ -40,6 +40,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import fs from 'node:fs/promises'
 import type { Profile } from '@vfox/shared'
 import type { LaunchOptions } from 'camoufox-js'
 import { firefox } from 'playwright-core'
@@ -48,6 +49,7 @@ import { camoufoxModule } from './camoufox.js'
 import { acceptedKeys, dropUnacceptedKeys, withUnknownKeyTolerance } from './engine-config.js'
 import { type FingerprintWarning, toEngineOptions } from './fingerprint.js'
 import { resolveEngineDir } from './kernel.js'
+import { kernelLauncherName, kernelLauncherPath } from './kernels.js'
 
 export interface BrowserExit {
   exitCode: number | null
@@ -68,6 +70,14 @@ export interface LaunchContext {
   profile: Profile
   /** The profile's isolated browser data directory. */
   userDataDir: string
+  /**
+   * The engine kernel this launch must use — the directory the pinned build lives in, resolved by
+   * `resolveKernelForProfile()` before anything is spawned. Every per-engine decision hangs off it:
+   * which executable runs, which `properties.json` the config is validated against, and where the
+   * engine's own addons live. Absent only for callers that predate kernel pinning, which then get
+   * camoufox-js's default install directory.
+   */
+  engineDir?: string
   warn: (message: string) => void
   debug: (message: string) => void
 }
@@ -164,6 +174,13 @@ export async function toServerOptions(
         //    user expresses — it is the only correct outcome, so it is decided here, and the key
         //    list is derived from the engine's own manifests rather than hard-coded.
         exclude_addons: excludeDefaults,
+        //    The engine build this profile is pinned to. Without this, camoufox-js resolves the
+        //    launcher from `CAMOUFOX_INSTALL_DIR` — frozen at module load and shared by every profile
+        //    in the process — so every profile would run on the same engine no matter what it pins.
+        //    `launchOptions` takes `executable_path` as a public option and reads the engine's
+        //    `properties.json` from beside it (`dist/utils.js:60-71`), which is exactly the
+        //    per-kernel behaviour the pin needs.
+        ...(engineDirOverride ? { executable_path: kernelLauncherPath(engineDirOverride) } : {}),
       })) as ServerOptions,
     warn,
   )) as ServerOptions
@@ -200,10 +217,20 @@ export async function toServerOptions(
 export const launchCamoufox: BrowserLauncher = async ({
   profile,
   userDataDir,
+  engineDir,
   warn,
   debug,
 }: LaunchContext): Promise<BrowserHandle> => {
-  const options = await toServerOptions(profile, userDataDir, warn)
+  // Belt and braces: the resolver refuses a missing kernel before this is called, so reaching here
+  // with a directory that has no launcher means the two disagree. Refusing beats handing Playwright a
+  // path that does not exist, which would fail with an ENOENT the user cannot act on.
+  if (engineDir && !(await exists(kernelLauncherPath(engineDir)))) {
+    throw new Error(
+      `Cannot launch "${profile.name}": engine ${engineDir} has no ${kernelLauncherName()}. ` +
+        'Reinstall that kernel from Settings → Engine, or re-pin the profile to another version.',
+    )
+  }
+  const options = await toServerOptions(profile, userDataDir, warn, engineDir)
   // The spawn line is the first thing support needs; Playwright does not expose the argv after a
   // successful launch, so log what we handed it.
   debug(
@@ -363,4 +390,13 @@ export function killProcessTree(pid: number | null, debug?: (message: string) =>
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+async function exists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target)
+    return true
+  } catch {
+    return false
+  }
 }

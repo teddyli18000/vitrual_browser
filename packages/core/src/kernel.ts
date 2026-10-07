@@ -1,10 +1,16 @@
 /**
- * Camoufox engine ("kernel") management: where it is, what version it is, and installing it.
+ * Camoufox engine ("kernel") management: which kernels are installed, where they are, and installing
+ * and removing one.
  *
  * `install()` mirrors what `pnpm kernel:fetch` does — engine, GeoIP database and default addons —
  * because the desktop app and the CLI both call it on first run instead of shelling out to the CLI.
  * Progress is real: bytes are counted while camoufox-js streams the download, so `percent` is only
  * reported when a total size is actually known and stays `null` otherwise.
+ *
+ * Since v0.4.0 a kernel is installed **into `<root>/kernels/<version>/`** and several coexist; see
+ * `kernels.ts` for the layout, the resolution rules and why the root keeps a `version.json` marker.
+ * Installing a version that is already present is a no-op — no download, no extraction, no second
+ * copy on disk — and installing never touches an existing kernel or re-points an existing profile.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -18,6 +24,16 @@ import type { KernelInfo, KernelPhase, KernelProgress } from '@vfox/shared'
 import { ENGINE_VERSION, ENGINE_VERSIONS } from '@vfox/shared'
 import { camoufoxModule } from './camoufox.js'
 import type { CoreLogger } from './index.js'
+import {
+  defaultKernelVersion,
+  ensureRootMarker,
+  inspectKernel,
+  kernelLauncherPath,
+  kernelLayout,
+  listInstalledKernels,
+  splitKernelVersion,
+  usableKernels,
+} from './kernels.js'
 // TYPE-ONLY, and it must stay that way: a value import would execute the worker script in the main
 // process, where `workerData` is null and the extraction would throw at import time.
 import type { UnzipWorkerData, UnzipWorkerMessage } from './unzip-worker.js'
@@ -28,12 +44,17 @@ export type KernelProgressListener = (progress: KernelProgress) => void
 export type ProgressReporter = (progress: Partial<KernelProgress> & { phase: KernelPhase }) => void
 
 /** The install work itself, injectable so tests never touch the network. */
-export type EngineInstaller = (emit: ProgressReporter) => Promise<void>
+export type EngineInstaller = (
+  emit: ProgressReporter,
+  request: { version: string; targetDir: string },
+) => Promise<void>
 
 export interface KernelManagerOptions {
   kernelDir?: string
   logger: CoreLogger
   installer?: EngineInstaller
+  /** Version installed when the caller does not name one. Defaults to `ENGINE_VERSION`. */
+  preferredVersion?: string
 }
 
 const LAUNCH_FILE = 'camoufox.exe'
@@ -64,33 +85,118 @@ export class KernelManager {
     this.#options = options
   }
 
+  /**
+   * Every kernel directory, the default one, and the disk cost.
+   *
+   * `installed`/`version`/`path` keep their original meaning — they describe the **default** kernel,
+   * which is what an unpinned profile and a newly created profile use — so existing consumers keep
+   * working; `kernels[]` is the full list.
+   */
   async info(): Promise<KernelInfo> {
-    const dir = await resolveEngineDir()
-    if (!(await exists(path.join(dir, LAUNCH_FILE)))) {
-      return { installed: false, version: null, path: null, source: 'missing' }
+    const root = await resolveEngineDir()
+    const kernels = await listInstalledKernels(root)
+    const preferred = this.#options.preferredVersion ?? ENGINE_VERSION
+    const defaultVersion = defaultKernelVersion(kernels, preferred)
+
+    // Keep the root looking installed so camoufox-js cannot start its own download on the next launch
+    // (see the header of kernels.ts). Cheap, idempotent, and the only writer.
+    await ensureRootMarker(root, defaultVersion)
+
+    const usable = usableKernels(kernels)
+    const fallback = usable.find(kernel => kernel.version === defaultVersion) ?? null
+    for (const kernel of kernels) {
+      kernel.isDefault = kernel.version === defaultVersion
     }
 
-    let version: string | null = null
-    try {
-      const raw = JSON.parse(await fs.readFile(path.join(dir, VERSION_FILE), 'utf8')) as {
-        version?: unknown
-        release?: unknown
+    if (!fallback) {
+      if (kernels.length > 0) {
+        this.#options.logger.warn(
+          `no usable engine kernel under ${root}: ` +
+            kernels
+              .map(kernel => `${kernel.version} (${kernel.problem ?? 'unknown problem'})`)
+              .join(', '),
+        )
+      } else if (await isNonEmptyDir(root)) {
+        // The user pointed VFox at a directory that holds something, and it holds no usable engine.
+        // Say so: reporting a bare "not installed" for a directory the user chose is how they conclude
+        // the product ignored their setting.
+        this.#options.logger.warn(
+          `the engine directory ${root} exists but holds no usable engine ` +
+            `(no readable ${VERSION_FILE}); installing a kernel will place it under ` +
+            `${kernelLayout(root).kernelsDir}`,
+        )
       }
-      version = typeof raw.version === 'string' ? `${raw.version}-${String(raw.release)}` : null
-    } catch {
-      this.#options.logger.warn(
-        `engine found at ${dir} but ${VERSION_FILE} is missing or unreadable; launching will fail`,
-      )
+      return {
+        installed: false,
+        version: null,
+        path: null,
+        source: 'missing',
+        kernels,
+        availableVersions: [...ENGINE_VERSIONS],
+        defaultVersion: null,
+        totalBytes: kernels.reduce((sum, kernel) => sum + kernel.bytes, 0),
+      }
     }
-    return { installed: true, version, path: dir, source: 'cache' }
+
+    return {
+      installed: true,
+      version: fallback.version,
+      path: fallback.path,
+      source: 'cache',
+      kernels,
+      availableVersions: [...ENGINE_VERSIONS],
+      defaultVersion,
+      totalBytes: kernels.reduce((sum, kernel) => sum + kernel.bytes, 0),
+    }
   }
 
-  install(): Promise<KernelInfo> {
-    // Two concurrent installs would download the engine twice.
-    this.#installing ??= this.#runInstall().finally(() => {
+  /**
+   * Install one kernel version. Concurrent calls share the in-flight install, because two downloads
+   * of the same 550 MB archive is the one outcome nobody wants.
+   */
+  install(version?: string): Promise<KernelInfo> {
+    this.#installing ??= this.#runInstall(
+      version ?? this.#options.preferredVersion ?? ENGINE_VERSION,
+    ).finally(() => {
       this.#installing = null
     })
     return this.#installing
+  }
+
+  /**
+   * Delete one installed kernel.
+   *
+   * The caller is responsible for the two refusals that need to know about profiles and running
+   * browsers (`Core.kernel.remove` checks them); this only removes files, and refuses the root's own
+   * legacy build when it is the only kernel left, because that would leave nothing to launch.
+   */
+  async remove(version: string): Promise<KernelInfo> {
+    const root = await resolveEngineDir()
+    const kernel = (await listInstalledKernels(root)).find(entry => entry.version === version)
+    if (!kernel) {
+      throw new Error(`Kernel ${version} is not installed`)
+    }
+    if (kernel.location === 'kernels') {
+      await fs.rm(kernel.path, { recursive: true, force: true })
+    } else {
+      // The legacy root kernel shares its directory with the shared addons and the GeoLite database,
+      // so only the build's own files may go — never the directory itself.
+      const keep = new Set(['addons', MMDB_FILE, 'kernels'])
+      for (const entry of await fs.readdir(kernel.path)) {
+        if (!keep.has(entry)) {
+          await fs.rm(path.join(kernel.path, entry), { recursive: true, force: true })
+        }
+      }
+    }
+    this.#options.logger.info(`removed engine kernel ${version} from ${kernel.path}`)
+
+    const info = await this.info()
+    this.#emit({
+      phase: 'done',
+      percent: 100,
+      message: `Kernel ${version} removed`,
+    })
+    return info
   }
 
   on(_event: 'progress', listener: KernelProgressListener): () => void {
@@ -100,31 +206,60 @@ export class KernelManager {
     }
   }
 
-  async #runInstall(): Promise<KernelInfo> {
-    // A user-supplied engine directory is honoured, but it is validated first: pointing VFox at a
-    // folder that holds something else must not silently fill it with a 1 GB browser.
-    const dir = await resolveEngineDir()
-    if (await looksLikeSomethingElse(dir)) {
-      this.#options.logger.warn(
-        `the configured engine directory ${dir} exists but contains no ${LAUNCH_FILE}; ` +
-          'installing the Camoufox engine into it',
+  async #runInstall(version: string): Promise<KernelInfo> {
+    if (!(ENGINE_VERSIONS as readonly string[]).includes(version)) {
+      // Only the versions this build was tested against. An arbitrary version would need its own
+      // answer for where the version list comes from, and would turn a user action into a lookup.
+      throw new Error(
+        `Kernel ${version} is not one of the versions this build was tested against ` +
+          `(${ENGINE_VERSIONS.join(', ')}). Refusing to install it.`,
       )
     }
 
-    this.#emit({ phase: 'checking', message: 'Checking the latest Camoufox release' })
+    const root = await resolveEngineDir()
+    const layout = kernelLayout(root)
+    const targetDir = path.join(layout.kernelsDir, version)
+
+    // Already installed? Then there is nothing to download and nothing to extract. This is what keeps
+    // a second install from duplicating ~1 GB that is already on disk.
+    const existing = await inspectKernel(targetDir, 'kernels')
+    if (existing && existing.problem === null) {
+      this.#emit({
+        phase: 'done',
+        percent: 100,
+        message: `Camoufox ${version} is already installed`,
+      })
+      return this.info()
+    }
+
+    // A user-supplied engine directory is honoured, but it is validated first: pointing VFox at a
+    // folder that holds something else must not silently fill it with a 1 GB browser.
+    if (await looksLikeSomethingElse(layout.kernelsDir)) {
+      this.#options.logger.warn(
+        `the kernel directory ${layout.kernelsDir} contains something other than version directories; ` +
+          `installing Camoufox ${version} alongside it`,
+      )
+    }
+
+    this.#emit({ phase: 'checking', message: `Checking Camoufox ${version}` })
     try {
-      await (this.#options.installer ?? installCamoufoxEngine)(progress => this.#emit(progress))
+      await (this.#options.installer ?? installCamoufoxEngine)(progress => this.#emit(progress), {
+        version,
+        targetDir,
+      })
     } catch (error) {
       this.#emit({ phase: 'error', message: errorMessage(error) })
       throw error
     }
+
     const info = await this.info()
+    const installed = info.kernels.find(kernel => kernel.version === version && !kernel.problem)
     this.#emit({
       phase: 'done',
       percent: 100,
-      message: info.installed
-        ? `Camoufox ${info.version ?? '(unknown version)'} is ready`
-        : 'Camoufox is still not installed after the download',
+      message: installed
+        ? `Camoufox ${version} is ready`
+        : `Camoufox ${version} was downloaded but no usable engine was found at ${targetDir}`,
     })
     return info
   }
@@ -159,14 +294,6 @@ function complete(progress: Partial<KernelProgress> & { phase: KernelPhase }): K
 /** The upstream repository the pinned engine comes from. */
 const ENGINE_REPO = 'daijro/camoufox'
 
-/** `152.0.4-beta.31` -> `{ version: '152.0.4', release: 'beta.31' }`, the shape version.json needs. */
-function splitEngineVersion(full: string): { version: string; release: string } {
-  const at = full.indexOf('-')
-  return at === -1
-    ? { version: full, release: '' }
-    : { version: full.slice(0, at), release: full.slice(at + 1) }
-}
-
 /**
  * Resolve the engine download URL, preferring a plain CDN URL over `api.github.com`.
  *
@@ -182,6 +309,7 @@ function splitEngineVersion(full: string): { version: string; release: string } 
 async function resolveEngineUrl(
   pkgman: { OS_NAME: string; CamoufoxFetcher: { getPlatformArch?: () => string } },
   emit: ProgressReporter,
+  version: string,
 ): Promise<string> {
   const override = process.env.VFOX_ENGINE_URL?.trim()
   const candidates: string[] = []
@@ -197,26 +325,26 @@ async function resolveEngineUrl(
       }
     })()
     const arches = [...new Set([platformArch, 'x86_64', 'x64', 'arm64'].filter(Boolean))]
-    // Every acceptable version, most preferred first. A single pin is a single point of failure:
-    // upstream withdrew the version this project was pinned to, every URL 404ed, the API fallback
-    // resolved an engine with no canvas keys, the safety check rejected it, and the install button
-    // simply refused to install anything. Walking the list keeps canvas spoofing AND survives a
-    // withdrawal.
-    for (const version of ENGINE_VERSIONS) {
+    // The requested version first, then every other acceptable version. A single pin is a single
+    // point of failure: upstream withdrew the version this project was pinned to, every URL 404ed,
+    // the API fallback resolved an engine with no canvas keys, the safety check rejected it, and the
+    // install button simply refused to install anything. Walking the list keeps canvas spoofing AND
+    // survives a withdrawal.
+    for (const candidate of [version, ...ENGINE_VERSIONS.filter(entry => entry !== version)]) {
       for (const arch of arches) {
         candidates.push(
-          `https://github.com/${ENGINE_REPO}/releases/download/v${version}/camoufox-${version}-${pkgman.OS_NAME}.${String(arch)}.zip`,
+          `https://github.com/${ENGINE_REPO}/releases/download/v${candidate}/camoufox-${candidate}-${pkgman.OS_NAME}.${String(arch)}.zip`,
         )
       }
     }
   }
 
-  emit({ phase: 'checking', message: `Resolving Camoufox ${ENGINE_VERSION}` })
+  emit({ phase: 'checking', message: `Resolving Camoufox ${version}` })
   for (const url of candidates) {
     try {
       const response = await fetch(url, { method: 'HEAD', redirect: 'follow' })
       if (response.ok) {
-        emit({ phase: 'downloading', message: `Downloading Camoufox ${ENGINE_VERSION}` })
+        emit({ phase: 'downloading', message: `Downloading Camoufox ${version}` })
         return url
       }
     } catch {
@@ -240,14 +368,19 @@ async function resolveEngineUrl(
   }
   return fetcher.url
 }
-export const installCamoufoxEngine: EngineInstaller = async emit => {
+export const installCamoufoxEngine: EngineInstaller = async (emit, request) => {
   // The specifier is dynamic, so the type has to be named explicitly.
   const pkgman = (await import(
     camoufoxModule('dist/pkgman.js')
   )) as typeof import('camoufox-js/dist/pkgman.js')
   const { DefaultAddons, maybeDownloadAddons } = await import(camoufoxModule('dist/addons.js'))
 
-  const target = pkgman.INSTALL_DIR.toString()
+  // The versioned kernel directory, NOT `pkgman.INSTALL_DIR`: several kernels coexist, and the root
+  // holds only the shared addons and the GeoIP database. camoufox-js's own fetch machinery writes
+  // exclusively to `INSTALL_DIR`, which is exactly why the download, extraction and version
+  // bookkeeping are driven here instead of through `camoufox fetch`.
+  const target = request.targetDir
+  const version = request.version
 
   // The engine is PINNED, not "newest". `camoufox fetch` always takes the latest release in range,
   // which is how 156.0.1-beta.34 arrived and broke launching: it dropped every `canvas:*` config key
@@ -260,8 +393,8 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
     override checkAsset(asset: unknown) {
       const found = super.checkAsset(asset)
       if (!found) return null
-      const [version] = found
-      return version.fullString === ENGINE_VERSION ? found : null
+      const [matched] = found
+      return matched.fullString === version ? found : null
     }
   }
 
@@ -272,17 +405,10 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
   // fine in a browser. The limit is on the *lookup*, not the download: release assets come from a
   // CDN. The asset URL is deterministic because the engine is pinned, so we build it and only fall
   // back to the API when every candidate 404s. VFOX_ENGINE_URL overrides both, for mirrors.
-  const url = await resolveEngineUrl(pkgman, emit)
+  const url = await resolveEngineUrl(pkgman, emit, version)
   fetcher._url = url
 
-  let current: string | null = null
-  try {
-    current = pkgman.installedVerStr()
-  } catch {
-    current = null
-  }
-
-  if (current !== ENGINE_VERSION || !(await exists(path.join(target, LAUNCH_FILE)))) {
+  if (!(await exists(kernelLauncherPath(target)))) {
     // The archive is staged in `os.tmpdir()` and only then extracted into `target`, so on the
     // common small-system-drive layout the engine volume passes this check while the staging volume
     // fills up — and ENOSPC during the download is the crash path. Both volumes are checked.
@@ -290,8 +416,8 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
     await requireFreeSpace(os.tmpdir())
     const staging = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-camoufox-'))
     try {
-      const archive = await downloadEngine(url, ENGINE_VERSION, staging, emit)
-      emit({ phase: 'extracting', message: `Extracting Camoufox ${ENGINE_VERSION}` })
+      const archive = await downloadEngine(url, version, staging, emit)
+      emit({ phase: 'extracting', message: `Extracting Camoufox ${version}` })
       // Extract beside the target and swap directories in, rather than deleting the old engine
       // first. Destructive-first is what made a failed *extraction* cost the user their working
       // engine — reachable through a truncated archive, ENOSPC (extraction is when disk usage peaks:
@@ -300,10 +426,10 @@ export const installCamoufoxEngine: EngineInstaller = async emit => {
         archive,
         target,
         extract: (from, into) =>
-          extractArchive(from, into, (fraction, bytes) =>
+          extractArchive(from, into, version, (fraction, bytes) =>
             emit({
               phase: 'extracting',
-              message: `Extracting Camoufox ${ENGINE_VERSION} — ${Math.round(bytes / 1048576)} MB`,
+              message: `Extracting Camoufox ${version} — ${Math.round(bytes / 1048576)} MB`,
               percent: Math.round(fraction * 100),
             }),
           ),
@@ -452,13 +578,14 @@ export async function swapInEngine({
 async function extractArchive(
   archive: string,
   into: string,
+  version: string,
   onProgress: (fraction: number, bytes: number) => void,
 ): Promise<void> {
   const worker = new Worker(new URL('./unzip-worker.js', import.meta.url), {
     workerData: {
       archive,
       into,
-      desc: `Extracting Camoufox ${ENGINE_VERSION}`,
+      desc: `Extracting Camoufox ${version}`,
     } satisfies UnzipWorkerData,
   })
   try {
@@ -482,11 +609,11 @@ async function extractArchive(
   } finally {
     await worker.terminate()
   }
-  // version.json is what `installedVerStr()` reads; the fetcher's own `setVersion()` writes it into
+  // version.json is what `readKernelVersion()` reads; the fetcher's own `setVersion()` writes it into
   // the frozen `INSTALL_DIR`, so the same shape is written here, into the directory being prepared.
   await fs.writeFile(
     path.join(into, 'version.json'),
-    JSON.stringify(splitEngineVersion(ENGINE_VERSION)),
+    JSON.stringify(splitKernelVersion(version)),
     'utf8',
   )
   if (process.platform !== 'win32') {
@@ -623,6 +750,15 @@ async function looksLikeSomethingElse(dir: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(dir)
     return entries.length > 0 && !entries.includes(LAUNCH_FILE)
+  } catch {
+    return false
+  }
+}
+
+/** True when the directory exists and has at least one entry. */
+async function isNonEmptyDir(dir: string): Promise<boolean> {
+  try {
+    return (await fs.readdir(dir)).length > 0
   } catch {
     return false
   }
