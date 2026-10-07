@@ -28,7 +28,7 @@
  *
  * It needs an interactive desktop and a packaged build, so it is a CI-first test by design.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
@@ -820,6 +820,192 @@ await restartPhase({
   report: { note, log: message => console.log(message), assert },
 })
 executed.push('restarting the packaged application and re-reading its state from disk')
+/* -- 9. one process per data directory, and only one ------------------------------------------ */
+
+/*
+ * Issue #89. `requestSingleInstanceLock()` keys its lock on `app.getPath('userData')` **at the
+ * moment of the call**, and the portable redirect used to run after it — so every copy on the
+ * machine, installed or portable, shared one lock keyed on the default `%APPDATA%\VFox`. Two
+ * extractions of the same zip could not run side by side, and the user got "already running" for
+ * two installs that share nothing.
+ *
+ * The two halves below are the two directions of the claim, and they fail differently:
+ *
+ *   9a. the SAME data directory twice — the second must hand over and exit, and the first must be
+ *       told it happened. This passed before the fix as well: it is the regression guard for
+ *       `second-instance`, not the fix's evidence.
+ *   9b. a DIFFERENT portable folder — both must run. **This is the case the bug broke**, and it is
+ *       the one that goes red if the lock is ever taken before the redirect again.
+ */
+step('9. the single-instance lock is keyed on the data directory (issue #89)')
+
+const copies = []
+
+/** Spawn another copy of the application, with its own API port, and watch it. */
+function spawnCopy(cwd, port) {
+  const child = spawn(path.join(cwd, path.basename(artifact.executable)), [], {
+    cwd,
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '',
+      VFOX_API_PORT: String(port),
+      CAMOUFOX_INSTALL_DIR: engineDir,
+    },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  child.exited = null
+  child.stderr?.on('data', chunk => {
+    for (const line of String(chunk).split('\n')) {
+      if (line.trim()) console.log(`      [copy] ${line.trim()}`)
+    }
+  })
+  child.on('exit', (code, signal) => {
+    child.exited = { code, signal }
+  })
+  copies.push(child)
+  return child
+}
+
+/**
+ * Is the instance that holds the lock still serving? Asked over HTTP rather than tracked as a
+ * process flag: phase 8 stops the original and starts another, so the process object the suite began
+ * with is dead by the time these run, and 'still answering' is the property that matters anyway.
+ */
+async function firstInstanceAlive() {
+  try {
+    const probe = await fetch(`${apiBase}/api/v1/health`, { headers: { 'x-vfox-token': token } })
+    return probe.ok
+  } catch {
+    return false
+  }
+}
+
+/** Wait until a spawned copy either answers its own API or exits — whichever happens first. */
+async function awaitCopy(child, { port, tokenFile, deadlineMs }) {
+  const base = `http://127.0.0.1:${port}`
+  let token = null
+  const deadline = Date.now() + deadlineMs
+  while (Date.now() < deadline) {
+    if (child.exited) return { ok: false, why: `it exited (${JSON.stringify(child.exited)})` }
+    try {
+      if (!token && existsSync(tokenFile)) token = readFileSync(tokenFile, 'utf8').trim()
+      if (token) {
+        const probe = await fetch(`${base}/api/v1/health`, { headers: { 'x-vfox-token': token } })
+        if (probe.ok) return { ok: true, base }
+      }
+    } catch {
+      // The server binds late and the token file is written non-atomically; keep polling.
+    }
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+  return { ok: false, why: `it did not answer ${base}/api/v1/health within ${deadlineMs / 1000}s` }
+}
+
+// 9a. The same data directory, launched twice. Its own API port, so a copy that wrongly took the
+// lock is caught by "it is serving" rather than by a port collision it might have lost anyway.
+//
+// The whole phase is wrapped: `assert` and `fail` never throw, but `spawn`, `cpSync` and the polls
+// can. An unexpected throw here would skip `report()`, so a green run that tripped over a locked
+// file would print a stack trace instead of its results — and look like a product failure.
+let secondDir = null
+try {
+  const twinPort = Number(apiPort) + 1
+  const twin = spawnCopy(appDir, twinPort)
+  const twinResult = await awaitCopy(twin, {
+    port: twinPort,
+    tokenFile: path.join(dataDir, 'api-token'),
+    deadlineMs: 30_000,
+  })
+  assert(
+    !twinResult.ok,
+    `a second launch of the SAME data directory started its own server on ${twinResult.base} — two processes are now writing one store`,
+  )
+  assert(
+    twin.exited !== null,
+    'a second launch of the same data directory is still running instead of handing over to the first window',
+  )
+  assert(
+    twin.exited?.code === 0,
+    `a second launch of the same folder exited with ${JSON.stringify(twin.exited)}; handing over to the running instance is a clean exit (0)`,
+  )
+  assert(
+    await firstInstanceAlive(),
+    'the first instance stopped answering its API when the same folder was launched again',
+  )
+
+  // The handover itself, not just the refusal: the first instance logs the line from its
+  // `second-instance` handler, into its own log file. Without this, "the second copy exited" is
+  // satisfied just as well by a crash.
+  const appLog = path.join(dataDir, 'logs', 'vfox.log')
+  let handedOver = false
+  const handoverDeadline = Date.now() + 15_000
+  while (Date.now() < handoverDeadline && !handedOver) {
+    handedOver =
+      existsSync(appLog) && readFileSync(appLog, 'utf8').includes('second instance launched')
+    if (!handedOver) await new Promise(resolve => setTimeout(resolve, 500))
+  }
+  assert(
+    handedOver,
+    `the first instance never recorded the handover in ${appLog} — the second copy exited, but 'second-instance' did not reach the running window`,
+  )
+  pass(
+    'the same folder launched twice: the second handed over, exited 0, and the first kept running',
+  )
+  executed.push(
+    'launching the same portable folder twice and asserting the handover reaches the first',
+  )
+
+  // 9b. A second portable folder — the case the bug broke. Copied from the running one so it really
+  // is a second extraction, with its own `portable` marker beside its own executable.
+  secondDir = path.join(path.dirname(appDir), 'vfox-e2e-portable-2')
+  const skipInCopy = [dataDir, engineDir]
+  rmSync(secondDir, { recursive: true, force: true })
+  cpSync(appDir, secondDir, {
+    recursive: true,
+    // Not the live store and not the ~550 MB engine: this copy exists to prove a second portable
+    // folder can start, and neither is needed for that.
+    filter: source =>
+      !skipInCopy.some(prefix => source === prefix || source.startsWith(prefix + path.sep)),
+  })
+  // A fresh, empty store, so "it used its own data/" is a claim about this run rather than about a
+  // copied file. The `portable` marker is a file beside the executable, so it survives this.
+  rmSync(path.join(secondDir, 'data'), { recursive: true, force: true })
+  mkdirSync(path.join(secondDir, 'data'), { recursive: true })
+
+  const secondPort = Number(apiPort) + 2
+  const second = spawnCopy(secondDir, secondPort)
+  const secondResult = await awaitCopy(second, {
+    port: secondPort,
+    tokenFile: path.join(secondDir, 'data', 'api-token'),
+    deadlineMs: 120_000,
+  })
+  assert(
+    secondResult.ok,
+    `a second portable folder could not start while the first was running: ${secondResult.why}. ` +
+      "requestSingleInstanceLock() keys on app.getPath('userData') at the moment of the call, so it must be taken AFTER the portable redirect (issue #89)",
+  )
+  assert(
+    await firstInstanceAlive(),
+    'the first instance stopped answering its API when a second portable folder started',
+  )
+  assert(
+    existsSync(path.join(secondDir, 'data', 'api-token')),
+    'the second portable folder did not write its token into its own data/',
+  )
+  pass(`a second portable folder ran alongside the first (${secondResult.base}) with its own store`)
+  executed.push('running two independent portable folders at once, each with its own data/')
+} catch (error) {
+  fail(`the single-instance phase could not complete: ${error.message}`)
+} finally {
+  for (const child of copies) child.kill()
+  // Windows can hold the directory for a moment after a kill; the copy is under release/ and is not
+  // shipped, so a failure here is a note, not a failed assertion - same rule as the cleanup below.
+  try {
+    if (secondDir) rmSync(secondDir, { recursive: true, force: true })
+  } catch (error) {
+    note(`could not remove the second portable folder (${error.message})`)
+  }
+}
 
 app.kill()
 // Best effort, and it says so. The app was just killed and Windows can still hold the directory

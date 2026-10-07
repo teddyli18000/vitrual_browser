@@ -26,6 +26,7 @@ import { type DataMode, resolveDataLocation } from './data-location.js'
 import { profileUsage } from './profile-usage.js'
 import {
   configureLogging,
+  logInfo,
   probeProxy,
   startService,
   stopAllProfiles,
@@ -59,28 +60,60 @@ let bridgePayload: BridgePayload = {
   serviceError: '主进程尚未就绪',
 }
 
+/* ------------------------------------------------------- data location, THEN the instance lock */
+
+/*
+ * ORDER IS LOAD-BEARING, and the old order only looked deliberate.
+ *
+ * `requestSingleInstanceLock()` keys its lock on `app.getPath('userData')` **at the moment of the
+ * call**. In portable and custom mode that path is redirected a few lines below, so taking the lock
+ * first — which this file did until issue #89 — keyed every copy on the default `%APPDATA%\VFox`:
+ * two independent portable folders (separate installs, separate data directories, no shared state)
+ * refused to run at the same time, and a portable copy blocked an installed one. The user saw
+ * "already running" with no way to tell why.
+ *
+ * The lock is therefore per DATA DIRECTORY, which is the intended policy, not an accident:
+ *   - the same folder launched twice still hits `second-instance`, which focuses the first window
+ *     and exits — the case that handler exists for;
+ *   - a portable copy and an installed copy, or two portable copies, are different products with
+ *     different stores, and must be able to run side by side.
+ * Keeping two processes out of ONE store is not this lock's job: `@vfox/core` takes its own
+ * exclusive lock on the data directory (issue #39, `acquireDataDirLock`). Both are keyed on the same
+ * directory now, which is what makes them complementary rather than accidentally overlapping.
+ *
+ * Resolved before `ready`, and in portable/custom mode Chromium's own user data is moved too:
+ * otherwise a "portable" build would still scatter cache and cookies outside its folder.
+ */
+const location = resolveDataLocation()
+dataDir = location.dir
+dataMode = location.mode
+mkdirSync(dataDir, { recursive: true })
+if (location.mode !== 'installed') {
+  app.setPath('userData', dataDir)
+  app.setPath('sessionData', dataDir)
+}
+
 /* ------------------------------------------------------------------ single instance */
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => showWindow())
+  app.on('second-instance', () => {
+    // Logged through the app's own sink, so the handover is observable from outside the process:
+    // the packaged suite asserts on this line to tell "the second copy handed over" apart from
+    // "the second copy refused to start" (issue #89). stdout is not enough — the suite spawns the
+    // app with stdout ignored.
+    logInfo('second instance launched — focusing the existing window')
+    showWindow()
+  })
   void bootstrap()
 }
 
 /* ------------------------------------------------------------------------- bootstrap */
 
 async function bootstrap(): Promise<void> {
-  // Resolved before `ready`, and in portable/custom mode Chromium's own user data is moved too:
-  // otherwise a "portable" build would still scatter cache and cookies outside its folder.
-  const location = resolveDataLocation()
-  dataDir = location.dir
-  dataMode = location.mode
-  mkdirSync(dataDir, { recursive: true })
-  if (location.mode !== 'installed') {
-    app.setPath('userData', dataDir)
-    app.setPath('sessionData', dataDir)
-  }
+  // `dataDir` and Chromium's own user data are already resolved and redirected above, before the
+  // lock — see the comment there for why that order is not negotiable.
 
   // Sandbox every renderer, including any future one.
   app.enableSandbox()

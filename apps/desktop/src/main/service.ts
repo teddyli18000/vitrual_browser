@@ -51,6 +51,16 @@ export function configureLogging(logDir: string): void {
   log = createFileLogger(logDir)
 }
 
+/**
+ * The same sink `startService` writes to, so a line logged by the main process lands in
+ * `<dataDir>/logs/vfox.log` beside the core's own entries instead of only on stdout — which the
+ * packaged suite discards. The `second-instance` handover uses it so that "the second copy handed
+ * over" is observable from outside the process (issue #89).
+ */
+export function logInfo(message: string, ...args: unknown[]): void {
+  log.info(message, ...args)
+}
+
 function describe(err: unknown): string {
   if (err instanceof Error) return err.message
   return String(err)
