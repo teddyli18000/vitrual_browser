@@ -27,6 +27,7 @@ import {
   installAddon,
   listAddons,
   listEngineAddons,
+  pruneEngineAddons,
   removeAddon,
 } from '../src/addons.js'
 import { toServerOptions } from '../src/launcher.js'
@@ -342,6 +343,49 @@ describe('the engine’s own addons', () => {
     expect(await excludeDefaultAddons(engineDir, ['uBlock0@raymondhill.net'])).toEqual(['UBO'])
     expect(await excludeDefaultAddons(engineDir, ['something@else.test'])).toEqual([])
     expect(await excludeDefaultAddons(engineDir, [])).toEqual([])
+  })
+
+  /**
+   * The directory camoufox-js creates before a download it never finishes. It pushes such a path
+   * without looking inside it (`dist/addons.js:59-64`) and then throws on it in `confirmPaths`
+   * (`:16-24`), which reaches the user as a 500 on the launch. Pruning it is the repair camoufox-js
+   * applies to itself after a failed download, applied by the side that keeps meeting the directory.
+   */
+  it('removes an engine addon directory with no manifest, so the engine downloads it again', async () => {
+    const engineDir = await writeEngineAddon('UBO', 'uBlock0@raymondhill.net')
+    const broken = path.join(engineDir, 'addons', 'UBO')
+    // Exactly what a download that failed after `mkdirSync` leaves: the directory, no manifest.
+    await fs.rm(path.join(broken, 'manifest.json'))
+    expect(existsSync(broken)).toBe(true)
+
+    expect(await pruneEngineAddons(engineDir)).toEqual(['UBO'])
+    expect(existsSync(broken)).toBe(false)
+  })
+
+  it('leaves a usable engine addon exactly as it is', async () => {
+    const engineDir = await writeEngineAddon('UBO', 'uBlock0@raymondhill.net')
+    const good = path.join(engineDir, 'addons', 'UBO')
+    const before = await fs.readFile(path.join(good, 'manifest.json'), 'utf8')
+
+    expect(await pruneEngineAddons(engineDir)).toEqual([])
+    expect(existsSync(good)).toBe(true)
+    expect(await fs.readFile(path.join(good, 'manifest.json'), 'utf8')).toBe(before)
+  })
+
+  it('removes an unreadable manifest and a non-directory entry, and survives a missing root', async () => {
+    const engineDir = await writeEngineAddon('UBO', 'uBlock0@raymondhill.net')
+    const addons = path.join(engineDir, 'addons')
+    await fs.writeFile(path.join(addons, 'partial.xpi'), 'not an addon directory')
+    await fs.mkdir(path.join(addons, 'half-extracted'), { recursive: true })
+    await fs.writeFile(path.join(addons, 'half-extracted', 'manifest.json'), '{ truncated')
+
+    // Sorted: `readdir` order is the filesystem's, not ours, and an order-dependent assertion here
+    // would pass on Windows and fail on the Linux runner — the same mistake the kernel fixtures made
+    // with `camoufox.exe`.
+    expect((await pruneEngineAddons(engineDir)).sort()).toEqual(['half-extracted', 'partial.xpi'])
+    expect(existsSync(path.join(addons, 'UBO'))).toBe(true)
+    // No engine directory at all is not an error: it is the state before the first install.
+    expect(await pruneEngineAddons(path.join(root, 'no-engine'))).toEqual([])
   })
 })
 

@@ -211,6 +211,52 @@ export async function excludeDefaultAddons(
   return keys
 }
 
+/**
+ * Delete engine addon directories that cannot be loaded, so camoufox-js downloads them again.
+ *
+ * camoufox-js trusts an existing directory and never looks inside it (`dist/addons.js:59-64`):
+ *
+ *     for (const addonName in addons) {
+ *         const addonPath = getAddonPath(addonName);
+ *         if (fs.existsSync(addonPath)) {
+ *             addonsList.push(addonPath);
+ *             continue;
+ *         }
+ *
+ * …and then validates the very path it just trusted (`dist/addons.js:16-24`):
+ *
+ *     if (!fs.existsSync(path) || !fs.lstatSync(path).isDirectory()) throw new InvalidAddonPath(path);
+ *     if (!fs.existsSync(join(path, 'manifest.json')))
+ *         throw new InvalidAddonPath('manifest.json is missing. Addon path must be a path to an
+ *         extracted addon.');
+ *
+ * So a directory left behind by a download that never finished is treated as a successful install on
+ * the next attempt and then thrown out of `confirmPaths` — where we meet it as a 500 on a profile
+ * launch. camoufox-js's own cleanup comment names that exact case: "Without this, the next retry sees
+ * the directory and treats it as a successfully downloaded addon, then crashes with 'manifest.json is
+ * missing' in confirmPaths."
+ *
+ * Removing it is the repair camoufox-js applies to itself after a failed download, applied here by the
+ * side that keeps meeting the stale directory, before the path is handed over. A directory that does
+ * hold a readable `manifest.json` is left exactly as it is; only entries that could never load go.
+ */
+export async function pruneEngineAddons(engineDir: string): Promise<string[]> {
+  const root = path.join(engineDir, 'addons')
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
+  const removed: string[] = []
+  for (const entry of entries) {
+    const dir = path.join(root, entry.name)
+    if (entry.isDirectory() && (await readManifest(dir).catch(() => null))) {
+      continue
+    }
+    // A removal that fails (a locked directory, a read-only volume) is not fatal: the launch then
+    // fails with camoufox-js's own message, which names the path — better than hiding the failure.
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined)
+    removed.push(entry.name)
+  }
+  return removed
+}
+
 /* --------------------------------------------------------------------------------- internals */
 
 interface AddonManifest {
