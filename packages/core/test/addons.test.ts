@@ -256,6 +256,68 @@ async function observedConfig(engineDir: string): Promise<Record<string, unknown
   return camouConfig(await toServerOptions(profile(), userDataDir, vi.fn(), engineDir))
 }
 
+/**
+ * Declare the schema by ASKING THE VALIDATOR, one rejected key at a time.
+ *
+ * This is the sixth attempt at this fixture and the first that does not model the validator. The five
+ * before it were: a hand-written list (CI named the missing keys eight at a time, twice); a derivation
+ * from the pin set (missed the fingerprint's keys); a flatten of the fingerprint (wrong names -
+ * `screen.screenX` where the config has `window.screenX`); a mapper through `fromBrowserforge` (right
+ * names, still missing `fonts`); and a permissive schema, which this validator does not have - every key
+ * must be declared, and declaring them is what observing them was for.
+ *
+ * So it asks instead. `validateConfig` (`dist/utils.js:77-87`) throws on the FIRST key it does not
+ * know and names it; `InvalidPropertyType` names the key AND the type it expected. Both messages were
+ * read from the source, not inferred:
+ *
+ *     throw new UnknownProperty(`Unknown property ${key} in config`)
+ *     throw new InvalidPropertyType(`Invalid type for property ${key}. Expected ${expectedType}, got …`)
+ *
+ * ONE SAMPLE, AND THAT IS ITS LIMIT, worth knowing rather than rediscovering: the loop converges on the
+ * config for ONE profile on ONE platform, which is what the launcher block passes. A key that appears
+ * only for another OS, or only under the `fingerprint.config` escape hatch, is not declared here - and a
+ * later block exercising those will meet `UnknownProperty` again with a fresh key. That is the same gap
+ * as the pin-set derivation, one level out: the guessing is gone, but the sample is one.
+ */
+async function convergeSchema(engineDir: string): Promise<Record<string, unknown>> {
+  const declared = new Map<string, string>()
+  for (let attempt = 1; attempt <= 64; attempt += 1) {
+    await fs.writeFile(
+      path.join(engineDir, 'properties.json'),
+      JSON.stringify([...declared].map(([property, type]) => ({ property, type }))),
+      'utf8',
+    )
+    try {
+      const config = await observedConfig(engineDir)
+      // PRINTED, because the count is what turns the next schema question into a number in the log
+      // rather than a CI cycle - and because "converged in N attempts" is how many keys the config has.
+      console.log(
+        `engine fixture: schema converged after ${attempt} attempt(s); ` +
+          `${Object.keys(config).length} CAMOU_CONFIG key(s) declared`,
+      )
+      return config
+    } catch (error) {
+      const message = String((error as Error)?.message ?? error)
+      // Indexed off the match rather than destructured: under `noUncheckedIndexedAccess` a capture group
+      // is `string | undefined`, and an empty capture would otherwise declare a key called "".
+      const unknownKey = /Unknown property (\S+) in config/.exec(message)?.[1]
+      const wrongType = /Invalid type for property (\S+)\. Expected (\w+)/.exec(message)
+      const wrongTypeKey = wrongType?.[1]
+      const wrongTypeValue = wrongType?.[2]
+      if (unknownKey) {
+        declared.set(unknownKey, 'dict') // type unknown yet; the next error says so
+      } else if (wrongTypeKey && wrongTypeValue) {
+        declared.set(wrongTypeKey, wrongTypeValue)
+      } else {
+        throw error
+      }
+    }
+  }
+  throw new Error(
+    `the engine schema did not converge in 64 attempts (${declared.size} key(s) declared)`,
+  )
+}
+
 async function writeEngineProperties(
   engineDir: string,
   keys?: Record<string, unknown>,
@@ -290,7 +352,12 @@ async function writeEngineProperties(
   // (`dist/utils.js:61-76`, `readFileSync` with no memoisation) and its only call site passes the
   // `executable_path` of that launch (`:425`). There is no cache to defeat, so the two passes are not
   // circular - verified from the source rather than assumed.
-  await fs.writeFile(path.join(engineDir, 'properties.json'), JSON.stringify({}), 'utf8')
+  // `[]`, NOT `{}`. `loadProperties` calls `propDict.reduce` unconditionally (`dist/utils.js:72`), so
+  // an object throws "propDict.reduce is not a function" BEFORE `acceptedKeys` is ever consulted - and an
+  // empty array reduces to `{}`, which makes `validateConfig` reject the first key and gives the
+  // convergence loop below its first error to learn from. That pair of characters is the difference
+  // between the loop starting and the loop never running.
+  await fs.writeFile(path.join(engineDir, 'properties.json'), JSON.stringify([]), 'utf8')
   // Two fields, not one: `formatKernelVersion()` joins them and `readKernelVersion()` splits them back.
   await fs.writeFile(
     path.join(engineDir, 'version.json'),
@@ -633,10 +700,7 @@ describe('what the launcher is handed', () => {
     await writeEngineProperties(engineDir)
     // PASS 2: read what the product actually hands over - the one thing this fixture never did in its
     // first four versions, all of which predicted that object instead of asking for it.
-    const observed = await observedConfig(engineDir)
-    // PRINTED, because the count is what turns the next schema question into a number in the log rather
-    // than a CI cycle. Four versions of this fixture were wrong and each one cost a run to find out.
-    console.log(`engine fixture: ${Object.keys(observed).length} CAMOU_CONFIG key(s) observed`)
+    const observed = await convergeSchema(engineDir)
     // PASS 3: the real schema, derived from what was observed.
     await writeEngineProperties(engineDir, observed)
     for (const file of ['properties.json', 'version.json']) {
