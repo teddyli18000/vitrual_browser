@@ -153,7 +153,7 @@ const MANIFEST = JSON.stringify({
 
 /** A fake engine directory: only what the addon wiring reads. */
 async function writeEngineAddon(key: string, id: string | null, name = key): Promise<string> {
-  const engineDir = path.join(root, 'engine')
+  const engineDir = await fakeEngine()
   const dir = path.join(engineDir, 'addons', key)
   await fs.mkdir(dir, { recursive: true })
   await fs.writeFile(
@@ -166,20 +166,47 @@ async function writeEngineAddon(key: string, id: string | null, name = key): Pro
     }),
     'utf8',
   )
+  return engineDir
+}
+
+/**
+ * An engine directory that is not an engine, but is shaped like one.
+ *
+ * Every case in the block below passes this in as `engineDir`. That is not tidiness: without it
+ * `toServerOptions` falls back to `resolveEngineDir()`, which on CI points at an empty cache with no
+ * `version.json`, and camoufox-js then starts its own release lookup and throws
+ * `Version information not found at …\version.json. Please run \`camoufox fetch\` to install.` - which
+ * is the mechanism issue #79 is about, reproduced by a test fixture that was not shaped like the thing
+ * it stood in for.
+ */
+async function fakeEngine(): Promise<string> {
+  const engineDir = path.join(root, 'engine')
+  await fs.mkdir(engineDir, { recursive: true })
   await writeEngineProperties(engineDir)
   return engineDir
 }
 
 /**
- * A fake engine needs a `properties.json`, and this is not cosmetic.
+ * A fake engine needs three things, and each one was learned from a failure.
  *
- * camoufox-js reads it from the directory the executable lives in (`dist/utils.js:61-76`) and validates
- * the whole CAMOU_CONFIG against it, throwing `UnknownProperty` for any key it does not list
- * (`:77-87`). VFox has its own tolerance for that - `acceptedKeys` in `engine-config.ts` returns `null`
- * for a schema it does not understand and the launch then goes ahead as-is - so a fixture WITHOUT the
- * file does not fail politely here: it fails inside camoufox-js, on whichever key it reaches first.
+ * 1. `properties.json` - camoufox-js reads it from the directory the executable lives in
+ *    (`dist/utils.js:61-76`) and validates the whole CAMOU_CONFIG against it, throwing
+ *    `UnknownProperty` for any key it does not list (`:77-87`). VFox has its own tolerance
+ *    (`acceptedKeys` in `engine-config.ts` returns `null` for a schema it does not understand), so a
+ *    fixture WITHOUT the file does not fail politely - it fails inside camoufox-js, on whichever key it
+ *    reaches first.
  *
- * This is also why the block below no longer skips. It used to be gated on
+ * 2. `version.json` - and this one is the whole reason the block below used to skip. Every launch
+ *    reaches camoufox-js's `camoufoxPath()` through the ADDON path, and that function starts its OWN
+ *    engine download when the root has no readable `version.json`. Measured: ten outbound requests from
+ *    one launch in that state, and `Version information not found at …\version.json. Please run
+ *    \`camoufox fetch\` to install.` It is two fields, `version` and `release`, NOT one combined string.
+ *    With it, the same launch makes five requests instead of ten - the difference is the release lookup,
+ *    and it is the mechanism issue #79 is about.
+ *
+ * 3. the addon directory itself.
+ *
+ * This is also why the block no longer skips. It was gated on
  * `existsSync(<CAMOUFOX_INSTALL_DIR>/properties.json)`, so on CI - which installs no engine - the whole
  * launcher-wiring contract was asserted NOWHERE, while on a developer's machine the same commit failed
  * with `ENOENT: … engine\properties.json`. Same code, two environments, two results, and the one that
@@ -197,6 +224,12 @@ async function writeEngineProperties(engineDir: string): Promise<void> {
     { property: 'window.screenY', type: 'int' },
   ]
   await fs.writeFile(path.join(engineDir, 'properties.json'), JSON.stringify(properties), 'utf8')
+  // Two fields, not one: `formatKernelVersion()` joins them and `readKernelVersion()` splits them back.
+  await fs.writeFile(
+    path.join(engineDir, 'version.json'),
+    JSON.stringify({ version: '152.0.4', release: 'beta.30' }),
+    'utf8',
+  )
 }
 
 describe('the addon store', () => {
@@ -472,15 +505,21 @@ describe('what the launcher is handed', () => {
     const expected = addonDir(userDataDir, installed.slug)
     expect(path.isAbsolute(expected)).toBe(true)
 
-    const config = camouConfig(await toServerOptions(profile(), userDataDir, vi.fn()))
+    const config = camouConfig(
+      await toServerOptions(profile(), userDataDir, vi.fn(), await fakeEngine()),
+    )
 
     expect(config.addons).toContain(expected)
   })
 
   it('does not accumulate the engine’s defaults across launches', async () => {
     const installed = await installAddon(userDataDir, await writeAddon(path.join(root, 'src', 'b')))
-    const first = camouConfig(await toServerOptions(profile(), userDataDir, vi.fn()))
-    const second = camouConfig(await toServerOptions(profile(), userDataDir, vi.fn()))
+    const first = camouConfig(
+      await toServerOptions(profile(), userDataDir, vi.fn(), await fakeEngine()),
+    )
+    const second = camouConfig(
+      await toServerOptions(profile(), userDataDir, vi.fn(), await fakeEngine()),
+    )
 
     // camoufox-js pushes its default addon paths into the array it was given, so a shared or cached
     // array would come back one entry longer on every launch.
@@ -505,7 +544,9 @@ describe('what the launcher is handed', () => {
   })
 
   it('contributes nothing to a profile with no addons of its own', async () => {
-    const config = camouConfig(await toServerOptions(profile(), userDataDir, vi.fn()))
+    const config = camouConfig(
+      await toServerOptions(profile(), userDataDir, vi.fn(), await fakeEngine()),
+    )
     const addons = (config.addons ?? []) as string[]
 
     expect(addons.some(entry => entry.includes(ADDON_STORE_DIR))).toBe(false)
