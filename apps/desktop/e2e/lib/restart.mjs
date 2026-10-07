@@ -177,10 +177,38 @@ export async function restartPhase({
       (renamed.length ? `; renamed: ${renamed.map(profile => profile.id).join(', ')}` : ''),
   )
 
-  // (c) The engine is still installed where it was.
+  // AND NOTHING WAS DUPLICATED. The two assertions above are one-sided: they catch a profile that was
+  // LOST or RENAMED, and an app that duplicated one across the restart passes both. Duplication is a
+  // plausible failure of exactly this feature - a store written twice, once per process - and it costs
+  // one assertion to catch. A reviewer found this; the count is the part nobody had asserted.
   assert(
-    existsSync(path.join(engineDir, 'camoufox.exe')),
-    `the engine is still installed at ${path.join(engineDir, 'camoufox.exe')}`,
+    after.length === expectedProfiles.length,
+    `the profile count is unchanged across the restart: ${after.length} listed, ` +
+      `${expectedProfiles.length} expected` +
+      (after.length > expectedProfiles.length
+        ? ' - something was duplicated'
+        : ' - something was lost'),
+  )
+
+  // (c) The engine is still installed where it was.
+  // LAYOUT-AGNOSTIC AND PLATFORM-AGNOSTIC ON PURPOSE. The launcher is camoufox.exe on Windows and
+  // camoufox elsewhere, and since the multi-kernel work it lives either at the engine root or under
+  // kernels/<version>/. This assertion must not decide any of that: a check that fails against a
+  // correct install is the defect we already fixed once in verify-install.mjs, and the same mistake
+  // in the other direction - hard-coding camoufox.exe - made four kernel tests invisible on Linux.
+  const launcherNames = ['camoufox.exe', 'camoufox']
+  const hasLauncher = dir => launcherNames.some(name => existsSync(path.join(dir, name)))
+  const kernelsDir = path.join(engineDir, 'kernels')
+  const kernelBuilds = existsSync(kernelsDir)
+    ? readdirSync(kernelsDir, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => path.join(kernelsDir, entry.name))
+    : []
+  const launcherFound = hasLauncher(engineDir) || kernelBuilds.some(hasLauncher)
+  assert(
+    launcherFound,
+    `the engine is still installed: no launcher under ${engineDir} or its kernels/ subdirectories ` +
+      `(${kernelBuilds.length} kernel build(s) found)`,
   )
   assert(
     existsSync(path.join(engineDir, 'version.json')),
