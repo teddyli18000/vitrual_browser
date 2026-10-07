@@ -304,8 +304,13 @@ async function convergeSchema(engineDir: string): Promise<Record<string, unknown
       // unchanged when it is something else". Hand-rolling it was the sixth time this PR reimplemented
       // something the product exports, and this one was four lines from the code being fought.
       const unknownKey = unknownPropertyKey(error)
-      if (unknownKey) {
-        declared.set(unknownKey, 'dict') // type unknown yet; the next error says so
+      // ONLY WHEN IT IS NEW. On the first pass the key is undeclared and `dict` is the best guess; on the
+      // next pass the same key comes back as a TYPE error, and `unknownPropertyKey` still names it - so
+      // without this guard shape 1 matched every single attempt, re-set the same key to the same guess,
+      // and `continue`d before shapes 2 and 3 could run. That is why the loop reported "1 key(s)
+      // declared" after sixty-four attempts: one key learned, sixty-three attempts spent re-learning it.
+      if (unknownKey && !declared.has(unknownKey)) {
+        declared.set(unknownKey, 'dict') // type unknown yet; shape 3 corrects it on the next pass
         continue
       }
       // SHAPE 2 — VFox intercepts `UnknownProperty`, drops the key, retries, and when the retry still
