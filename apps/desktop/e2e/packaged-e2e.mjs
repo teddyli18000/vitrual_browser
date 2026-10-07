@@ -28,7 +28,15 @@
  *
  * It needs an interactive desktop and a packaged build, so it is a CI-first test by design.
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
@@ -171,9 +179,22 @@ mkdirSync(engineDir, { recursive: true })
 writeFileSync(path.join(appDir, 'portable'), 'written by apps/desktop/e2e/packaged-e2e.mjs\n')
 
 step('1. launching the packaged application with an EMPTY engine directory')
+// NO LAUNCHER ANYWHERE, IN EITHER LAYOUT, AND NOT BY NAME ALONE. Asserting `camoufox.exe` at the root
+// would PASS on a tree that already held `camoufox` (no extension, the name on Linux) or a build under
+// `kernels/<version>/` - a false pass on the precondition of the whole install-from-nothing phase, which
+// is the more dangerous direction of this mistake. It is also why the check is not made through the API:
+// at this point the application has not been spawned yet, so there is no bridge to ask.
+const launcherNames = ['camoufox.exe', 'camoufox']
+const hasLauncher = dir => launcherNames.some(name => existsSync(path.join(dir, name)))
+const kernelsUnder = path.join(engineDir, 'kernels')
+const buildDirs = existsSync(kernelsUnder)
+  ? readdirSync(kernelsUnder, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => path.join(kernelsUnder, entry.name))
+  : []
 assert(
-  !existsSync(path.join(engineDir, 'camoufox.exe')),
-  `the engine directory starts empty: ${engineDir}`,
+  !hasLauncher(engineDir) && !buildDirs.some(hasLauncher),
+  `the engine directory starts with no engine build in it: ${engineDir}`,
 )
 
 const { firefox } = await import('playwright-core')
@@ -411,9 +432,23 @@ void sse
 const installMs = Date.now() - installStarted
 assert(Boolean(installedInfo), `the application reports the engine installed after ${installMs} ms`)
 if (installedInfo) note(`kernel: ${JSON.stringify(installedInfo)}`)
+// THE LAUNCHER IS NOT ASSERTED BY PATH. Where a kernel build lives is the product's business, and the
+// multi-kernel layout moves it into <root>/kernels/<version>/ with only version.json left at the root -
+// so a filesystem assertion here fails on a CORRECT install the moment that lands. What is asserted is
+// what the application reports, which is the property and cannot drift: at least one kernel, every
+// listed kernel usable, and a default chosen.
 assert(
-  existsSync(path.join(engineDir, 'camoufox.exe')),
-  `camoufox.exe exists on disk at ${path.join(engineDir, 'camoufox.exe')}`,
+  Array.isArray(installedInfo?.kernels) && installedInfo.kernels.length > 0,
+  `the application reports at least one installed kernel (${JSON.stringify(installedInfo?.kernels ?? null)})`,
+)
+const unusable = (installedInfo?.kernels ?? []).filter(kernel => kernel.problem)
+assert(
+  unusable.length === 0,
+  `every installed kernel is usable; unusable: ${JSON.stringify(unusable.map(kernel => ({ version: kernel.version, problem: kernel.problem })))}`,
+)
+assert(
+  typeof installedInfo?.defaultVersion === 'string' && installedInfo.defaultVersion.length > 0,
+  `the application names a default kernel (${JSON.stringify(installedInfo?.defaultVersion ?? null)})`,
 )
 assert(
   existsSync(path.join(engineDir, 'version.json')),
