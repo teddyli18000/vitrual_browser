@@ -159,16 +159,19 @@ await page.goto(baseUrl, { waitUntil: 'load' })
 
 // Assert the bridge is there BEFORE waiting on anything it enables. Without this, a mistake in the
 // bridge data is indistinguishable from a slow renderer until the selector times out 30 s later.
+// The renderer reaches its API with apiBase + token over plain fetch. There is no window.vfox.api -
+// the interface, the real preload and ui-bridge.mjs all agree - so an earlier version of this
+// preflight failed while printing a perfectly good apiBase in the same message.
 const bridge = await page.evaluate(() => ({
-  apiBase: window.vfox?.apiBase ?? null,
-  hasApi: typeof window.vfox?.api === 'function',
+  apiBase: typeof window.vfox?.apiBase === 'string' ? window.vfox.apiBase : null,
+  hasToken: typeof window.vfox?.token === 'string' && window.vfox.token.length > 0,
 }))
-if (!bridge.apiBase || !bridge.hasApi) {
+if (!bridge.apiBase || !bridge.hasToken) {
   console.error(
     'perf-ui: the renderer has no working bridge (apiBase=' +
       String(bridge.apiBase) +
-      ', api=' +
-      String(bridge.hasApi) +
+      ', token=' +
+      String(bridge.hasToken) +
       '). The page cannot reach its own API, so nothing will render. Check the bridgeData fields.',
   )
   await browser.close()
@@ -199,7 +202,7 @@ if ((await search.count()) > 0) {
   await search.fill('perf-01')
   await page.locator('.el-table__row').first().waitFor({ timeout: 15_000 })
   const filterMs = Date.now() - started
-  record('filter a 40-row table (ms)', filterMs, null)
+  record('filter a 40-row table (ms) [reported, not asserted]', filterMs, null)
   await search.fill('')
   await page.locator('.el-table__row').first().waitFor({ timeout: 15_000 })
 } else {
@@ -223,35 +226,56 @@ const kernel = await call(API_ROUTES.kernel).catch(() => null)
 const engineInstalled = Boolean(kernel?.data?.installed)
 
 if (engineInstalled) {
-  console.log('perf-ui: an engine is installed, so the launch transition was skipped')
+  measurements.push({
+    name: 'request to DOM, launch transition (ms)',
+    value: 'SKIPPED',
+    budget: null,
+  })
+  failures.push(
+    'an engine is installed in this job, so the launch transition could not be measured without ' +
+      'starting a real browser - the measurement is SKIPPED, not passed',
+  )
 } else {
-  const firstRow = page.locator('.el-table__row').first()
-  const profileId = await firstRow.getAttribute('data-row-key').catch(() => null)
+  // The row is found by the NAME this script created, and the id comes from the API where ids live.
+  // Element Plus renders rows with no data attributes at all - row-key is the Vue key, internal
+  // identity rather than DOM state - so an earlier version looked for data-row-key, never found it,
+  // and could not run. Verified against element-plus's own render code and a grep of the package.
+  const watched = 'perf-000'
+  const listed = await call(API_ROUTES.profiles)
+  const watchedProfile = (listed?.data ?? []).find(entry => entry.name === watched)
+  const rowSelector = `.el-table__row:has-text("${watched}")`
 
-  if (!profileId) {
+  if (!watchedProfile?.id) {
     failures.push(
-      'the table exposes no data-row-key, so the event-to-DOM measurement could not run',
+      `the API did not return the profile named ${watched}, so the measurement could not run`,
     )
+  } else if ((await page.locator(rowSelector).count()) === 0) {
+    failures.push(`no table row shows ${watched}, so the measurement could not run`)
   } else {
-    const rowSelector = `.el-table__row[data-row-key="${profileId}"]`
     const before = await page.locator(`${rowSelector} .status`).first().getAttribute('class')
     const started = Date.now()
-    await call(API_ROUTES.launchProfile(profileId), { method: 'POST', body: '{}' })
-    await page
-      .locator(`${rowSelector} .status.error`)
-      .waitFor({ timeout: 15_000 })
-      .catch(() => {})
+    await call(API_ROUTES.launchProfile(watchedProfile.id), { method: 'POST', body: '{}' })
+    let sawError = true
+    try {
+      await page.locator(`${rowSelector} .status.error`).waitFor({ timeout: 15_000 })
+    } catch {
+      sawError = false
+    }
     const elapsed = Date.now() - started
     const after = await page.locator(`${rowSelector} .status`).first().getAttribute('class')
 
-    // The guard against this degrading back into a check that cannot fail: the row must not already
-    // have been in the state the wait was for.
-    if ((before ?? '').includes('error') && before === after) {
+    if (!sawError) {
+      // A timeout is its own failure with its own message. Swallowing it and recording 15000
+      // reported a stall as though it were a slow update, which is a measurement meaning nothing.
       failures.push(
-        'the event-to-DOM measurement waited for a state the row was already in - it measured nothing',
+        'the row never showed error within 15s of the launch request - the renderer did not react at all',
+      )
+    } else if ((before ?? '').includes('error') && before === after) {
+      failures.push(
+        'the measurement waited for a state the row was already in - it measured nothing',
       )
     } else {
-      record('event to DOM, launch transition (ms)', elapsed, MAX_EVENT_TO_DOM_MS)
+      record('request to DOM, launch transition (ms)', elapsed, MAX_EVENT_TO_DOM_MS)
     }
   }
 }
@@ -281,7 +305,12 @@ for (const entry of measurements) {
   const budget = entry.budget === null ? '' : `  (budget ${entry.budget})`
   console.log(`  ${entry.name.padEnd(42)} ${String(entry.value).padStart(7)}${budget}`)
 }
+const measured = measurements.filter(entry => typeof entry.value === 'number').length
 console.log('')
+console.log(
+  `perf-ui produced ${String(measured)} real measurement(s); anything not listed as a number did not ` +
+    'run and must not be read as a pass.',
+)
 console.log(
   'perf-ui does NOT prove the app feels smooth: no GPU, no real profiles, one machine. It is a\n' +
     'regression detector with generous budgets. A green run means no measurement here is bad.',

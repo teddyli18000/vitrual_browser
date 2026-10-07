@@ -33,7 +33,7 @@ function cpuTimes() {
  *
  * `note` is the runner's reporter; the phase deliberately never calls `fail`.
  */
-export async function reportIdleCost({ note, log, windowMs = 10_000, profilesRunning }) {
+export async function reportIdleCost({ note, step, windowMs = 10_000, profilesRunning }) {
   const before = cpuTimes()
   await new Promise(resolve => setTimeout(resolve, windowMs))
   const after = cpuTimes()
@@ -43,7 +43,7 @@ export async function reportIdleCost({ note, log, windowMs = 10_000, profilesRun
   const busyPercent = totalDelta > 0 ? ((totalDelta - idleDelta) / totalDelta) * 100 : 0
   const cores = cpus().length
 
-  log(
+  step(
     `idle cost: ${busyPercent.toFixed(1)}% of ${cores} cores busy over ${windowMs / 1000}s ` +
       `with ${profilesRunning} profile(s) running and nothing driving them`,
   )
