@@ -16,7 +16,6 @@ import { existsSync, writeFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import type { FingerprintConfig } from '@vfox/shared'
 import { ProfileSchema } from '@vfox/shared'
 import AdmZip from 'adm-zip'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -31,7 +30,6 @@ import {
   pruneEngineAddons,
   removeAddon,
 } from '../src/addons.js'
-import { createIdentity } from '../src/identity.js'
 import { toServerOptions } from '../src/launcher.js'
 
 let root: string
@@ -216,6 +214,43 @@ async function fakeEngine(): Promise<string> {
  * with `ENOENT: … engine\properties.json`. Same code, two environments, two results, and the one that
  * mattered was the silent one. The fixture builds what it needs, so the block runs everywhere.
  */
+/**
+ * camoufox-js's type vocabulary for a `properties.json` entry (`dist/utils.js:88-107`), and its
+ * `default` arm is a trap: an unrecognised type string returns false for EVERY value, so one wrong
+ * spelling takes the whole block down with a message about the config rather than about the type. The
+ * string type is `str`, NOT `string` - that is the first spelling anyone reaches for. Valid: str,
+ * int, uint, double, bool, array, dict.
+ */
+function typeOf(value: unknown): string {
+  return Array.isArray(value)
+    ? 'array'
+    : typeof value === 'number'
+      ? Number.isInteger(value)
+        ? 'int'
+        : 'double'
+      : typeof value === 'boolean'
+        ? 'bool'
+        : typeof value === 'object' && value !== null
+          ? 'dict'
+          : 'str'
+}
+
+/**
+ * The config `toServerOptions` ACTUALLY hands over - the exact object `validateConfig` rejects.
+ *
+ * This is the fifth attempt at the fixture's schema and the first that predicts nothing. Enumerating
+ * keys by hand, deriving from the pin set, flattening the fingerprint and mapping through
+ * `fromBrowserforge` were all attempts to guess this object; each was wrong in a different way, and the
+ * last was wrong the same way as the one before it, one level up - the option names are not the
+ * CAMOU_CONFIG names. Reading it removes the prediction, which is why it is the last attempt.
+ *
+ * CAMOU_CONFIG is not on `options.config`: it travels in `env` as chunked variables
+ * (`CAMOU_CONFIG_<n>`, 2047 chars each), which is what `camouConfig` reassembles.
+ */
+async function observedConfig(engineDir: string): Promise<Record<string, unknown>> {
+  return camouConfig(await toServerOptions(profile(), userDataDir, vi.fn(), engineDir))
+}
+
 async function writeEngineProperties(engineDir: string): Promise<void> {
   // DERIVED, NOT ENUMERATED — and this comment matters more than the list it replaces.
   //
@@ -239,101 +274,36 @@ async function writeEngineProperties(engineDir: string): Promise<void> {
   // down with a message about the config rather than about the type. The string type is `str`, NOT
   // `string` — that is the first spelling anyone reaches for. Valid: str, int, uint, double, bool,
   // array, dict.
-  const properties = await engineSchema()
-  await fs.writeFile(path.join(engineDir, 'properties.json'), JSON.stringify(properties), 'utf8')
+  // PASS 1 - a schema VFox does not understand, so the launch goes ahead as-is. `acceptedKeys` returns
+  // `null` for anything that is not an array of `{ property, type }`, and `dropUnacceptedKeys` then
+  // passes the config through untouched - which is what makes the observation in pass 2 possible.
+  //
+  // This is safe because camoufox-js's `loadProperties` reads the file on EVERY call
+  // (`dist/utils.js:61-76`, `readFileSync` with no memoisation) and its only call site passes the
+  // `executable_path` of that launch (`:425`). There is no cache to defeat, so the two passes are not
+  // circular - verified from the source rather than assumed.
+  await fs.writeFile(path.join(engineDir, 'properties.json'), JSON.stringify({}), 'utf8')
   // Two fields, not one: `formatKernelVersion()` joins them and `readKernelVersion()` splits them back.
   await fs.writeFile(
     path.join(engineDir, 'version.json'),
     JSON.stringify({ version: '152.0.4', release: 'beta.30' }),
     'utf8',
   )
-}
 
-/**
- * The config keys the product sets, derived from a generated identity - computed ONCE for the file.
- *
- * WHY THIS IS SEPARATE AND MEMOISED, and it is not tidiness. `writeEngineProperties` is called by
- * `fakeEngine()`, which `writeEngineAddon()` calls, which EVERY block in this file uses. Putting the
- * derivation inline there meant `createIdentity` ran inside the fixture builder for blocks that have
- * nothing to do with the launcher wiring - and six tests in `the engine's own addons`, which had been
- * passing, started failing with a message about the config. A change to a shared helper reached past the
- * block it was meant for, and that happened twice in one PR: the other time was the #79 guard duplicating
- * this fixture instead of reusing it.
- *
- * The key set is a property of the PRODUCT and does not change between calls, so it is computed once.
- */
-let engineSchemaOnce: Promise<Array<{ property: string; type: string }>> | null = null
-
-function engineSchema(): Promise<Array<{ property: string; type: string }>> {
-  engineSchemaOnce ??= (async () => {
-    const generated = await createIdentity({ os: 'windows', config: {} } as FingerprintConfig, null)
-    const typeOf = (value: unknown): string =>
-      Array.isArray(value)
-        ? 'array'
-        : typeof value === 'number'
-          ? Number.isInteger(value)
-            ? 'int'
-            : 'double'
-          : typeof value === 'boolean'
-            ? 'bool'
-            : typeof value === 'object' && value !== null
-              ? 'dict'
-              : 'str'
-    // TWO SOURCES, because `config` is the PIN SET and not the whole CAMOU_CONFIG. Its own doc comment
-    // says what it is — "config keys to pin so the engine cannot re-roll them" — and the per-launch
-    // randomness is a small subset of what the config carries. The fingerprint's own values travel too,
-    // and they reach camoufox-js as FLATTENED keys (`screen.width`, `window.screenX`), so
-    // `identity.fingerprint` is walked and every leaf emitted as `a.b`.
-    //
-    // Deriving from the pin set alone left EIGHT keys the engine rejected by name — which is the
-    // hand-written list trying to come back one entry at a time. Both sources are derived so it cannot.
-    const flatten = (value: unknown, prefix = ''): Array<[string, unknown]> => {
-      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-        return [[prefix, value]]
-      }
-      return Object.entries(value).flatMap(([key, child]) =>
-        flatten(child, prefix ? `${prefix}.${key}` : key),
-      )
-    }
-    // The PIN SET WINS on a collision: it is what the product deliberately pins, so its value is the one
-    // whose type the schema must accept.
-    const byKey = new Map<string, unknown>()
-    for (const [key, value] of Object.entries(generated.config)) byKey.set(key, value)
-    for (const [key, value] of flatten(generated.identity?.fingerprint ?? {})) {
-      if (!byKey.has(key)) byKey.set(key, value)
-    }
-    // USE THE PRODUCT'S OWN MAPPER — DO NOT REIMPLEMENT IT. `identity.ts:196-200` says exactly this:
-    // "`fromBrowserforge()` is where the last per-launch random lives … Running the mapper once and
-    // pinning what it produced keeps the rest of the mapping upstream's, INSTEAD OF REIMPLEMENTING IT
-    // HERE." That comment is the product telling us not to do what this function did three times:
-    //
-    //   1. enumerate the keys by hand        -> CI named the missing eight, one run at a time
-    //   2. derive from the pin set alone     -> eight keys rejected by name
-    //   3. flatten `identity.fingerprint`    -> WRONG NAMES: it emits `screen.screenX` where the config
-    //                                           has `window.screenX`, and `screen.outerWidth` where the
-    //                                           config has `window.outerWidth`
-    //
-    // Each fix moved the reimplementation somewhere else. `fromBrowserforge(generated, '')` IS the
-    // function that produces the CAMOU_CONFIG keys, so this version reimplements nothing and cannot
-    // disagree with the config about a name. `packages/core/scripts/schema-keys.mjs` prints this list.
-    const { fromBrowserforge, generateFingerprint } = (await import(
-      'camoufox-js/dist/fingerprints.js'
-    )) as {
-      fromBrowserforge: (generated: unknown, prefix: string) => unknown
-      generateFingerprint: (window: unknown, options: unknown) => unknown
-    }
-    const raw = generateFingerprint(undefined, { operatingSystems: ['windows'] })
-    const mapped = fromBrowserforge(raw, '') as unknown as Record<string, unknown>
-    return [
+  // PASS 2 - ask the product what it hands over, and write the schema from THAT.
+  const config = await observedConfig(engineDir)
+  const keys = Object.keys(config)
+  // PRINTED, because the count is what turns the next schema question into a number in the log rather
+  // than a CI cycle. Four versions of this fixture were wrong and each one cost a run to find out.
+  console.log(`engine fixture: ${keys.length} CAMOU_CONFIG key(s) observed from toServerOptions`)
+  await fs.writeFile(
+    path.join(engineDir, 'properties.json'),
+    JSON.stringify([
       { property: 'addons', type: 'array' },
-      ...Object.entries(mapped).map(([property, value]) => ({ property, type: typeOf(value) })),
-      ...Object.entries(generated.config).map(([property, value]) => ({
-        property,
-        type: typeOf(value),
-      })),
-    ]
-  })()
-  return engineSchemaOnce
+      ...keys.map(property => ({ property, type: typeOf(config[property]) })),
+    ]),
+    'utf8',
+  )
 }
 
 describe('the addon store', () => {
