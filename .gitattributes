@@ -1,0 +1,26 @@
+# Line endings: one rule for every platform, independent of anyone's `core.autocrlf`.
+#
+# Git for Windows' installer sets `core.autocrlf=true` in the *system* config, so a fresh Windows
+# clone rewrites every tracked file to CRLF in the working tree. Git stores LF, so `git status`
+# stays clean and nothing looks wrong — but `pnpm lint` (`biome check .`, whose formatter wants LF)
+# then reports a format error for every file, and the obvious reaction, `biome check --write`,
+# rewrites the whole repository. That cost a CI cycle once (issue #61).
+#
+# `text=auto` normalises to LF in the index when a file is committed; `eol=lf` checks LF out on
+# every platform. The index already stores LF for all 263 text files, so this rule changes no
+# committed content — it only pins what the working tree looks like from now on.
+* text=auto eol=lf
+
+# `text=auto` decides by content, and a binary that happens to look like text would be normalised
+# and corrupted. These are the types this repository carries or could plausibly gain.
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.node binary
+*.sqlite binary
