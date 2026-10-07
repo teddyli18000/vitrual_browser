@@ -468,6 +468,23 @@ describe.skipIf(!engineAvailable)('what the launcher is handed', () => {
 
     expect(addons.some(entry => entry.includes(ADDON_STORE_DIR))).toBe(false)
   })
+
+  /**
+   * The wiring, not the helper: this is the assertion that goes red when the `pruneEngineAddons` call
+   * is removed from `toServerOptions()`. Without the call, the broken directory survives the launch and
+   * camoufox-js hands its path to `confirmPaths`, which throws — the 500 this change exists to stop.
+   */
+  it('prunes a broken engine addon before the paths are handed to camoufox-js', async () => {
+    const engineDir = await writeEngineAddon('UBO', 'uBlock0@raymondhill.net')
+    const broken = path.join(engineDir, 'addons', 'UBO')
+    await fs.rm(path.join(broken, 'manifest.json'))
+    const warn = vi.fn()
+
+    await toServerOptions(profile(), userDataDir, warn, engineDir)
+
+    expect(existsSync(broken)).toBe(false)
+    expect(warn.mock.calls.flat().join(' ')).toContain('UBO')
+  })
 })
 
 /** The store must be invisible to a profile that never used it. */
