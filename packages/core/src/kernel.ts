@@ -393,6 +393,19 @@ export const installCamoufoxEngine: EngineInstaller = async (emit, request) => {
   const target = request.targetDir
   const version = request.version
 
+  // Write the root marker BEFORE anything reaches camoufox-js's own path resolution.
+  //
+  // The kernel is extracted under `kernels/<version>/`, so the root holds no engine of its own — and
+  // `camoufoxPath()` reads `<INSTALL_DIR>/version.json` and **throws** when it is missing:
+  //
+  //   Version information not found at <root>\version.json. Please run `camoufox fetch` to install.
+  //
+  // Both the GeoIP download and `maybeDownloadAddons` reach it through `getPath()`, which is why the
+  // install extracted 936 MB correctly and then died on its last step — the marker used to be written
+  // only afterwards, by `KernelManager.info()`. This is the trap documented at the top of kernels.ts;
+  // the installer was walking into it.
+  await ensureRootMarker(pkgman.INSTALL_DIR.toString(), version)
+
   // The engine is PINNED, not "newest". `camoufox fetch` always takes the latest release in range,
   // which is how 156.0.1-beta.34 arrived and broke launching: it dropped every `canvas:*` config key
   // (82 properties, none of them canvas), so a profile's canvas hash changed between launches and
