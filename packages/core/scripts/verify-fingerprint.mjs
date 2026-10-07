@@ -1013,7 +1013,7 @@ async function readWorkerSurface(page) {
               : gl.getParameter(gl.RENDERER)
           }
         } catch (error) {
-          out.webglError = String(error && error.message ? error.message : error)
+          out.webglError = String(error?.message ? error.message : error)
         }
         self.postMessage(out)
       }
