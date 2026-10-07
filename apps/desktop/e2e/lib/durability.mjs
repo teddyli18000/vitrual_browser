@@ -38,12 +38,15 @@
  * relaunch, and must FAIL naming what was lost.
  */
 
-import { rmSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
 
 const COOKIE = 'vfox_durable'
 const STORAGE_KEY = 'vfox_durable'
+/** Written through `context.addCookies`, so the two persistence paths can be told apart. */
+const API_COOKIE = 'vfox_durable_api'
 /** A day out, so the value that comes back had to be written to the profile's cookies.sqlite. */
 const COOKIE_EXPIRY_SECONDS = 86_400
 
@@ -90,7 +93,16 @@ async function startOrigin() {
   return { server, setter: `${base}/set`, reader: `${base}/` }
 }
 
-/** What the browser holds for this origin: the document's view, plus the context's cookie store. */
+/**
+ * What the profile's own store holds for the reader origin, as the page sees it and as the jar does.
+ *
+ * Used by the ISOLATION check, which asks whether profile B can see profile A's state: `cookie` is the
+ * Playwright cookie entry (truthy when the origin has one) and `document.storage` is the localStorage
+ * value. The post-relaunch check does NOT use this - it reads the page directly, because it compares
+ * against the strings the seeding step produced, and this shape is not those strings. That mismatch is
+ * what made the phase throw instead of reporting a verdict; the two readers are deliberately separate
+ * now, and each says which shape it returns.
+ */
 async function readState(page, reader) {
   await page.goto(reader, { waitUntil: 'domcontentloaded' })
   const document = await page.evaluate(READ_DOCUMENT_STATE)
@@ -104,6 +116,30 @@ async function readState(page, reader) {
  * `true` / `false` / `'unknown: …'`. The third state matters: a locked or unreadable database must not be
  * reported as "not durable" — they are different defects and only one of them is ours.
  */
+/**
+ * A page in the browser's DEFAULT context, not a new one.
+ *
+ * `browser.newPage()` on a connected browser creates a fresh BrowserContext, and in Playwright's Firefox
+ * that is a container (`userContextId`). Cookies set there are stored under that container's
+ * `originAttributes`, and the container - with its whole jar - is deleted when the browser closes. That
+ * is what made this phase report "a profile loses its state" for eleven runs: the cookie was real, the
+ * profile was fine, and the row was in a container nobody keeps.
+ *
+ * `browser.contexts()[0]` is the persistent context the engine was launched with - the same default
+ * container the product's own window uses, and the one every surviving cookie on the owner's machine is
+ * in.
+ */
+async function pageInDefaultContext(browser) {
+  const context = browser.contexts()[0]
+  if (!context) {
+    throw new Error(
+      'the connected browser has no context, so the default container is unavailable. Reading cookies ' +
+        'from a new context would measure a container instead of the profile.',
+    )
+  }
+  return context.newPage()
+}
+
 async function cookieRowOnDisk(userdata, timeoutMs = 5000) {
   const file = path.join(userdata, 'cookies.sqlite')
   const until = Date.now() + timeoutMs
@@ -128,6 +164,203 @@ async function cookieRowOnDisk(userdata, timeoutMs = 5000) {
     await new Promise(resolve => setTimeout(resolve, 250))
   }
   return lastError ? `unknown: ${lastError.message}` : false
+}
+
+/**
+ * The row's own columns, not just whether it exists.
+ *
+ * Where this comes from: the row is PRESENT before the stop (the phase's own check, with its five-second
+ * budget) and GONE after it - measured by enumerating the databases at both points. So the stop is what
+ * removes it, and Firefox deletes SESSION cookies on a clean shutdown. If the browser stored this cookie
+ * with `expiry = 0` despite the `max-age` and the `expires` we set, that single fact would explain the
+ * whole contradiction: CI loses it, and the owner's machine keeps 11 persistent cookies, because theirs
+ * are persistent and ours would not be.
+ *
+ * This reads the columns that decide it. Called BEFORE the stop, while the row still exists.
+ */
+async function cookieRowDetail(userdata) {
+  const file = path.join(userdata, 'cookies.sqlite')
+  try {
+    const { DatabaseSync } = await import('node:sqlite')
+    const database = new DatabaseSync(file, { readOnly: true })
+    try {
+      const row = database
+        .prepare(
+          'SELECT name, host, path, expiry, isSecure, isHttpOnly, originAttributes FROM moz_cookies WHERE name = ?',
+        )
+        .get(COOKIE)
+      // How many cookies the database holds IN TOTAL, not just ours. If the whole jar goes to zero
+      // across the stop, the engine rewrote the database from an in-memory jar that never held our
+      // cookie - a different defect, and not about our cookie at all. If the count is unchanged and only
+      // ours is missing, the row itself is what was removed, which points at expiry and host handling.
+      const total = database.prepare('SELECT COUNT(*) AS n FROM moz_cookies').get()
+      const totalRows = total ? Number(total.n) : null
+      if (!row) return JSON.stringify({ totalRows, row: 'absent' })
+      const expiry = Number(row.expiry)
+      return JSON.stringify({
+        totalRows,
+        // The two columns that decide whether the scheme hypothesis is even live. The owner's eleven
+        // surviving cookies are all schemeMap = 2, and loopback is a secure context in Firefox - so if
+        // this reads 2 as well, there is no difference to explain.
+        schemeMap: row.schemeMap,
+        originAttributes: row.originAttributes,
+        host: row.host,
+        path: row.path,
+        expiry,
+        expiryLooksLike: expiry > 1e12 ? 'milliseconds' : 'seconds',
+        // The two answers this exists for.
+        isSessionCookie: expiry === 0,
+        expiresInSeconds: expiry > 0 ? Math.round((expiry - Date.now()) / 1000) : null,
+      })
+    } finally {
+      database.close()
+    }
+  } catch (error) {
+    return `unreadable: ${error.message}`
+  }
+}
+
+/**
+ * A stamp of the profile directory, so a relaunch can be shown to have USED it or not.
+ *
+ * The gap this closes: the lock check proves nothing holds `cookies.sqlite`, and the endpoints differ,
+ * so the relaunch is a new engine - but nothing so far proves the new engine opened THIS directory.
+ * Firefox touches `prefs.js`, `times.json` and its own `parent.lock` whenever it starts against a
+ * profile, so a stamp taken before and after the relaunch answers the only question left: did the
+ * second engine use this directory, or a different one?
+ */
+async function profileDirStamp(userdata) {
+  const files = ['cookies.sqlite', 'prefs.js', 'times.json', 'parent.lock', 'compatibility.ini']
+  const stamp = {}
+  for (const name of files) {
+    try {
+      const info = await stat(path.join(userdata, name))
+      stamp[name] = Math.round(info.mtimeMs)
+    } catch {
+      stamp[name] = null
+    }
+  }
+  return stamp
+}
+
+/**
+ * The three files SQLite keeps for a WAL database, with their sizes.
+ *
+ * A row that lives only in the -wal before the stop, and is gone after a clean close, points at the
+ * checkpoint rather than at the engine's cookie logic - and SQLite only removes a -wal after a successful
+ * checkpoint, so an empty -wal beside a missing row would itself be the finding. Sizes alone cannot say
+ * which file held the row, but they can say whether there was anything in the -wal at all.
+ */
+/**
+ * The shutdown-sanitisation preferences this profile carries, if any.
+ *
+ * A whole cookie jar going to zero across a clean stop has one obvious explanation in Firefox: the
+ * profile is configured to clear cookies when it closes. The owner's profile shows the shape of a healthy
+ * one - form data cleared, cookies not - so this reads the same lines out of the profile CI builds and
+ * reports them, before and after the stop, because a queued job is emptied once it has run.
+ */
+async function shutdownPrefs(userdata) {
+  const file = path.join(userdata, 'prefs.js')
+  let text = ''
+  try {
+    text = await readFile(file, 'utf8')
+  } catch (error) {
+    return `prefs.js unreadable: ${error.message}`
+  }
+  const wanted = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(
+      line =>
+        line.includes('clearOnShutdown') ||
+        line.includes('sanitize.pending') ||
+        line.includes('lifetimePolicy') ||
+        line.includes('cookie.') ||
+        line.includes('privacy.'),
+    )
+  if (wanted.length === 0) {
+    return 'no privacy or cookie preference at all in prefs.js'
+  }
+  return wanted.join(' | ')
+}
+
+async function cookieFileSizes(userdata) {
+  const sizes = {}
+  for (const name of ['cookies.sqlite', 'cookies.sqlite-wal', 'cookies.sqlite-shm']) {
+    try {
+      const info = await stat(path.join(userdata, name))
+      sizes[name] = info.size
+    } catch {
+      sizes[name] = null
+    }
+  }
+  return sizes
+}
+
+/**
+ * Every cookie database under the profile, with whether our row is in it.
+ *
+ * The root `cookies.sqlite` is where Firefox keeps them - verified on a real profile on the owner's
+ * machine - and the phase polls exactly that file. But two cookies are now gone across a relaunch while
+ * the engine demonstrably opens this profile, and on the owner's machine cookies DO persist, so the
+ * remaining question is whether we are looking at the database the engine uses. A second file under a
+ * subdirectory would answer it outright.
+ */
+async function cookieDatabases(userdata) {
+  const found = []
+  const walk = async dir => {
+    let entries = []
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(full)
+      } else if (entry.name === 'cookies.sqlite') {
+        // The same budget as the phase's own check. A shorter one reports GONE for a row that is
+        // merely slow to appear, because this function polls - which is how a measurement artefact
+        // almost became a finding.
+        const row = await cookieRowOnDisk(dir, 5000)
+        found.push({ path: full, row: row === true ? 'PRESENT' : row === false ? 'GONE' : row })
+      }
+    }
+  }
+  await walk(userdata)
+  return found
+}
+
+/**
+ * Can this process open the profile's `cookies.sqlite` for writing?
+ *
+ * WHAT THIS PROVES, AND WHAT IT DOES NOT - the distinction was measured, not assumed. It returns
+ * `'free'` when the open succeeds, `'locked: <code>'` when the file is held EXCLUSIVELY, and
+ * `'absent'` when there is no database to open.
+ *
+ * It does NOT prove that no engine survived the stop. SQLite opens its databases with
+ * FILE_SHARE_READ | FILE_SHARE_WRITE, so a live engine holding this file still lets a second open
+ * succeed: the old version of this helper returned 'free' for a running browser and printed
+ * "no surviving engine holds the directory" about it. That is the shape of check this repository keeps
+ * shipping - one that cannot fail in the case it exists for - and it was the only check in the suite
+ * whose purpose was to catch a survived process tree.
+ *
+ * The signal that DOES discriminate is the wsEndpoint comparison in the phase: two different endpoints
+ * mean a genuinely new engine instance. This helper is kept only for the exclusive-lock case, which is
+ * real but rare, and for reporting a missing database as what it is rather than as an accusation.
+ */
+async function cookiesDbIsFree(userdata) {
+  const file = path.join(userdata, 'cookies.sqlite')
+  if (!existsSync(file)) return 'absent'
+  try {
+    const handle = await open(file, 'r+')
+    await handle.close()
+    return 'free'
+  } catch (error) {
+    const code = error?.code ?? 'unknown'
+    return `locked: ${code}`
+  }
 }
 
 /**
@@ -159,7 +392,12 @@ export async function runDurabilityPhase({
   )
 
   const userdataDir = id => path.join(dataDir, 'profiles', id, 'userdata')
-  const endpointOf = launched => launched?.wsEndpoint ?? launched?.data?.wsEndpoint
+  // The API client returns `{ status, body }`, so the runtime lives at `body.data`. Reading the wrong
+  // level is what made the first real run report "no wsEndpoint" for a 200 response that contained one —
+  // the launch path was fine and this helper was not. The shallower shapes stay as fallbacks so a client
+  // that unwraps the envelope does not break it again.
+  const endpointOf = response =>
+    response?.body?.data?.wsEndpoint ?? response?.data?.wsEndpoint ?? response?.wsEndpoint
 
   /** Best-effort: the GitHub runner has no CIM, so "could not enumerate" is a note, never a pass. */
   const checkNoEngineProcesses = async label => {
@@ -204,10 +442,25 @@ export async function runDurabilityPhase({
     let browser = await connect(wsEndpoint)
     let seeded
     try {
-      const page = await browser.newPage()
+      const page = await pageInDefaultContext(browser)
       // The SETTER route, once. Every later navigation uses the reader.
       await page.goto(setter, { waitUntil: 'domcontentloaded' })
       seeded = await page.evaluate(READ_DOCUMENT_STATE)
+
+      // A SECOND cookie through the browser's own API, for the same origin and the same expiry.
+      // It exists to separate two very different failures that currently look identical: if BOTH
+      // cookies are gone after the relaunch, the profile's cookie store is not being persisted at
+      // all. If only the PAGE-set one is gone, the store works and something about setting a cookie
+      // from a page on a plain-HTTP loopback origin is what does not survive - a property of the
+      // engine or of the origin, not of the product's promise that a profile keeps its state.
+      await page.context().addCookies([
+        {
+          name: API_COOKIE,
+          value: 'durable-api',
+          url: reader,
+          expires: Math.floor(Date.now() / 1000) + COOKIE_EXPIRY_SECONDS,
+        },
+      ])
     } finally {
       await browser.close()
     }
@@ -228,6 +481,36 @@ export async function runDurabilityPhase({
     const onDisk = await cookieRowOnDisk(userdataDir(profileA.id))
     if (onDisk === true) {
       checks.push('cookie row on disk before the stop')
+      // While the row is known to be there: is it a SESSION cookie? Firefox deletes those on a clean
+      // shutdown, which is exactly when this row disappears - so if the browser stored ours as
+      // session-only, everything below would be blaming the product for a cookie it was always going
+      // to delete. This asserts the INPUT before it judges the outcome, which is the difference between
+      // a phase that reports a real defect and one that manufactures a false one.
+      const rowDetail = await cookieRowDetail(userdataDir(profileA.id))
+      note(`cookie row columns before the stop: ${rowDetail}`)
+      if (rowDetail !== 'no row' && !String(rowDetail).startsWith('unreadable')) {
+        const detail = JSON.parse(rowDetail)
+        if (detail.isSessionCookie) {
+          fail(
+            `the browser stored ${COOKIE} as a SESSION cookie (expiry 0) although the phase set a ` +
+              `${COOKIE_EXPIRY_SECONDS}s max-age on the page and an expires on context.addCookies. ` +
+              'Firefox deletes session cookies at shutdown, so this one could never survive the stop - ' +
+              'and the verdict below would be about the test, not the product. Either the browser is ' +
+              'dropping our expiry or this phase sets the cookie wrongly; until that is settled, nothing ' +
+              'here says a profile loses its state.',
+          )
+          return { unread, checks }
+        }
+        if (
+          detail.expiresInSeconds !== null &&
+          detail.expiresInSeconds < COOKIE_EXPIRY_SECONDS / 2
+        ) {
+          note(
+            `the stored expiry is only ${detail.expiresInSeconds}s away, not the ${COOKIE_EXPIRY_SECONDS}s ` +
+              'the phase asked for - worth knowing before reading anything into a later disappearance.',
+          )
+        }
+      }
       pass(`profile ${profileA.name}: the cookie row is already in cookies.sqlite before the stop`)
     } else if (onDisk === false) {
       note(
@@ -243,6 +526,39 @@ export async function runDurabilityPhase({
     await api(`/api/v1/profiles/${profileA.id}/stop`, { method: 'POST', body: '{}' })
     await checkNoEngineProcesses(`after stopping ${profileA.name}`)
 
+    // BEFORE the checks that can fail: this line is what tells us whether the engine exited on its
+    // own or was killed at the deadline, and it is worth nothing if a later assertion aborts first.
+    await printLauncherStopLog(dataDir)
+
+    // STOP-LIVENESS, the check that does not need CIM. A live engine holds its profile's
+    // databases open; if cookies.sqlite is still locked after the stop, the process tree was
+    // NOT killed, and the relaunch below would race the survivor for the same directory.
+    // This is the failure that looks like "state was lost" while the state is fine on disk.
+    const lockState = await cookiesDbIsFree(userdataDir(profileA.id))
+    if (lockState.startsWith('locked: EBUSY') || lockState.startsWith('locked: EPERM')) {
+      fail(
+        `after stopping ${profileA.name}: the profile's cookies.sqlite is held by an EXCLUSIVE ` +
+          `lock (${lockState}). SQLite shares the file, so this is not the ordinary case of a live ` +
+          'engine - something holds it against readers too, and the relaunch below would race it.',
+      )
+      return { unread, checks }
+    }
+    if (lockState === 'free') {
+      pass(`profile ${profileA.name}: cookies.sqlite is not exclusively locked after the stop`)
+    } else {
+      // NOT a failure, and that is the point. The probe only knows the open did not succeed; a live
+      // engine would not make it fail anyway, because SQLite shares the file. A hard failure here is
+      // not a measurement - and it was standing in front of the measurement this phase exists for,
+      // because the phase stopped at it and never reached the relaunch or the launcher log.
+      note(
+        `after stopping ${profileA.name}: cookies.sqlite is ${lockState}. That is NOT a finding about ` +
+          'a process - the probe only knows the open did not succeed, and a live engine would not make ' +
+          'it fail anyway, because SQLite shares the file. The wsEndpoint comparison below is what ' +
+          'discriminates a survived engine from a new one, and this check must not stand in front of it.',
+      )
+    }
+    checks.push('cookies.sqlite not exclusively locked after the stop')
+
     if (breakMode === 'durability-userdata') {
       const target = userdataDir(profileA.id)
       rmSync(target, { recursive: true, force: true })
@@ -251,6 +567,88 @@ export async function runDurabilityPhase({
       )
     }
 
+    note(`shutdown prefs before the stop: ${await shutdownPrefs(userdataDir(profileA.id))}`)
+
+    const dbFilesBefore = await cookieFileSizes(userdataDir(profileA.id))
+    note(`cookie files before the relaunch: ${JSON.stringify(dbFilesBefore)}`)
+
+    const dbsBefore = await cookieDatabases(userdataDir(profileA.id))
+    note(`cookie databases before the relaunch: ${JSON.stringify(dbsBefore)}`)
+
+    // The comparison that has been missing: the row was found before the stop with a five-second
+    // budget, and nothing has ever asked whether it is still there immediately after - only whether the
+    // database is writable. Same budget, same function, so the two answers mean something together.
+    const rowAfterStop = await cookieRowOnDisk(userdataDir(profileA.id), 5000)
+    note(
+      `cookie row in cookies.sqlite after the stop: ${
+        rowAfterStop === true ? 'PRESENT' : rowAfterStop === false ? 'GONE' : rowAfterStop
+      }`,
+    )
+    checks.push(
+      rowAfterStop === true
+        ? 'the row is still on disk after the stop - the store keeps it, the relaunch loses it'
+        : 'the row is gone from disk after the stop - something removed it on the way out',
+    )
+
+    note(`shutdown prefs after the stop: ${await shutdownPrefs(userdataDir(profileA.id))}`)
+
+    const dbFilesAfter = await cookieFileSizes(userdataDir(profileA.id))
+    note(`cookie files after the stop: ${JSON.stringify(dbFilesAfter)}`)
+    note(
+      'read the two file listings together: a -wal that had content before the stop and none after it ' +
+        'points at the checkpoint, and a row count that fell to zero means the engine rewrote the ' +
+        'database from a jar that never held our cookie rather than deleting one row.',
+    )
+
+    // THE NUMBER THE FILE LISTINGS CANNOT GIVE, and the last one the mechanism needs. The sizes are
+    // identical before and after the stop and the -wal is empty in both readings, so the database was not
+    // rewritten and there was nothing to checkpoint - which leaves "a row was deleted in place" as the
+    // shape. What decides between the two remaining mechanisms is the TOTAL row count AFTER the stop: zero
+    // means the engine replaced the jar, unchanged means it removed our row specifically, and those have
+    // opposite fixes - one is about what the cookie service loaded at startup, the other about the row.
+    const rowDetailAfterStop = await cookieRowDetail(userdataDir(profileA.id))
+    note(`cookie row columns after the stop: ${rowDetailAfterStop}`)
+
+    /**
+     * Print the launcher's own account of the stop, because CI cannot see it any other way.
+     *
+     * `debug` writes to <dataDir>/logs/vfox.log rather than stdout, so the line that says whether the engine
+     * exited on its own or was still alive when the graceful window expired has never appeared in a CI log -
+     * and that line decides whether a lost state belongs to the forced kill or to the engine's own shutdown.
+     * Two different mechanisms, two different fixes, one invisible line.
+     */
+    async function printLauncherStopLog(dataDir) {
+      const file = path.join(dataDir, 'logs', 'vfox.log')
+      let text = ''
+      try {
+        text = await readFile(file, 'utf8')
+      } catch (error) {
+        note(`could not read the launcher log at ${file}: ${error.message}`)
+        return
+      }
+      const lines = text
+        .split('\n')
+        .filter(
+          line =>
+            line.includes('exited on its own') ||
+            line.includes('STILL ALIVE') ||
+            line.includes('graceful window') ||
+            line.includes('engine process exited') ||
+            line.includes('taskkill'),
+        )
+      if (lines.length === 0) {
+        note(
+          `the launcher log at ${file} has no stop line: either the engine never reported an exit, or the ` +
+            'graceful window never ran. Both are findings, and neither is visible from the phase alone.',
+        )
+        return
+      }
+      for (const line of lines.slice(-6)) note(`launcher: ${line.trim()}`)
+    }
+
+    const stampBefore = await profileDirStamp(userdataDir(profileA.id))
+    note(`profile directory before the relaunch: ${JSON.stringify(stampBefore)}`)
+
     const relaunched = await api(`/api/v1/profiles/${profileA.id}/launch`, {
       method: 'POST',
       body: '{}',
@@ -258,20 +656,156 @@ export async function runDurabilityPhase({
     const secondEndpoint = endpointOf(relaunched)
     if (!secondEndpoint) {
       fail(
-        `profile ${profileA.name}: the relaunch returned no wsEndpoint — ` +
-          `the API answered ${JSON.stringify(relaunched).slice(0, 300)}`,
+        `profile ${profileA.name}: the relaunch returned no wsEndpoint — the API answered ` +
+          `${JSON.stringify(relaunched).slice(0, 300)}`,
       )
       return { unread, checks }
     }
+    // Two different endpoints = a genuinely new engine instance. The same endpoint would mean the
+    // stop never happened at all, which the lock check above should already have caught.
+    note(
+      `relaunch: first endpoint ${JSON.stringify(wsEndpoint)} vs second ${JSON.stringify(secondEndpoint)}` +
+        `${secondEndpoint === wsEndpoint ? ' — IDENTICAL, the stop did not take effect' : ''}`,
+    )
 
     browser = await connect(secondEndpoint)
     let after
+    // Read inside the session: asking a closed browser for its cookies can only ever answer "none",
+    // which would be a check that cannot pass.
+    //
+
+    let apiSurvived = false
     try {
-      const page = await browser.newPage()
+      const page = await pageInDefaultContext(browser)
       // The READER route: it sets nothing, so anything observed here came from the profile's own store.
+      // `readState` is the shape the checks below were written against: `after.cookie` is the
+      // Playwright cookie ENTRY (they ask it for `.expires`) and `after.document.cookie` is the string.
+      // Reading the page directly here - as an earlier attempt did - gives a string in `cookie` and no
+      // `document` at all, which is how a check ends up reading fields that are not there.
       after = await readState(page, reader)
+      const jar = await page.context().cookies(reader)
+      apiSurvived = jar.some(entry => entry.name === API_COOKIE)
     } finally {
       await browser.close()
+    }
+
+    // Which persistence path survived? The two answers mean different things and the combined failure
+    // message above cannot express the difference: both gone means the profile's cookie store is not
+    // persisted at all, while only the page-set one gone means the store works and something about a
+    // cookie set by a page on a plain-HTTP loopback origin is what does not survive.
+    note(
+      `after the relaunch: page-set cookie ${after.document.cookie.includes(COOKIE) ? 'PRESENT' : 'GONE'}, ` +
+        `API-set cookie ${apiSurvived ? 'PRESENT' : 'GONE'}`,
+    )
+    checks.push(
+      apiSurvived
+        ? 'the cookie store persists across the stop'
+        : 'neither cookie survived - the profile cookie store is not being persisted',
+    )
+
+    // Did the second engine actually open this profile directory? Firefox writes these on startup.
+    const stampAfter = await profileDirStamp(userdataDir(profileA.id))
+    const touched = Object.keys(stampAfter).filter(
+      name => stampAfter[name] !== null && stampAfter[name] !== stampBefore[name],
+    )
+    note(`profile directory after the relaunch: ${JSON.stringify(stampAfter)}`)
+    if (touched.length === 0) {
+      note(
+        'NO file in the profile directory changed during the relaunch: the second engine never opened ' +
+          'this directory, so it launched against a different one. The state was never lost — it is in ' +
+          'a directory the relaunched browser does not use.',
+      )
+    } else {
+      note(
+        `the relaunch touched: ${touched.join(', ')} — the second engine DID open this directory`,
+      )
+    }
+    checks.push(
+      touched.length === 0 ? 'relaunch used a DIFFERENT directory' : 'relaunch used this directory',
+    )
+
+    // Is the row STILL on disk after the relaunch? This separates the two remaining explanations:
+    // the browser opened the profile but did not read that database (row present), or something
+    // rewrote or cleared the database on startup (row gone). The directory stamp above already
+    // proved the engine opened this profile, so the answer decides whether the defect is a read
+    // path or an initialisation step.
+    const rowAfterRelaunch = await cookieRowOnDisk(userdataDir(profileA.id), 2000)
+    note(
+      `cookie row in cookies.sqlite after the relaunch: ${
+        rowAfterRelaunch === true
+          ? 'PRESENT'
+          : rowAfterRelaunch === false
+            ? 'GONE'
+            : rowAfterRelaunch
+      }`,
+    )
+    checks.push(
+      rowAfterRelaunch === true
+        ? 'the row is still on disk after the relaunch'
+        : 'the row is gone from disk after the relaunch',
+    )
+
+    const dbsAfter = await cookieDatabases(userdataDir(profileA.id))
+    note(`cookie databases after the relaunch: ${JSON.stringify(dbsAfter)}`)
+    if (dbsAfter.length > 1) {
+      note(
+        `MORE THAN ONE cookie database exists under the profile (${dbsAfter.length}): the phase polls the \
+one at the root, and if the engine uses another, every verdict here has been about the wrong file.`,
+      )
+    }
+
+    // A SECOND CYCLE, because the one structural difference left between CI and the owner's machine is
+    // that CI's profile is seconds old while theirs has been launched many times. If a warmed profile
+    // keeps the cookie and a fresh one does not, this phase is measuring a property of a new profile
+    // rather than the product's promise - and it must say so rather than blame the product.
+    try {
+      const warmed = await connect(secondEndpoint)
+      try {
+        const page = await warmed.newPage()
+        await page.goto(setter, { waitUntil: 'domcontentloaded' })
+        const reseeded = await page.evaluate(READ_DOCUMENT_STATE)
+        note(
+          `second cycle: the cookie was set again on the relaunched profile (page sees ` +
+            `${reseeded.cookie.includes(COOKIE) ? 'it' : 'nothing'})`,
+        )
+      } finally {
+        await warmed.close()
+      }
+      await api(`/api/v1/profiles/${profileA.id}/stop`, { method: 'POST', body: '{}' })
+      const third = await api(`/api/v1/profiles/${profileA.id}/launch`, {
+        method: 'POST',
+        body: '{}',
+      })
+      const thirdEndpoint = endpointOf(third)
+      if (!thirdEndpoint) {
+        note(
+          'second cycle: the third launch returned no wsEndpoint, so the cycle could not be measured',
+        )
+      } else {
+        const again = await connect(thirdEndpoint)
+        let survived = false
+        try {
+          const page = await again.newPage()
+          await page.goto(reader, { waitUntil: 'domcontentloaded' })
+          const seen = await page.evaluate(READ_DOCUMENT_STATE)
+          survived = seen.cookie.includes(COOKIE)
+        } finally {
+          await again.close()
+        }
+        note(
+          `second cycle: the cookie ${survived ? 'SURVIVED' : 'was lost again'} across a stop and ` +
+            'relaunch of an already-warmed profile. Survived means the first cycle is the difference and ' +
+            'this phase should warm the profile before measuring; lost again means a profile in CI never ' +
+            'keeps cookies and the search goes back to the engine.',
+        )
+        checks.push(
+          survived
+            ? 'a warmed profile keeps its state too'
+            : 'a warmed profile loses it - the first cycle is the difference',
+        )
+      }
+    } catch (error) {
+      note(`second cycle could not run: ${error.message}`)
     }
 
     const lost = []
@@ -308,6 +842,12 @@ export async function runDurabilityPhase({
     pass(`profile ${profileA.name}: cookie and localStorage survived a full stop and relaunch`)
 
     // Isolation, in the same phase: durability with a shared directory would pass everything above.
+    //
+    // STOP IT FIRST, for the same reason profile A needed it: phase 6 launches every profile, so B is
+    // already running by the time the isolation check reaches it and the API answers 409 "is already
+    // running". The launch below is a FRESH start, which is the point - it must be B's own session,
+    // reading B's own directory, and a launch against an already-running profile would not prove that.
+    await api(`/api/v1/profiles/${profileB.id}/stop`, { method: 'POST', body: '{}' })
     const launchedB = await api(`/api/v1/profiles/${profileB.id}/launch`, {
       method: 'POST',
       body: '{}',
@@ -323,7 +863,7 @@ export async function runDurabilityPhase({
     browser = await connect(endpointB)
     let other
     try {
-      const page = await browser.newPage()
+      const page = await pageInDefaultContext(browser)
       // Read-only, so B's page cannot manufacture the very state this check looks for.
       other = await readState(page, reader)
     } finally {
