@@ -223,6 +223,34 @@ running it red. Two habits that follow:
    regression visible before it becomes a failure, and they are what a reviewer can check without
    re-running anything.
 
+### Instruments that disagree with themselves
+
+**The most expensive defect in this repository's history so far, and it is not a check that cannot fail -
+it is a check whose two halves measure different things.** The durability phase reported "a profile loses
+its state across a stop and relaunch" for eleven CI runs. It never did. The phase **wrote** its cookie
+through a page from `browser.newPage()` on a browser obtained from `firefox.connect(wsEndpoint)`, and in
+Playwright's Firefox that creates a **new BrowserContext, which is a Firefox container** - so the cookie
+was stored with `originAttributes = "^userContextId=6"` and the container, with its whole jar, was deleted
+when the browser closed. The phase then **read** through `browser.contexts()[0]`, the persistent default
+container, and correctly found nothing. `totalRows` went 2 → 0 with the database file unchanged: a DELETE
+of the container's rows, not of ours.
+
+**The rule: on a connected browser, `browser.newPage()` is a new container, and cookies written there do
+not belong to the profile. Use `browser.contexts()[0]` - the context the engine was launched with, which
+is the default container a user's own window uses.** A phase that writes in one context and reads in
+another will agree with itself about the read, be wrong about the write, and look perfectly consistent in
+every log.
+
+**What it cost, recorded so the next person does not repeat the search:** eight hypotheses were killed
+honestly along the way - write failure, a surviving process, an uncheckpointed WAL, the relaunch using a
+different directory, a loopback-origin artifact, the forced kill landing mid-shutdown, session-cookie
+deletion, and the profile being too new - plus a shutdown-preference hypothesis and a scheme hypothesis
+that were killed before they were run. None of them was the cause. **The instrument was.**
+
+**The tell, in hindsight:** `originAttributes` on the failing row read `^userContextId=6` while all eleven
+cookies that survive on the owner's own machine read empty. A measured difference **on the failing item
+itself** beats a difference inferred between two populations, and it was the one that closed it.
+
 ### Packaging and release
 
 - **A step that must happen for the packaged app to work belongs in `electron.vite.config.ts`**, not on a
