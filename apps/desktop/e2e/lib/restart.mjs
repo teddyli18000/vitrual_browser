@@ -16,6 +16,7 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { findEngineLauncher } from './artifact.mjs'
 
 /**
  * The portable promise: everything the product stores lives inside its own folder, so the folder can be
@@ -191,24 +192,16 @@ export async function restartPhase({
   )
 
   // (c) The engine is still installed where it was.
-  // LAYOUT-AGNOSTIC AND PLATFORM-AGNOSTIC ON PURPOSE. The launcher is camoufox.exe on Windows and
-  // camoufox elsewhere, and since the multi-kernel work it lives either at the engine root or under
-  // kernels/<version>/. This assertion must not decide any of that: a check that fails against a
-  // correct install is the defect we already fixed once in verify-install.mjs, and the same mistake
-  // in the other direction - hard-coding camoufox.exe - made four kernel tests invisible on Linux.
-  const launcherNames = ['camoufox.exe', 'camoufox']
-  const hasLauncher = dir => launcherNames.some(name => existsSync(path.join(dir, name)))
-  const kernelsDir = path.join(engineDir, 'kernels')
-  const kernelBuilds = existsSync(kernelsDir)
-    ? readdirSync(kernelsDir, { withFileTypes: true })
-        .filter(entry => entry.isDirectory())
-        .map(entry => path.join(kernelsDir, entry.name))
-    : []
-  const launcherFound = hasLauncher(engineDir) || kernelBuilds.some(hasLauncher)
+  // ONE RULE, ONE PLACE. This file carried its own copy of the launcher lookup - which names to accept
+  // and which layouts to search - and lib/artifact.mjs now exports exactly that rule as
+  // findEngineLauncher. Two implementations of one rule is how they drift, and this copy was mine: the
+  // shared one was written by a different agent who read this version and generalised it, so the honest
+  // fix is to call theirs rather than keep both.
+  const engineCheck = findEngineLauncher(engineDir)
   assert(
-    launcherFound,
+    engineCheck.found,
     `the engine is still installed: no launcher under ${engineDir} or its kernels/ subdirectories ` +
-      `(${kernelBuilds.length} kernel build(s) found)`,
+      `(${engineCheck.kernelBuilds} kernel build(s) found)`,
   )
   assert(
     existsSync(path.join(engineDir, 'version.json')),
