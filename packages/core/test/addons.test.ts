@@ -302,9 +302,35 @@ function engineSchema(): Promise<Array<{ property: string; type: string }>> {
     for (const [key, value] of flatten(generated.identity?.fingerprint ?? {})) {
       if (!byKey.has(key)) byKey.set(key, value)
     }
+    // USE THE PRODUCT'S OWN MAPPER — DO NOT REIMPLEMENT IT. `identity.ts:196-200` says exactly this:
+    // "`fromBrowserforge()` is where the last per-launch random lives … Running the mapper once and
+    // pinning what it produced keeps the rest of the mapping upstream's, INSTEAD OF REIMPLEMENTING IT
+    // HERE." That comment is the product telling us not to do what this function did three times:
+    //
+    //   1. enumerate the keys by hand        -> CI named the missing eight, one run at a time
+    //   2. derive from the pin set alone     -> eight keys rejected by name
+    //   3. flatten `identity.fingerprint`    -> WRONG NAMES: it emits `screen.screenX` where the config
+    //                                           has `window.screenX`, and `screen.outerWidth` where the
+    //                                           config has `window.outerWidth`
+    //
+    // Each fix moved the reimplementation somewhere else. `fromBrowserforge(generated, '')` IS the
+    // function that produces the CAMOU_CONFIG keys, so this version reimplements nothing and cannot
+    // disagree with the config about a name. `packages/core/scripts/schema-keys.mjs` prints this list.
+    const { fromBrowserforge, generateFingerprint } = (await import(
+      'camoufox-js/dist/fingerprints.js'
+    )) as {
+      fromBrowserforge: (generated: unknown, prefix: string) => unknown
+      generateFingerprint: (window: unknown, options: unknown) => unknown
+    }
+    const raw = generateFingerprint(undefined, { operatingSystems: ['windows'] })
+    const mapped = fromBrowserforge(raw, '') as unknown as Record<string, unknown>
     return [
       { property: 'addons', type: 'array' },
-      ...[...byKey].map(([property, value]) => ({ property, type: typeOf(value) })),
+      ...Object.entries(mapped).map(([property, value]) => ({ property, type: typeOf(value) })),
+      ...Object.entries(generated.config).map(([property, value]) => ({
+        property,
+        type: typeOf(value),
+      })),
     ]
   })()
   return engineSchemaOnce
