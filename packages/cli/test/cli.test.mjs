@@ -270,7 +270,10 @@ describe('vfox kernel', () => {
     await mkdir(dir, { recursive: true })
     // The launcher's name is platform-specific: hard-coding `camoufox.exe` made every fixture kernel
     // invisible on the Linux CI runner, so a build that was there looked like it had no launcher.
-    await writeFile(path.join(dir, process.platform === 'win32' ? 'camoufox.exe' : 'camoufox'), 'stub')
+    await writeFile(
+      path.join(dir, process.platform === 'win32' ? 'camoufox.exe' : 'camoufox'),
+      'stub',
+    )
     await writeFile(path.join(dir, 'properties.json'), '[]')
     const [number, release] = version.split('-')
     await writeFile(
