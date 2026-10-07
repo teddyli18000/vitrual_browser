@@ -24,6 +24,15 @@ export interface ServerOptions {
   /** The primary display's work area, when the host can see it. See `CoreOptions.workArea`. */
   workArea?: { width: number; height: number }
   /**
+   * Refuse to start when another live VFox instance owns `dataDir`, instead of starting read-only.
+   *
+   * The desktop passes this: two instances mean two writers and two browsers on one profile
+   * directory, and the user is better served by "VFox is already running" than by a window whose
+   * buttons silently fail. The CLI and the server leave it unset, so a read-only `vfox list` beside
+   * the GUI keeps working.
+   */
+  requireExclusive?: boolean
+  /**
    * Test/embedding hook: reuse an already constructed core instead of creating one. The server
    * still closes it on `close()`, exactly as it closes the one it created itself.
    */

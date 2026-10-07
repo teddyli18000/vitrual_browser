@@ -16,6 +16,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { CoreLogger } from './index.js'
@@ -49,8 +50,13 @@ const DATA_DIR_LOCK = 'core.lock'
 export interface DataDirLock {
   /** `false` when another live VFox instance already owns this data directory. */
   readonly acquired: boolean
+  /** The pid holding it when `acquired` is false, so a refusal can name what holds the directory. */
+  readonly owner: number | null
   release(): Promise<void>
 }
+
+/** Bounded: a holder that dies between our read and our unlink must not spin us forever. */
+const LOCK_ATTEMPTS = 5
 
 /**
  * Claim the data directory for this process.
@@ -67,39 +73,95 @@ export async function acquireDataDirLock(
   logger: CoreLogger,
 ): Promise<DataDirLock> {
   const file = path.join(dataDir, DATA_DIR_LOCK)
-  const owner = await readLockPid(file)
-  if (owner !== null && owner !== process.pid && isProcessAlive(owner)) {
+  await fs.mkdir(dataDir, { recursive: true })
+
+  // The token, not the pid, is what identifies *this* core. Two cores in one process — the desktop
+  // creating one twice, or a test — share a pid, so a pid alone cannot tell "another instance" from
+  // "my own leftover", and getting that wrong is how a second writer gets in.
+  const token = randomUUID()
+
+  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+    try {
+      const handle = await fs.open(file, 'wx')
+      try {
+        await handle.writeFile(
+          `${JSON.stringify({ pid: process.pid, token, startedAt: new Date().toISOString() })}\n`,
+          'utf8',
+        )
+      } finally {
+        await handle.close()
+      }
+      return {
+        acquired: true,
+        owner: null,
+        async release() {
+          // Only ever remove our own lock: another instance may have taken over meanwhile. Compared by
+          // token, so a different core with our pid cannot have its lock removed by us either.
+          if ((await readLockToken(file)) === token) {
+            await fs.rm(file, { force: true })
+          }
+        },
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error
+      }
+    }
+
+    const holder = await readLock(file)
+    // Ours when the token matches. The token, not the pid, is what identifies this core: two cores in
+    // one process — the desktop starting twice, or a test — share a pid, so a pid alone cannot tell
+    // "another instance" from "my own leftover", and getting that wrong is how a second writer gets in.
+    // A lock written before tokens existed carries our pid and no token; that is ours too, or an upgrade
+    // would refuse to start against its own previous run's file.
+    const ours =
+      holder !== null &&
+      (holder.token === token || (holder.token === undefined && holder.pid === process.pid))
+
+    if (holder !== null && !ours && isProcessAlive(holder.pid)) {
+      logger.warn(
+        `another VFox instance (pid ${holder.pid}) owns ${dataDir}; this instance is read-only and will ` +
+          'not write the store or launch profiles',
+      )
+      return { acquired: false, owner: holder.pid, release: async () => {} }
+    }
+    // Anything else is not evidence of a live holder: our own leftover, an unreadable file, or a dead
+    // holder. All three are removed and the exclusive claim retried — a lock that cannot be attributed
+    // to a living process must never lock the user out of their own data, which is the hard requirement.
     logger.warn(
-      `another VFox instance (pid ${owner}) owns ${dataDir}; ` +
-        'skipping orphan reconciliation so its profiles keep running',
+      holder === null
+        ? `removing an unreadable data directory lock at ${file}`
+        : ours
+          ? `removing our own leftover data directory lock (pid ${holder.pid})`
+          : `taking over the data directory lock from pid ${holder.pid}, which is no longer running ` +
+            '(a crashed instance must not lock you out)',
     )
-    return { acquired: false, release: async () => {} }
+    await fs.rm(file, { force: true })
   }
 
-  await fs.mkdir(dataDir, { recursive: true })
-  await fs.writeFile(
-    file,
-    `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`,
-    'utf8',
+  const holder = await readLock(file)
+  logger.warn(
+    `could not claim ${file} after ${LOCK_ATTEMPTS} attempts (holder pid ${holder?.pid ?? 'unknown'}); ` +
+      'this instance is read-only',
   )
-  return {
-    acquired: true,
-    async release() {
-      // Only ever remove our own lock: another instance may have taken over meanwhile.
-      if ((await readLockPid(file)) === process.pid) {
-        await fs.rm(file, { force: true })
-      }
-    },
-  }
+  return { acquired: false, owner: holder?.pid ?? null, release: async () => {} }
 }
 
-async function readLockPid(file: string): Promise<number | null> {
+/** The lock's contents, or `null` when it is missing, unreadable or does not name a pid. */
+async function readLock(file: string): Promise<{ pid: number; token: string | undefined } | null> {
   try {
-    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { pid?: unknown }
-    return typeof raw.pid === 'number' && Number.isInteger(raw.pid) && raw.pid > 0 ? raw.pid : null
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { pid?: unknown; token?: unknown }
+    if (typeof raw.pid !== 'number' || !Number.isInteger(raw.pid) || raw.pid <= 0) {
+      return null
+    }
+    return { pid: raw.pid, token: typeof raw.token === 'string' ? raw.token : undefined }
   } catch {
     return null
   }
+}
+
+async function readLockToken(file: string): Promise<string | null> {
+  return (await readLock(file))?.token ?? null
 }
 
 function isProcessAlive(pid: number): boolean {

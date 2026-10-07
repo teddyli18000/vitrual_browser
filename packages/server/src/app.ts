@@ -196,6 +196,19 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   )
   const { token, generated, source } = await resolveToken({ dataDir, token: options.token })
   const core = options.core ?? (await loadCore(dataDir, logger, options.workArea))
+  // The desktop is the most likely second instance and the only one that must not run at all: two
+  // instances mean two writers and two browsers on one profile directory. This is the one behaviour
+  // that guarantees a single writer, and the message below is what the user sees.
+  if (options.requireExclusive && !core.dataDirLock.owned) {
+    const owner = core.dataDirLock.owner
+    // Nothing else has been built yet, but the core we just created must not be left holding its
+    // rotating logger open. `close()` is safe here: a read-only core never took the lock, so its
+    // release is a no-op and the real owner keeps it.
+    await core.close()
+    throw new Error(
+      `VFox is already running (pid ${owner ?? 'unknown'}) and owns ${dataDir}. Close it and start again.`,
+    )
+  }
   // Exactly one synchroniser for the whole process: it owns the master/slave links and the session
   // state, so a second instance would fight this one for the same windows.
   const sync = await loadSync(core, logger)

@@ -40,7 +40,16 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
   // messages still reach the file through the logger the desktop hands to startServer.
   const logger = options.logger ?? createFileLogger(dataDir)
 
-  const store = new Store(dataDir, logger)
+  /**
+   * Whether the store may write while reading.
+   *
+   * A store READ can repair a corrupt table, and a repair is a rename plus a rewrite. This starts
+   * false and is set from the lock once it is settled, so an instance that was refused the data
+   * directory — and told "this instance is read-only and will not write the store" — cannot write it
+   * through a repair either.
+   */
+  let mayWriteStore = false
+  const store = new Store(dataDir, logger, { mayRepair: () => mayWriteStore })
 
   /**
    * The WebGL pairs the stored profiles already report.
@@ -60,12 +69,13 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     }
     return taken
   }
-  await store.load()
-
   // Engine processes from a previous run still hold their profile's parent.lock, which would make
   // the next launch of that profile fail with "profile in use". Only the instance that owns the
   // data directory may do that: a second instance must never kill the first one's running profiles.
   const dataDirLock = await acquireDataDirLock(store.dataDir, logger)
+  // Settled before anything reads the store, because a read can repair a corrupt table and that is a
+  // write. A refused instance still reads the recovered rows; it just leaves the files alone.
+  mayWriteStore = dataDirLock.acquired
   if (dataDirLock.acquired) {
     try {
       await reconcileOrphans({ dataDir: store.dataDir, logger })
@@ -73,6 +83,11 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
       logger.warn(`orphan reconciliation failed: ${message(error)}`)
     }
   }
+
+  // Loaded AFTER the lock is settled, deliberately. `load()` validates both tables, and a corrupt one
+  // is repaired by writing the backup over it — so loading first would let an instance that was just
+  // refused the directory repair the store it promised not to write.
+  await store.load()
 
   const registry = new RuntimeRegistry({
     launch: launchCamoufox,
@@ -118,10 +133,24 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     })
   }
 
+  // Reads pass, writes refuse: a second instance on one data directory must not write the store, and
+  // above all must not put a browser on a profile the owner may already have open. The holder is named
+  // so the refusal is actionable; a stale lock never reaches here, acquireDataDirLock takes it over.
+  const requireWriteAccess = (action: string) => {
+    if (!dataDirLock.acquired) {
+      throw new Error(
+        `cannot ${action}: another VFox instance (pid ${dataDirLock.owner ?? 'unknown'}) owns ` +
+          ` ${store.dataDir} - this instance is read-only. Close the other instance, or point this one ` +
+          'at a different data directory.',
+      )
+    }
+  }
+
   const profiles: ProfilesApi = {
     list: async () => store.listProfiles(),
     get: async id => store.getProfile(id),
     async create(input) {
+      requireWriteAccess('create a profile')
       const profile = await store.createProfile(input)
       const engine = (await kernelManager.info()).version
       const created = await createIdentity(
@@ -137,6 +166,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
       })
     },
     async createBatch(input) {
+      requireWriteAccess('create profiles')
       const batch = ProfileBatchCreateSchema.parse(input)
       const engine = (await kernelManager.info()).version
       // The fingerprint constraints are shared, the *device* is not: `createIdentity` runs
@@ -173,6 +203,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
       return profiles
     },
     async update(id, patch) {
+      requireWriteAccess('update a profile')
       const before = await store.requireProfile(id)
       const updated = await store.updateProfile(id, patch)
       // The identity describes the device browserforge generated. Editing the fields it was
@@ -185,6 +216,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
       return updated
     },
     async remove(id) {
+      requireWriteAccess('remove a profile')
       // Windows refuses to delete a directory a running browser still holds open.
       const status = registry.get(id).status
       if (status === 'running' || status === 'starting' || status === 'stopping') {
@@ -193,31 +225,50 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
       await store.removeProfile(id)
       registry.forget(id)
     },
-    clone: (id, name) => store.cloneProfile(id, name),
+    clone: (id, name) => {
+      requireWriteAccess('clone a profile')
+      return store.cloneProfile(id, name)
+    },
     userDataDir: id => store.userDataDir(id),
     async exportZip(id, destFile) {
       const profile = await store.requireProfile(id)
       await writeProfileZip(profile, store.userDataDir(id), destFile)
     },
-    importZip: (zipFile, name) =>
-      importProfileZip(zipFile, name, (profile, fill) => store.insertProfile(profile, fill)),
+    importZip: (zipFile, name) => {
+      requireWriteAccess('import a profile')
+      return importProfileZip(zipFile, name, (profile, fill) => store.insertProfile(profile, fill))
+    },
   }
 
   const groups: GroupsApi = {
     list: async () => store.listGroups(),
-    create: name => store.createGroup(name),
-    rename: (id, name) => store.renameGroup(id, name),
-    remove: id => store.removeGroup(id),
+    create: name => {
+      requireWriteAccess('create a group')
+      return store.createGroup(name)
+    },
+    rename: (id, name) => {
+      requireWriteAccess('rename a group')
+      return store.renameGroup(id, name)
+    },
+    remove: id => {
+      requireWriteAccess('remove a group')
+      return store.removeGroup(id)
+    },
   }
 
   const runtime: RuntimeApi = {
     list: () => registry.list(),
     get: id => registry.get(id),
     async launch(id) {
+      // The corruption path this lock exists for: two browsers on one profile directory.
+      requireWriteAccess('launch a profile')
       await ensureIdentity(id)
       return registry.launch(id)
     },
-    stop: id => registry.stop(id),
+    stop: id => {
+      requireWriteAccess('stop a profile')
+      return registry.stop(id)
+    },
     on: (_event, listener) => registry.on('change', listener),
   }
 
@@ -306,6 +357,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
 
   return {
     dataDir: store.dataDir,
+    dataDirLock: { owned: dataDirLock.acquired, owner: dataDirLock.owner },
     profiles,
     groups,
     runtime,
