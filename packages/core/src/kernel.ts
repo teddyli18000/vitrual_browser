@@ -295,6 +295,23 @@ function complete(progress: Partial<KernelProgress> & { phase: KernelPhase }): K
 const ENGINE_REPO = 'daijro/camoufox'
 
 /**
+ * The download staging directory, created beside the engine inside the product's own folder.
+ *
+ * The owner's rule is absolute: in portable mode every byte we write stays inside the portable
+ * folder, and os.tmpdir() is not inside it. Deriving the staging root from the kernel root rather
+ * than from a constant keeps that true wherever the kernel lives - and it puts the ~550 MB archive
+ * on the same volume as the ~1 GB it extracts to, which is also what makes the final directory swap
+ * a rename rather than a copy.
+ *
+ * The leading dot and the prefix keep it out of listInstalledKernels: a staging directory has no
+ * ersion.json, and inspectKernel returns null for any directory without a readable one, so a
+ * half-finished install can never be listed as an installed engine. That is also why an interrupted
+ * download cannot be mistaken for a complete one: the archive is not the engine, and only a
+ * successful extraction followed by the swap writes the ersion.json that makes a directory one.
+ */
+const STAGING_PREFIX = '.vfox-staging-'
+
+/**
  * Resolve the engine download URL, preferring a plain CDN URL over `api.github.com`.
  *
  * `camoufox-js` resolves through the API, which allows 60 anonymous requests per hour per IP — a
@@ -433,12 +450,17 @@ export const installCamoufoxEngine: EngineInstaller = async (emit, request) => {
   fetcher._url = url
 
   if (!(await exists(kernelLauncherPath(target)))) {
-    // The archive is staged in `os.tmpdir()` and only then extracted into `target`, so on the
+    // The archive is staged inside the product folder (see STAGING_PREFIX) and only then extracted, so on the
     // common small-system-drive layout the engine volume passes this check while the staging volume
     // fills up — and ENOSPC during the download is the crash path. Both volumes are checked.
     await requireFreeSpace(target)
-    await requireFreeSpace(os.tmpdir())
-    const staging = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-camoufox-'))
+    await requireFreeSpace(path.dirname(target))
+    // The staging parent is derived from the product's own layout, and on a fresh engine root it does
+    // not exist yet: `verify-install.mjs` installs into an empty root on purpose, and that is where this
+    // failed with ENOENT. `os.tmpdir()` always existed, which is why the constant never needed this -
+    // a derived path has to create its parent first.
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    const staging = await fs.mkdtemp(path.join(path.dirname(target), STAGING_PREFIX))
     try {
       const archive = await downloadEngine(url, version, staging, emit)
       emit({ phase: 'extracting', message: `Extracting Camoufox ${version}` })
@@ -791,7 +813,7 @@ async function isNonEmptyDir(dir: string): Promise<boolean> {
 /**
  * Refuse to start a ~1.5 GB install with no room for it.
  *
- * The archive is ~550 MB and extracts to roughly 1 GB, and the download is staged in `os.tmpdir()`
+ * The archive is ~550 MB and extracts to roughly 1 GB, and the download is staged beside the engine
  * first, so the requirement is deliberately generous. A missing engine directory is walked up to
  * its nearest existing ancestor, because that is where the bytes will actually land.
  */
