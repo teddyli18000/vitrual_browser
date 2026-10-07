@@ -16,9 +16,8 @@ import { existsSync, writeFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { ProfileSchema } from '@vfox/shared'
 import type { FingerprintConfig } from '@vfox/shared'
-import { createIdentity } from '../src/identity.js'
+import { ProfileSchema } from '@vfox/shared'
 import AdmZip from 'adm-zip'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -32,6 +31,7 @@ import {
   pruneEngineAddons,
   removeAddon,
 } from '../src/addons.js'
+import { createIdentity } from '../src/identity.js'
 import { toServerOptions } from '../src/launcher.js'
 
 let root: string
