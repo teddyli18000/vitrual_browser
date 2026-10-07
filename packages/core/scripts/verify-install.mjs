@@ -29,9 +29,9 @@ import path from 'node:path'
 import process from 'node:process'
 import { ENGINE_VERSION } from '@vfox/shared'
 import { applyKernelDir, installCamoufoxEngine } from '../dist/kernel.js'
+import { kernelLauncherName, kernelLayout } from '../dist/kernels.js'
 
 const MMDB_FILE = 'GeoLite2-City.mmdb'
-const LAUNCH_FILE = 'camoufox.exe'
 
 const fail = (stage, reason, hint) => {
   console.error(`VFOX_INSTALL_FAIL ${JSON.stringify({ stage, reason, hint: hint ?? null })}`)
@@ -73,13 +73,42 @@ try {
 const elapsed = ((Date.now() - started) / 1000).toFixed(1)
 
 /* -- the engine is really there ------------------------------------------------------------- */
-for (const file of [LAUNCH_FILE, 'properties.json', 'version.json']) {
-  if (!existsSync(path.join(target, file))) {
-    fail('files', `${file} is missing after the install`, `expected it in ${target}`)
+
+// Since v0.4.0 a kernel build lives in <root>/kernels/<version>/ and the root carries only a
+// version.json marker. This block used to assert the flat layout - camoufox.exe, properties.json and
+// version.json all at the root - so it failed on a CORRECT install the moment the layout changed, and
+// the CI step "Install the engine into an empty directory" went red for a reason that had nothing to
+// do with installing anything. The resolution now goes through the same helpers the product uses, so
+// the script cannot drift from the layout it is checking.
+const layout = kernelLayout(target)
+if (!existsSync(layout.markerFile)) {
+  fail(
+    'files',
+    `version.json is missing at ${layout.root}`,
+    'the marker is what stops a launch with no engine',
+  )
+}
+const kernelDirs = existsSync(layout.kernelsDir)
+  ? readdirSync(layout.kernelsDir, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name)
+  : []
+if (kernelDirs.length === 0) {
+  fail(
+    'files',
+    `no kernel build under ${layout.kernelsDir}`,
+    'the installer wrote the marker but no engine',
+  )
+}
+const launcher = kernelLauncherName()
+const kernelDir = path.join(layout.kernelsDir, kernelDirs[0])
+for (const file of [launcher, 'properties.json', 'version.json']) {
+  if (!existsSync(path.join(kernelDir, file))) {
+    fail('files', `${file} is missing after the install`, `expected it in ${kernelDir}`)
   }
 }
 
-const version = JSON.parse(readFileSync(path.join(target, 'version.json'), 'utf8'))
+const version = JSON.parse(readFileSync(path.join(kernelDir, 'version.json'), 'utf8'))
 const reported = `${version.version}-${version.release}`
 if (reported !== ENGINE_VERSION) {
   fail(
@@ -89,8 +118,8 @@ if (reported !== ENGINE_VERSION) {
   )
 }
 
-const files = statSync(path.join(target, LAUNCH_FILE)).size
-if (files <= 0) fail('files', `${LAUNCH_FILE} is empty`, null)
+const files = statSync(path.join(kernelDir, launcher)).size
+if (files <= 0) fail('files', `${launcher} is empty`, null)
 
 /* -- the optional GeoIP step ---------------------------------------------------------------- */
 const mmdb = path.join(target, MMDB_FILE)
