@@ -215,7 +215,7 @@ rule, a trap, or neither? If neither, it does not go here.
 
 **This is the defect class this repository keeps rediscovering.** Most instances looked green, which is
 what made them believable; the last one looked red and was believed for a different reason - it looked
-like diligence. Seven instances, in the order they were found:
+like diligence. Eight instances, in the order they were found:
 
 - the packaging guard that scanned **zero modules** and returned green (its own comment records the
   earlier version with the same symptom);
@@ -236,6 +236,12 @@ like diligence. Seven instances, in the order they were found:
   check **failed while printing a working `apiBase` in its own message**. A check that cannot pass wastes
   the run it is in just as thoroughly as one that cannot fail, and it is harder to notice because it looks
   like diligence.
+- **the same mirror image again, one step further out**: a command that ran the lint, read exit 1, and
+  pushed anyway because it was written as a straight sequence. Nothing was wrong with the check - it went
+  red correctly - and nothing acted on it, so the fix it was holding back never landed and the next
+  person diagnosed the red run as a fresh problem. A check that can go red and is not wired to stop
+  anything is, in evidence, indistinguishable from one that cannot go red: both leave you believing
+  something was verified.
 
 **What they have in common is not carelessness, it is the absence of a question: "what would this print
 if the thing it checks were broken?"** Ask it before shipping any assertion, and prove the answer by
@@ -254,6 +260,20 @@ running it red. Two habits that follow:
 2. **Print the measurement even when it passes.** A verdict alone hides a trend; the numbers make a
    regression visible before it becomes a failure, and they are what a reviewer can check without
    re-running anything.
+3. **A check whose result nothing acts on is the same defect, one step later.** A command ran the lint,
+   read exit 1, and pushed anyway - because it was written as a straight sequence rather than a gate.
+   **The check ran, its result was ignored, and the next step proceeded.** A guard that can go red and is
+   not allowed to stop anything is, in evidence, the same as one that cannot go red at all: both leave you
+   believing something was verified. When a script gates on something, the step after it must be
+   *conditional* on the result, not merely ordered behind it - `if ($lint -ne 0) { exit 1 }` before the
+   push - and the fix it was holding back has to be pushed separately, because a red gate does not stop a
+   sequence that was never wired to it.
+   And the corollary, which cost three files in one week: **a lint over the paths you name is not a
+   lint.** `biome check <files>` sees only those files, so a scratch instrument at the repository root, a
+   newly added script, or a file another branch touched passes every check you ran and fails the one that
+   walks the tree. Two of the three were mine, and one of them reached `main` through a later
+   `git add -A`. `pnpm lint` is 250 ms over 264 files; run that one, and treat "lint clean" from a subset
+   as a claim about the subset.
 
 ### Instruments that disagree with themselves
 
