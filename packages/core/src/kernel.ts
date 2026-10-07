@@ -455,6 +455,11 @@ export const installCamoufoxEngine: EngineInstaller = async (emit, request) => {
     // fills up — and ENOSPC during the download is the crash path. Both volumes are checked.
     await requireFreeSpace(target)
     await requireFreeSpace(path.dirname(target))
+    // The staging parent is derived from the product's own layout, and on a fresh engine root it does
+    // not exist yet: `verify-install.mjs` installs into an empty root on purpose, and that is where this
+    // failed with ENOENT. `os.tmpdir()` always existed, which is why the constant never needed this -
+    // a derived path has to create its parent first.
+    await fs.mkdir(path.dirname(target), { recursive: true })
     const staging = await fs.mkdtemp(path.join(path.dirname(target), STAGING_PREFIX))
     try {
       const archive = await downloadEngine(url, version, staging, emit)
