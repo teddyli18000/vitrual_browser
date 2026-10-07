@@ -166,7 +166,37 @@ async function writeEngineAddon(key: string, id: string | null, name = key): Pro
     }),
     'utf8',
   )
+  await writeEngineProperties(engineDir)
   return engineDir
+}
+
+/**
+ * A fake engine needs a `properties.json`, and this is not cosmetic.
+ *
+ * camoufox-js reads it from the directory the executable lives in (`dist/utils.js:61-76`) and validates
+ * the whole CAMOU_CONFIG against it, throwing `UnknownProperty` for any key it does not list
+ * (`:77-87`). VFox has its own tolerance for that - `acceptedKeys` in `engine-config.ts` returns `null`
+ * for a schema it does not understand and the launch then goes ahead as-is - so a fixture WITHOUT the
+ * file does not fail politely here: it fails inside camoufox-js, on whichever key it reaches first.
+ *
+ * This is also why the block below no longer skips. It used to be gated on
+ * `existsSync(<CAMOUFOX_INSTALL_DIR>/properties.json)`, so on CI - which installs no engine - the whole
+ * launcher-wiring contract was asserted NOWHERE, while on a developer's machine the same commit failed
+ * with `ENOENT: … engine\properties.json`. Same code, two environments, two results, and the one that
+ * mattered was the silent one. The fixture builds what it needs, so the block runs everywhere.
+ */
+async function writeEngineProperties(engineDir: string): Promise<void> {
+  const properties = [
+    { property: 'addons', type: 'array' },
+    { property: 'canvas:seed', type: 'int' },
+    { property: 'audio:seed', type: 'int' },
+    { property: 'fonts:spacing_seed', type: 'int' },
+    { property: 'canvas:aaOffset', type: 'int' },
+    { property: 'canvas:aaCapOffset', type: 'int' },
+    { property: 'window.history.length', type: 'int' },
+    { property: 'window.screenY', type: 'int' },
+  ]
+  await fs.writeFile(path.join(engineDir, 'properties.json'), JSON.stringify(properties), 'utf8')
 }
 
 describe('the addon store', () => {
@@ -391,8 +421,20 @@ describe('the engine’s own addons', () => {
 
 /* ------------------------------------------------------------------ the launcher wiring */
 
-const engineRoot = process.env.CAMOUFOX_INSTALL_DIR ?? ''
-const engineAvailable = existsSync(path.join(engineRoot, 'properties.json'))
+/**
+ * NO `skipIf` HERE, and that is the point of this block.
+ *
+ * It used to be `describe.skipIf(!existsSync(<CAMOUFOX_INSTALL_DIR>/properties.json))`. CI installs no
+ * engine, so the entire launcher-wiring contract - what the engine is actually handed, which is the
+ * thing `toServerOptions` exists to get right - was asserted NOWHERE in the environment every merge is
+ * judged in. On a machine that had an engine the same commit failed instead, with
+ * `ENOENT: … engine\properties.json`. Two environments, two results, and the silent one was CI.
+ *
+ * Everything this block needs it now builds itself: `writeEngineAddon` writes the addon AND a
+ * `properties.json` for the fake engine it creates, and each case passes that directory in explicitly.
+ * A block that skips is a block that cannot fail, and this repository has that defect class written
+ * down seven times.
+ */
 
 /** The CAMOU_CONFIG the engine will actually read, reassembled from its env chunks. */
 function camouConfig(options: Record<string, unknown>): Record<string, unknown> {
@@ -417,7 +459,7 @@ function profile(id = 'p1') {
   })
 }
 
-describe.skipIf(!engineAvailable)('what the launcher is handed', () => {
+describe('what the launcher is handed', () => {
   /**
    * `options.addons` is not the thing to assert: camoufox-js destructures the option out and assigns
    * it to `config.addons` itself (`dist/utils.js:384-390`), which is what the engine reads back out
