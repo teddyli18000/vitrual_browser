@@ -279,12 +279,32 @@ function engineSchema(): Promise<Array<{ property: string; type: string }>> {
             : typeof value === 'object' && value !== null
               ? 'dict'
               : 'str'
+    // TWO SOURCES, because `config` is the PIN SET and not the whole CAMOU_CONFIG. Its own doc comment
+    // says what it is — "config keys to pin so the engine cannot re-roll them" — and the per-launch
+    // randomness is a small subset of what the config carries. The fingerprint's own values travel too,
+    // and they reach camoufox-js as FLATTENED keys (`screen.width`, `window.screenX`), so
+    // `identity.fingerprint` is walked and every leaf emitted as `a.b`.
+    //
+    // Deriving from the pin set alone left EIGHT keys the engine rejected by name — which is the
+    // hand-written list trying to come back one entry at a time. Both sources are derived so it cannot.
+    const flatten = (value: unknown, prefix = ''): Array<[string, unknown]> => {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        return [[prefix, value]]
+      }
+      return Object.entries(value).flatMap(([key, child]) =>
+        flatten(child, prefix ? `${prefix}.${key}` : key),
+      )
+    }
+    // The PIN SET WINS on a collision: it is what the product deliberately pins, so its value is the one
+    // whose type the schema must accept.
+    const byKey = new Map<string, unknown>()
+    for (const [key, value] of Object.entries(generated.config)) byKey.set(key, value)
+    for (const [key, value] of flatten(generated.identity?.fingerprint ?? {})) {
+      if (!byKey.has(key)) byKey.set(key, value)
+    }
     return [
       { property: 'addons', type: 'array' },
-      ...Object.entries(generated.config).map(([property, value]) => ({
-        property,
-        type: typeOf(value),
-      })),
+      ...[...byKey].map(([property, value]) => ({ property, type: typeOf(value) })),
     ]
   })()
   return engineSchemaOnce
