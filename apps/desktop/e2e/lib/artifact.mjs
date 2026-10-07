@@ -505,5 +505,23 @@ export function checkUnpackedResolution(artifact, options) {
   }
 
   walk(unpackedRoot)
+
+  // FAIL CLOSED ON ZERO. A scan that read no JavaScript has verified nothing, and a guard that scans
+  // nothing and returns green is worse than no guard because it is believed — this repository has
+  // shipped that mistake twice. The earlier `checked: 0` observation came from a tree that had already
+  // been reduced to two files when the guard ran, which is precisely the state a broken extraction
+  // produces, so this is the state the guard must be loudest about rather than quietest.
+  if (checked === 0) {
+    return {
+      ok: false,
+      checked,
+      failures: [
+        `no JavaScript file was found under ${unpackedRoot}, so nothing was verified. ` +
+          'An empty or reduced tree is what a broken extraction looks like, so this is a failed ' +
+          'check rather than an empty pass.',
+      ],
+    }
+  }
+
   return { ok: failures.length === 0, failures: failures.slice(0, 12), checked }
 }
