@@ -194,11 +194,25 @@ were found:
 - a liveness probe built on `tasklist`'s exit code, which is **1 for a process that is alive** on this
   machine, so a five-second grace period ended on its first iteration and never waited;
 - a latency measurement that waited for a UI state the row was **already in**, so it reported about zero
-  milliseconds and could not fail.
+  milliseconds and could not fail;
+- a stop-liveness check that opened the profile's `cookies.sqlite` and treated a thrown error as proof a
+  browser survived. SQLite opens its databases with FILE_SHARE_READ | FILE_SHARE_WRITE, so a LIVE engine
+  lets a second open succeed - the check passed unconditionally in the exact scenario it existed for, and
+  it was the only check in the suite whose purpose was to catch a survived process tree;
+- **its mirror image**, which is why the class is not only about passing: a preflight that tested
+  `window.vfox.api`, a member that has never existed in the interface, the preload or the bridge, so the
+  check **failed while printing a working `apiBase` in its own message**. A check that cannot pass wastes
+  the run it is in just as thoroughly as one that cannot fail, and it is harder to notice because it looks
+  like diligence.
 
 **What they have in common is not carelessness, it is the absence of a question: "what would this print
 if the thing it checks were broken?"** Ask it before shipping any assertion, and prove the answer by
 running it red. Two habits that follow:
+
+0. **When a failure is diagnosed, fix the message in the same change - and then ask what the new message
+   would have to say to prove the check itself can go red.** PR #85 is the worked example: it corrected a
+   wrong `endpointOf` and, in the same change, added a liveness check that could not fail. The message fix
+   is the easy half and it feels like the whole job. The second half is the one that catches the guard.
 
 1. **Assert your inputs before your verdict.** A guard should say how many files it walked, how many
    modules it loaded, how many targets it reached - and refuse to report a result when that count is
