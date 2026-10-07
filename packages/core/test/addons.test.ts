@@ -621,6 +621,14 @@ describe('what the launcher is handed', () => {
     // Its OWN directory, not `root`: `beforeAll` runs before the outer `beforeEach` creates `root`, and
     // the fixture has to outlive every case anyway - see the docblock above.
     engineDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-fixture-engine-'))
+    // POINTED AT THE FIXTURE FIRST, and this line's POSITION is the whole reason pass 2 works.
+    //
+    // `observedConfig` calls `toServerOptions`, which calls camoufox-js's `launchOptions`, which reaches
+    // `camoufoxPath()` through the addon path - and that one reads `<CAMOUFOX_INSTALL_DIR>/version.json`
+    // (`pkgman.js:98` via `installedVerStr` at `:298`, reached from `utils.js:398`). With the variable
+    // still pointing at CI's empty cache the observation threw `Version information not found`, which is
+    // the mechanism issue #79 is about, reproduced by the fixture that was supposed to answer it.
+    process.env.CAMOUFOX_INSTALL_DIR = engineDir
     // PASS 1: the permissive schema and the marker, so the fixture is usable at all.
     await writeEngineProperties(engineDir)
     // PASS 2: read what the product actually hands over - the one thing this fixture never did in its
@@ -636,7 +644,6 @@ describe('what the launcher is handed', () => {
         throw new Error(`the fixture engine is missing ${file} at ${engineDir}`)
       }
     }
-    process.env.CAMOUFOX_INSTALL_DIR = engineDir
   })
 
   afterAll(async () => {
