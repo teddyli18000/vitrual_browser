@@ -494,6 +494,26 @@ function profile(id = 'p1') {
 
 describe('what the launcher is handed', () => {
   /**
+   * `CAMOUFOX_INSTALL_DIR` MUST POINT AT THE FIXTURE, and passing `engineDir` to `toServerOptions` is
+   * not enough on its own.
+   *
+   * Every launch reaches camoufox-js's `camoufoxPath()` through the ADDON path, and that function reads
+   * `getPath('version.json')` - which resolves from `CAMOUFOX_INSTALL_DIR`, frozen when camoufox-js is
+   * loaded. With it pointing at CI's empty cache the launch throws
+   * `Version information not found at …\version.json. Please run \`camoufox fetch\` to install.` no
+   * matter what the caller passes. Measured on CI, which is why this block now pins it instead of
+   * skipping on it.
+   *
+   * AGENTS.md already records the shape of this - "pin `CAMOUFOX_INSTALL_DIR` at an empty directory (or
+   * a fixture engine directory) inside the case" - and the previous version of this block did the
+   * opposite: it SKIPPED when the variable did not point at an engine, so CI asserted nothing at all.
+   */
+  beforeEach(async () => {
+    const engineDir = await fakeEngine()
+    process.env.CAMOUFOX_INSTALL_DIR = engineDir
+  })
+
+  /**
    * `options.addons` is not the thing to assert: camoufox-js destructures the option out and assigns
    * it to `config.addons` itself (`dist/utils.js:384-390`), which is what the engine reads back out
    * of `CAMOU_CONFIG`. Asserting the option object instead of the config is exactly how the first
