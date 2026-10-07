@@ -641,7 +641,29 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, RENAME_RETRY_MS))
     }
   }
-  throw lastError
+  // EXHAUSTED. Rethrowing `lastError` here is what made this reach the user as a bare 500 carrying
+  // `EPERM: operation not permitted, rename '…'` - a filesystem error they cannot act on, naming neither
+  // what was being written nor what state they are left in. The rename is the only step that can fail
+  // this way, so the message says which file, how long we tried, and that the previous contents are
+  // intact because a rename is atomic: the write did not land, and nothing was half-written.
+  throw new Error(persistFailure(to, lastError), { cause: lastError })
+}
+
+/**
+ * The message a user sees when a write could not be persisted, built separately so a test can assert it
+ * without having to make Windows hold a file open. Issue #74 asks for the path and the reason; the state
+ * sentence matters as much, because "the write did not land" is actionable and a bare EPERM is not.
+ */
+export function persistFailure(target: string, error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  const reason = errorMessage(error)
+  return (
+    `could not save ${target} after ${RENAME_ATTEMPTS} attempts over about ` +
+    `${RENAME_ATTEMPTS * RENAME_RETRY_MS} ms (${code ?? 'no code'}): ${reason}. ` +
+    `Another process is holding the file open - on Windows that is usually antivirus, the search indexer ` +
+    `or a file-sync client, and it clears on its own. The file still holds its previous contents; this ` +
+    `change was not saved.`
+  )
 }
 
 function timestamp(): string {

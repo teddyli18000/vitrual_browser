@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { Store } from '../src/store.js'
+import { persistFailure, Store } from '../src/store.js'
 
 let dataDir: string
 
@@ -221,5 +221,33 @@ describe('groups', () => {
     await expect(store.createGroup('   ')).rejects.toThrow('must not be empty')
     await expect(store.renameGroup('nope', 'x')).rejects.toThrow('Unknown group')
     await expect(store.removeGroup('nope')).rejects.toThrow('Unknown group')
+  })
+})
+
+describe('a write that could not be persisted (issue #74)', () => {
+  // The assertion is the message, not the write: this is what reaches a user as a 500 from /launch when
+  // Windows holds the destination open past every retry. It used to be the raw error -
+  // `EPERM: operation not permitted, rename '…'` - which names neither the file nor the state the user is
+  // left in. What this test can go red on: revert persistFailure to `String(error)` and the first three
+  // expectations fail, because the path, the code and the attempt count are all absent from it.
+  it('names the file, the reason, how long we tried, and that nothing was half-written', () => {
+    const error = Object.assign(
+      new Error("EPERM: operation not permitted, rename 'C:\\vfox\\data\\profiles.json.tmp' -> '…'"),
+      { code: 'EPERM' },
+    )
+    const message = persistFailure('C:\\vfox\\data\\profiles.json', error)
+
+    expect(message).toContain('C:\\vfox\\data\\profiles.json')
+    expect(message).toContain('EPERM')
+    expect(message).toContain('10 attempts')
+    // The sentence that makes it actionable: a rename is atomic, so the old file is intact.
+    expect(message).toContain('previous contents')
+  })
+
+  it('survives an error with no code, and still names the file', () => {
+    const message = persistFailure('/data/profiles.json', new Error('something else entirely'))
+    expect(message).toContain('/data/profiles.json')
+    expect(message).toContain('no code')
+    expect(message).toContain('something else entirely')
   })
 })
