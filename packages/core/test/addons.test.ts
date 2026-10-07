@@ -30,6 +30,7 @@ import {
   pruneEngineAddons,
   removeAddon,
 } from '../src/addons.js'
+import { unknownPropertyKey } from '../src/engine-config.js'
 import { toServerOptions } from '../src/launcher.js'
 
 let root: string
