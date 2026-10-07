@@ -165,9 +165,16 @@ async function cookieRowDetail(userdata) {
           'SELECT name, host, path, expiry, isSecure, isHttpOnly, originAttributes FROM moz_cookies WHERE name = ?',
         )
         .get(COOKIE)
-      if (!row) return 'no row'
+      // How many cookies the database holds IN TOTAL, not just ours. If the whole jar goes to zero
+      // across the stop, the engine rewrote the database from an in-memory jar that never held our
+      // cookie - a different defect, and not about our cookie at all. If the count is unchanged and only
+      // ours is missing, the row itself is what was removed, which points at expiry and host handling.
+      const total = database.prepare('SELECT COUNT(*) AS n FROM moz_cookies').get()
+      const totalRows = total ? Number(total.n) : null
+      if (!row) return JSON.stringify({ totalRows, row: 'absent' })
       const expiry = Number(row.expiry)
       return JSON.stringify({
+        totalRows,
         host: row.host,
         path: row.path,
         expiry,
@@ -205,6 +212,27 @@ async function profileDirStamp(userdata) {
     }
   }
   return stamp
+}
+
+/**
+ * The three files SQLite keeps for a WAL database, with their sizes.
+ *
+ * A row that lives only in the -wal before the stop, and is gone after a clean close, points at the
+ * checkpoint rather than at the engine's cookie logic - and SQLite only removes a -wal after a successful
+ * checkpoint, so an empty -wal beside a missing row would itself be the finding. Sizes alone cannot say
+ * which file held the row, but they can say whether there was anything in the -wal at all.
+ */
+async function cookieFileSizes(userdata) {
+  const sizes = {}
+  for (const name of ['cookies.sqlite', 'cookies.sqlite-wal', 'cookies.sqlite-shm']) {
+    try {
+      const info = await stat(path.join(userdata, name))
+      sizes[name] = info.size
+    } catch {
+      sizes[name] = null
+    }
+  }
+  return sizes
 }
 
 /**
@@ -477,6 +505,9 @@ export async function runDurabilityPhase({
       )
     }
 
+    const dbFilesBefore = await cookieFileSizes(userdataDir(profileA.id))
+    note(`cookie files before the relaunch: ${JSON.stringify(dbFilesBefore)}`)
+
     const dbsBefore = await cookieDatabases(userdataDir(profileA.id))
     note(`cookie databases before the relaunch: ${JSON.stringify(dbsBefore)}`)
 
@@ -493,6 +524,14 @@ export async function runDurabilityPhase({
       rowAfterStop === true
         ? 'the row is still on disk after the stop - the store keeps it, the relaunch loses it'
         : 'the row is gone from disk after the stop - something removed it on the way out',
+    )
+
+    const dbFilesAfter = await cookieFileSizes(userdataDir(profileA.id))
+    note(`cookie files after the stop: ${JSON.stringify(dbFilesAfter)}`)
+    note(
+      'read the two file listings together: a -wal that had content before the stop and none after it ' +
+        'points at the checkpoint, and a row count that fell to zero means the engine rewrote the ' +
+        'database from a jar that never held our cookie rather than deleting one row.',
     )
 
     /**
