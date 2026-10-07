@@ -182,6 +182,11 @@ async function writeEngineAddon(key: string, id: string | null, name = key): Pro
  * it stood in for.
  */
 async function fakeEngine(): Promise<string> {
+  // WHAT THIS MUST NOT DO, written here because a change reached into it THREE TIMES in one PR: it
+  // builds a fixture, and it must stay that. Anything it calls runs for every block in this file, so a
+  // helper added here for one block's contract will break the others - which is what happened when the
+  // schema derivation, and before it `createIdentity`, were wired in below. If a block needs more than
+  // a usable engine directory, it asks for it at its own call site.
   const engineDir = path.join(root, 'engine')
   await fs.mkdir(engineDir, { recursive: true })
   await writeEngineProperties(engineDir)
@@ -251,7 +256,10 @@ async function observedConfig(engineDir: string): Promise<Record<string, unknown
   return camouConfig(await toServerOptions(profile(), userDataDir, vi.fn(), engineDir))
 }
 
-async function writeEngineProperties(engineDir: string): Promise<void> {
+async function writeEngineProperties(
+  engineDir: string,
+  keys?: Record<string, unknown>,
+): Promise<void> {
   // DERIVED, NOT ENUMERATED — and this comment matters more than the list it replaces.
   //
   // The list used to be hand-written, and CI named the keys it was missing EIGHT AT A TIME over two
@@ -290,17 +298,20 @@ async function writeEngineProperties(engineDir: string): Promise<void> {
     'utf8',
   )
 
-  // PASS 2 - ask the product what it hands over, and write the schema from THAT.
-  const config = await observedConfig(engineDir)
-  const keys = Object.keys(config)
-  // PRINTED, because the count is what turns the next schema question into a number in the log rather
-  // than a CI cycle. Four versions of this fixture were wrong and each one cost a run to find out.
-  console.log(`engine fixture: ${keys.length} CAMOU_CONFIG key(s) observed from toServerOptions`)
+  // OPT-IN, AND THIS IS THE THIRD TIME THIS PR HAS LEARNED THE SAME LESSON. `writeEngineProperties` is
+  // called by `fakeEngine()`, which `writeEngineAddon()` calls, which EVERY block uses. Deriving the
+  // schema here ran `toServerOptions` inside a helper five blocks share - and it needs a profile and a
+  // userDataDir those blocks are not set up for, so five tests in `the engine's own addons` went red
+  // for a reason that had nothing to do with them.
+  //
+  // The shared helper builds a fixture. The block whose contract is about the config asks for the
+  // derived one.
+  if (!keys) return
   await fs.writeFile(
     path.join(engineDir, 'properties.json'),
     JSON.stringify([
       { property: 'addons', type: 'array' },
-      ...keys.map(property => ({ property, type: typeOf(config[property]) })),
+      ...Object.entries(keys).map(([property, value]) => ({ property, type: typeOf(value) })),
     ]),
     'utf8',
   )
@@ -610,7 +621,16 @@ describe('what the launcher is handed', () => {
     // Its OWN directory, not `root`: `beforeAll` runs before the outer `beforeEach` creates `root`, and
     // the fixture has to outlive every case anyway - see the docblock above.
     engineDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-fixture-engine-'))
+    // PASS 1: the permissive schema and the marker, so the fixture is usable at all.
     await writeEngineProperties(engineDir)
+    // PASS 2: read what the product actually hands over - the one thing this fixture never did in its
+    // first four versions, all of which predicted that object instead of asking for it.
+    const observed = await observedConfig(engineDir)
+    // PRINTED, because the count is what turns the next schema question into a number in the log rather
+    // than a CI cycle. Four versions of this fixture were wrong and each one cost a run to find out.
+    console.log(`engine fixture: ${Object.keys(observed).length} CAMOU_CONFIG key(s) observed`)
+    // PASS 3: the real schema, derived from what was observed.
+    await writeEngineProperties(engineDir, observed)
     for (const file of ['properties.json', 'version.json']) {
       if (!existsSync(path.join(engineDir, file))) {
         throw new Error(`the fixture engine is missing ${file} at ${engineDir}`)
