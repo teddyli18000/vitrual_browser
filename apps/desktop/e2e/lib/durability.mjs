@@ -39,7 +39,7 @@
  */
 
 import { existsSync, rmSync } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
 
@@ -443,9 +443,12 @@ export async function runDurabilityPhase({
     const lockState = await cookiesDbIsFree(userdataDir(profileA.id))
     if (lockState !== 'free') {
       fail(
-        `after stopping ${profileA.name}: the profile's cookies.sqlite is still ${lockState} — ` +
-          'an engine process survived the stop and still owns the profile directory. The relaunch ' +
-          'would race it, which is how a profile appears to lose its state without losing any data.',
+        `after stopping ${profileA.name}: the profile's cookies.sqlite could not be opened for ` +
+          `writing (${lockState}). This is INDETERMINATE, not proof of a surviving engine: the probe ` +
+          'only knows that the open failed, and a live engine would not make it fail anyway, because ' +
+          'SQLite shares the file. Read the engine-window result from the same run before concluding ' +
+          'anything about a process - if that says no window survived while this says the file is ' +
+          'unavailable, the cause is something else.',
       )
       return { unread, checks }
     }
@@ -479,6 +482,45 @@ export async function runDurabilityPhase({
         ? 'the row is still on disk after the stop - the store keeps it, the relaunch loses it'
         : 'the row is gone from disk after the stop - something removed it on the way out',
     )
+
+    /**
+     * Print the launcher's own account of the stop, because CI cannot see it any other way.
+     *
+     * `debug` writes to <dataDir>/logs/vfox.log rather than stdout, so the line that says whether the engine
+     * exited on its own or was still alive when the graceful window expired has never appeared in a CI log -
+     * and that line decides whether a lost state belongs to the forced kill or to the engine's own shutdown.
+     * Two different mechanisms, two different fixes, one invisible line.
+     */
+    async function printLauncherStopLog(dataDir) {
+      const file = path.join(dataDir, 'logs', 'vfox.log')
+      let text = ''
+      try {
+        text = await readFile(file, 'utf8')
+      } catch (error) {
+        note(`could not read the launcher log at ${file}: ${error.message}`)
+        return
+      }
+      const lines = text
+        .split('\n')
+        .filter(
+          line =>
+            line.includes('exited on its own') ||
+            line.includes('STILL ALIVE') ||
+            line.includes('graceful window') ||
+            line.includes('engine process exited') ||
+            line.includes('taskkill'),
+        )
+      if (lines.length === 0) {
+        note(
+          `the launcher log at ${file} has no stop line: either the engine never reported an exit, or the ` +
+            'graceful window never ran. Both are findings, and neither is visible from the phase alone.',
+        )
+        return
+      }
+      for (const line of lines.slice(-6)) note(`launcher: ${line.trim()}`)
+    }
+
+    await printLauncherStopLog(dataDir)
 
     const stampBefore = await profileDirStamp(userdataDir(profileA.id))
     note(`profile directory before the relaunch: ${JSON.stringify(stampBefore)}`)
