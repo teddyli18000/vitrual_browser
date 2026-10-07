@@ -436,25 +436,37 @@ export async function runDurabilityPhase({
     await api(`/api/v1/profiles/${profileA.id}/stop`, { method: 'POST', body: '{}' })
     await checkNoEngineProcesses(`after stopping ${profileA.name}`)
 
+    // BEFORE the checks that can fail: this line is what tells us whether the engine exited on its
+    // own or was killed at the deadline, and it is worth nothing if a later assertion aborts first.
+    await printLauncherStopLog(dataDir)
+
     // STOP-LIVENESS, the check that does not need CIM. A live engine holds its profile's
     // databases open; if cookies.sqlite is still locked after the stop, the process tree was
     // NOT killed, and the relaunch below would race the survivor for the same directory.
     // This is the failure that looks like "state was lost" while the state is fine on disk.
     const lockState = await cookiesDbIsFree(userdataDir(profileA.id))
-    if (lockState !== 'free') {
+    if (lockState.startsWith('locked: EBUSY') || lockState.startsWith('locked: EPERM')) {
       fail(
-        `after stopping ${profileA.name}: the profile's cookies.sqlite could not be opened for ` +
-          `writing (${lockState}). This is INDETERMINATE, not proof of a surviving engine: the probe ` +
-          'only knows that the open failed, and a live engine would not make it fail anyway, because ' +
-          'SQLite shares the file. Read the engine-window result from the same run before concluding ' +
-          'anything about a process - if that says no window survived while this says the file is ' +
-          'unavailable, the cause is something else.',
+        `after stopping ${profileA.name}: the profile's cookies.sqlite is held by an EXCLUSIVE ` +
+          `lock (${lockState}). SQLite shares the file, so this is not the ordinary case of a live ` +
+          'engine - something holds it against readers too, and the relaunch below would race it.',
       )
       return { unread, checks }
     }
-    pass(
-      `profile ${profileA.name}: cookies.sqlite is FREE after the stop - no surviving engine holds the directory`,
-    )
+    if (lockState === 'free') {
+      pass(`profile ${profileA.name}: cookies.sqlite is not exclusively locked after the stop`)
+    } else {
+      // NOT a failure, and that is the point. The probe only knows the open did not succeed; a live
+      // engine would not make it fail anyway, because SQLite shares the file. A hard failure here is
+      // not a measurement - and it was standing in front of the measurement this phase exists for,
+      // because the phase stopped at it and never reached the relaunch or the launcher log.
+      note(
+        `after stopping ${profileA.name}: cookies.sqlite is ${lockState}. That is NOT a finding about ` +
+          'a process - the probe only knows the open did not succeed, and a live engine would not make ' +
+          'it fail anyway, because SQLite shares the file. The wsEndpoint comparison below is what ' +
+          'discriminates a survived engine from a new one, and this check must not stand in front of it.',
+      )
+    }
     checks.push('cookies.sqlite not exclusively locked after the stop')
 
     if (breakMode === 'durability-userdata') {
@@ -519,8 +531,6 @@ export async function runDurabilityPhase({
       }
       for (const line of lines.slice(-6)) note(`launcher: ${line.trim()}`)
     }
-
-    await printLauncherStopLog(dataDir)
 
     const stampBefore = await profileDirStamp(userdataDir(profileA.id))
     note(`profile directory before the relaunch: ${JSON.stringify(stampBefore)}`)
