@@ -836,8 +836,26 @@ executed.push('restarting the packaged application and re-reading its state from
  *       `second-instance`, not the fix's evidence.
  *   9b. a DIFFERENT portable folder — both must run. **This is the case the bug broke**, and it is
  *       the one that goes red if the lock is ever taken before the redirect again.
+ *
+ * This phase starts the instance it needs: phase 8 stops the application as its last act, so there
+ * is nothing running here to hold the lock. The first run of this phase in CI failed for exactly
+ * that reason — it found no instance holding the lock, so the copy of the same folder legitimately
+ * started, and every assertion below reported the truth about a premise that was not true.
  */
 step('9. the single-instance lock is keyed on the data directory (issue #89)')
+
+// Phase 8 stops the application as its last act (`restart.mjs` step (e): "no stale process after the
+// second stop"), so there is nothing running when this phase begins. It starts the instance it needs
+// instead of assuming one. That is still the right shape for the claim: the lock is keyed on the DATA
+// DIRECTORY, not on which process took it, so an instance this phase started is exactly as valid a
+// holder as the one the suite began with.
+const lockHolder = spawnApp()
+const holderStart = await waitForApi(lockHolder)
+const holderToken = holderStart.token ?? token
+assert(
+  holderStart.started,
+  `the instance this phase needs started and answered its own API (started=${holderStart.started}, exited=${JSON.stringify(holderStart.exited)})`,
+)
 
 const copies = []
 
@@ -867,13 +885,15 @@ function spawnCopy(cwd, port) {
 }
 
 /**
- * Is the instance that holds the lock still serving? Asked over HTTP rather than tracked as a
- * process flag: phase 8 stops the original and starts another, so the process object the suite began
- * with is dead by the time these run, and 'still answering' is the property that matters anyway.
+ * Is the instance holding the lock still serving? Asked over HTTP rather than tracked as a process
+ * flag, because 'still answering' is the property that matters and the process object is the wrong
+ * proxy for it.
  */
-async function firstInstanceAlive() {
+async function firstInstanceAlive(authToken) {
   try {
-    const probe = await fetch(`${apiBase}/api/v1/health`, { headers: { 'x-vfox-token': token } })
+    const probe = await fetch(`${apiBase}/api/v1/health`, {
+      headers: { 'x-vfox-token': authToken },
+    })
     return probe.ok
   } catch {
     return false
@@ -918,19 +938,19 @@ try {
   })
   assert(
     !twinResult.ok,
-    `a second launch of the SAME data directory started its own server on ${twinResult.base} — two processes are now writing one store`,
+    `a second launch of the same data directory did not open an API of its own (served=${twinResult.ok}${twinResult.base ? ` on ${twinResult.base}` : ''}) — if it did, two processes are writing one store`,
   )
   assert(
     twin.exited !== null,
-    'a second launch of the same data directory is still running instead of handing over to the first window',
+    `a second launch of the same data directory handed over and exited (exited=${JSON.stringify(twin.exited)})`,
   )
   assert(
     twin.exited?.code === 0,
-    `a second launch of the same folder exited with ${JSON.stringify(twin.exited)}; handing over to the running instance is a clean exit (0)`,
+    `handing over to the running instance is a clean exit, code 0 (exited=${JSON.stringify(twin.exited)})`,
   )
   assert(
-    await firstInstanceAlive(),
-    'the first instance stopped answering its API when the same folder was launched again',
+    await firstInstanceAlive(holderToken),
+    'the instance holding the lock kept answering its API while the same folder was launched again',
   )
 
   // The handover itself, not just the refusal: the first instance logs the line from its
@@ -944,13 +964,12 @@ try {
       existsSync(appLog) && readFileSync(appLog, 'utf8').includes('second instance launched')
     if (!handedOver) await new Promise(resolve => setTimeout(resolve, 500))
   }
-  assert(
-    handedOver,
-    `the first instance never recorded the handover in ${appLog} — the second copy exited, but 'second-instance' did not reach the running window`,
-  )
-  pass(
-    'the same folder launched twice: the second handed over, exited 0, and the first kept running',
-  )
+  assert(handedOver, `the running instance recorded the handover in its own log (${appLog})`)
+  if (!handedOver) {
+    note(
+      'the second copy exited, but the running instance never logged the handover: second-instance did not reach it, so the window was never focused',
+    )
+  }
   executed.push(
     'launching the same portable folder twice and asserting the handover reaches the first',
   )
@@ -981,23 +1000,22 @@ try {
   })
   assert(
     secondResult.ok,
-    `a second portable folder could not start while the first was running: ${secondResult.why}. ` +
-      "requestSingleInstanceLock() keys on app.getPath('userData') at the moment of the call, so it must be taken AFTER the portable redirect (issue #89)",
+    `a second portable folder started and answered its own API while the first was running (${secondResult.why ?? secondResult.base}) — requestSingleInstanceLock() keys on app.getPath('userData') at the moment of the call, so it must be taken AFTER the portable redirect (issue #89)`,
   )
   assert(
-    await firstInstanceAlive(),
-    'the first instance stopped answering its API when a second portable folder started',
+    await firstInstanceAlive(holderToken),
+    'the instance holding the lock kept answering its API while a second portable folder ran',
   )
   assert(
     existsSync(path.join(secondDir, 'data', 'api-token')),
-    'the second portable folder did not write its token into its own data/',
+    'the second portable folder wrote its token into its own data/',
   )
-  pass(`a second portable folder ran alongside the first (${secondResult.base}) with its own store`)
   executed.push('running two independent portable folders at once, each with its own data/')
 } catch (error) {
   fail(`the single-instance phase could not complete: ${error.message}`)
 } finally {
   for (const child of copies) child.kill()
+  lockHolder.kill()
   // Windows can hold the directory for a moment after a kill; the copy is under release/ and is not
   // shipped, so a failure here is a note, not a failed assertion - same rule as the cleanup below.
   try {
