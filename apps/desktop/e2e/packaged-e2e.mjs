@@ -260,7 +260,7 @@ async function waitForApi(child) {
 
 const app = spawnApp()
 const firstStart = await waitForApi(app)
-let token = firstStart.token
+const token = firstStart.token
 if (!firstStart.started) {
   fail(
     'the packaged application did not answer its API within 120 s' +

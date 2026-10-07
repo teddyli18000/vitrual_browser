@@ -419,7 +419,7 @@ const BARE_NODE_BUILTINS = new Set([
   'zlib',
 ])
 
-export function checkUnpackedResolution(artifact, options) {
+export function checkUnpackedResolution(_artifact, options) {
   const { unpackedRoot } = options
   const nm = path.join(unpackedRoot, 'node_modules')
   const failures = []
