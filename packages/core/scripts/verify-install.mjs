@@ -39,6 +39,9 @@ const fail = (stage, reason, hint) => {
 }
 
 const target = mkdtempSync(path.join(os.tmpdir(), 'vfox-verify-install-'))
+// With several kernels coexisting, a kernel build lands in <root>/kernels/<version>/ and the root keeps
+// only the marker. This is the directory the installer must be told to write to.
+const kernelTargetDir = path.join(kernelLayout(target).kernelsDir, ENGINE_VERSION)
 // `applyKernelDir` must run before the first camoufox-js import, because the library resolves its
 // install directory once at module load.
 applyKernelDir(target)
@@ -51,18 +54,21 @@ let lastPercent = -1
 const started = Date.now()
 
 try {
-  await installCamoufoxEngine(progress => {
-    if (!phases.includes(progress.phase)) phases.push(progress.phase)
-    if (progress.phase === 'downloading' && typeof progress.percent === 'number') {
-      const step = Math.floor(progress.percent / 25) * 25
-      if (step > lastPercent) {
-        lastPercent = step
-        console.error(`[install] ${step}%`)
+  await installCamoufoxEngine(
+    progress => {
+      if (!phases.includes(progress.phase)) phases.push(progress.phase)
+      if (progress.phase === 'downloading' && typeof progress.percent === 'number') {
+        const step = Math.floor(progress.percent / 25) * 25
+        if (step > lastPercent) {
+          lastPercent = step
+          console.error(`[install] ${step}%`)
+        }
+      } else if (progress.message) {
+        console.error(`[install] ${progress.phase}: ${progress.message}`)
       }
-    } else if (progress.message) {
-      console.error(`[install] ${progress.phase}: ${progress.message}`)
-    }
-  })
+    },
+    { version: ENGINE_VERSION, targetDir: kernelTargetDir },
+  )
 } catch (error) {
   // The bug this job exists for surfaced as an uncaught stream error rather than a rejection, so a
   // clean rejection here is already an improvement — but any rejection still fails the job.

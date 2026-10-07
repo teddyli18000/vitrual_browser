@@ -379,6 +379,17 @@ export const installCamoufoxEngine: EngineInstaller = async (emit, request) => {
   // holds only the shared addons and the GeoIP database. camoufox-js's own fetch machinery writes
   // exclusively to `INSTALL_DIR`, which is exactly why the download, extraction and version
   // bookkeeping are driven here instead of through `camoufox fetch`.
+  if (!request?.targetDir || !request?.version) {
+    // A named refusal, not a TypeError. The first version of this signature change produced
+    // "Cannot read properties of undefined (reading targetDir)" in the CI job that installs the
+    // engine for real, and that message names neither the caller nor the fix.
+    throw new Error(
+      'installCamoufoxEngine needs to know which version to install and where. Call it as ' +
+        'installCamoufoxEngine(onProgress, { version, targetDir }): several kernels can coexist, ' +
+        'so the caller decides the directory and it cannot be defaulted here.',
+    )
+  }
+
   const target = request.targetDir
   const version = request.version
 
