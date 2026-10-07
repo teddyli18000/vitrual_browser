@@ -253,9 +253,26 @@ export const launchCamoufox: BrowserLauncher = async ({
       //   - Do not block the event loop waiting. A synchronous wait here would freeze the embedded
       //     API and its SSE stream for the whole window, on every stop.
       if (browserProcess && browserProcess.pid) {
-        const deadline = Date.now() + 5_000
+        const startedWaiting = Date.now()
+        const deadline = startedWaiting + 5_000
         while (Date.now() < deadline && isProcessAlive(browserProcess.pid)) {
           await new Promise(resolve => setTimeout(resolve, 200))
+        }
+        // WHICH PATH WAS TAKEN, said out loud. Everything time-based in this area has been falsified
+        // twice, and "the state still dies" cannot distinguish a process that exited on its own from one
+        // that was killed at the deadline - two different mechanisms with two different fixes. This one
+        // line is what makes the next CI run decisive instead of suggestive.
+        const waited = Date.now() - startedWaiting
+        if (isProcessAlive(browserProcess.pid)) {
+          debug(
+            `engine pid ${String(browserProcess.pid)} was STILL ALIVE after ${String(waited)}ms - the ` +
+              'graceful window expired and the hard kill is about to land mid-shutdown',
+          )
+        } else {
+          debug(
+            `engine pid ${String(browserProcess.pid)} exited on its own after ${String(waited)}ms - the ` +
+              "graceful window was enough, so a state lost now is lost by the engine's own shutdown",
+          )
         }
       }
       killProcessTree(pid, debug)
@@ -328,7 +345,7 @@ export function killProcessTree(pid: number | null, debug?: (message: string) =>
     stdio: 'ignore',
     windowsHide: true,
   })
-  debug?.(
+  debug(
     `taskkill /PID ${pid} /T /F -> ${result.error ? result.error.message : `exit ${result.status}`}`,
   )
 }

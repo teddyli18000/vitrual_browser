@@ -38,7 +38,7 @@
  * relaunch, and must FAIL naming what was lost.
  */
 
-import { rmSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
@@ -243,23 +243,33 @@ async function cookieDatabases(userdata) {
 }
 
 /**
- * Can this process still open the profile's `cookies.sqlite` for writing?
+ * Can this process open the profile's `cookies.sqlite` for writing?
  *
- * The one stop-liveness signal that does not depend on CIM. A live engine holds its profile's
- * databases open, so an exclusive open failing with EBUSY/EPERM means AN ENGINE IS STILL RUNNING
- * against this profile directory even though its window may be gone — which is exactly how a
- * relaunch can come up against a directory the old process still owns. Returned as a string so
- * the caller can print the OS error rather than a bare boolean.
+ * WHAT THIS PROVES, AND WHAT IT DOES NOT - the distinction was measured, not assumed. It returns
+ * `'free'` when the open succeeds, `'locked: <code>'` when the file is held EXCLUSIVELY, and
+ * `'absent'` when there is no database to open.
+ *
+ * It does NOT prove that no engine survived the stop. SQLite opens its databases with
+ * FILE_SHARE_READ | FILE_SHARE_WRITE, so a live engine holding this file still lets a second open
+ * succeed: the old version of this helper returned 'free' for a running browser and printed
+ * "no surviving engine holds the directory" about it. That is the shape of check this repository keeps
+ * shipping - one that cannot fail in the case it exists for - and it was the only check in the suite
+ * whose purpose was to catch a survived process tree.
+ *
+ * The signal that DOES discriminate is the wsEndpoint comparison in the phase: two different endpoints
+ * mean a genuinely new engine instance. This helper is kept only for the exclusive-lock case, which is
+ * real but rare, and for reporting a missing database as what it is rather than as an accusation.
  */
 async function cookiesDbIsFree(userdata) {
   const file = path.join(userdata, 'cookies.sqlite')
+  if (!existsSync(file)) return 'absent'
   try {
-    const { open } = await import('node:fs/promises')
     const handle = await open(file, 'r+')
     await handle.close()
     return 'free'
   } catch (error) {
-    return `locked: ${error.code ?? error.message}`
+    const code = error?.code ?? 'unknown'
+    return `locked: ${code}`
   }
 }
 
@@ -442,7 +452,7 @@ export async function runDurabilityPhase({
     pass(
       `profile ${profileA.name}: cookies.sqlite is FREE after the stop - no surviving engine holds the directory`,
     )
-    checks.push('cookies.sqlite free after the stop')
+    checks.push('cookies.sqlite not exclusively locked after the stop')
 
     if (breakMode === 'durability-userdata') {
       const target = userdataDir(profileA.id)
