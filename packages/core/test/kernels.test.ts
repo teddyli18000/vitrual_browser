@@ -17,6 +17,7 @@ import {
   directoryBytes,
   ensureRootMarker,
   formatKernelVersion,
+  kernelLauncherName,
   kernelLauncherPath,
   kernelLayout,
   listInstalledKernels,
@@ -89,6 +90,16 @@ function profile(overrides: Partial<Profile> = {}): Profile {
 }
 
 describe('kernel layout', () => {
+  it('names the launcher per platform, which is what a fixture must use too', () => {
+    // Asserted directly because hard-coding `camoufox.exe` in a fixture made every kernel invisible on
+    // the Linux CI runner: an install that had worked was reported as having no launcher. A fixture
+    // that names a launcher goes through the same helper the product uses.
+    expect(kernelLauncherName('win32')).toBe('camoufox.exe')
+    expect(kernelLauncherName('linux')).toBe('camoufox')
+    expect(kernelLauncherName('darwin')).toContain('camoufox')
+    expect(kernelLauncherPath('/engines/k', 'linux')).toBe(path.join('/engines/k', 'camoufox'))
+  })
+
   it('derives a kernel directory from its version, and reads the version back', async () => {
     const dir = await versionedKernel(PREFERRED)
     const layout = kernelLayout(root)

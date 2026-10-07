@@ -4,6 +4,17 @@ import path from 'node:path'
 import { KernelInfoSchema, type KernelProgress } from '@vfox/shared'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyKernelDir, type EngineInstaller, KernelManager } from '../src/kernel.js'
+import { kernelLauncherName } from '../src/kernels.js'
+
+/**
+ * The launcher's file name for the platform running the test.
+ *
+ * Hard-coding `camoufox.exe` made every fixture kernel invisible on the Linux CI runner: the build
+ * was reported as having no launcher, so an "installed engine" came back as `installed: false`. That
+ * is the same class of mistake as a test that reads the machine — the assertion was about the
+ * developer's platform rather than about the code.
+ */
+const LAUNCHER = kernelLauncherName()
 
 let installDir: string
 let originalKernelDir: string | undefined
@@ -73,7 +84,7 @@ describe('info', () => {
   it('reports an installed engine with its version and path', async () => {
     // A legacy flat install: the launcher, the version marker, and the engine's property table, which
     // camoufox-js reads from the directory the executable lives in.
-    await fs.writeFile(path.join(installDir, 'camoufox.exe'), 'binary')
+    await fs.writeFile(path.join(installDir, LAUNCHER), 'binary')
     await fs.writeFile(path.join(installDir, 'properties.json'), '[]')
     await fs.writeFile(
       path.join(installDir, 'version.json'),
@@ -148,7 +159,7 @@ describe('install', () => {
       // A real installer leaves a complete build behind; the manager's `done` message is only allowed
       // to claim success when one is actually there.
       await fs.mkdir(request.targetDir, { recursive: true })
-      await fs.writeFile(path.join(request.targetDir, 'camoufox.exe'), 'binary')
+      await fs.writeFile(path.join(request.targetDir, LAUNCHER), 'binary')
       await fs.writeFile(path.join(request.targetDir, 'properties.json'), '[]')
       await fs.writeFile(
         path.join(request.targetDir, 'version.json'),
@@ -201,7 +212,7 @@ describe('install', () => {
   it('is a no-op when the requested version is already installed', async () => {
     const dir = path.join(installRoot, 'kernels', '152.0.4-beta.30')
     await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(path.join(dir, 'camoufox.exe'), 'binary')
+    await fs.writeFile(path.join(dir, LAUNCHER), 'binary')
     await fs.writeFile(path.join(dir, 'properties.json'), '[]')
     await fs.writeFile(
       path.join(dir, 'version.json'),
