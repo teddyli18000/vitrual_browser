@@ -40,7 +40,6 @@ import {
   checkUnpackedResolution,
   checkWebglDatabase,
   describeArtifact,
-  findEngineLauncher,
 } from './lib/artifact.mjs'
 import { runDurabilityPhase } from './lib/durability.mjs'
 import { restartPhase } from './lib/restart.mjs'
@@ -171,15 +170,10 @@ mkdirSync(engineDir, { recursive: true })
 writeFileSync(path.join(appDir, 'portable'), 'written by apps/desktop/e2e/packaged-e2e.mjs\n')
 
 step('1. launching the packaged application with an EMPTY engine directory')
-// LAYOUT- AND PLATFORM-AGNOSTIC: `findEngineLauncher` checks both launcher names and both layouts, so
-// this asserts "no engine is installed" rather than "no `camoufox.exe` sits flat in one place" — which
-// would have passed on an install that put the launcher under `kernels/<version>/`.
-const emptyCheck = findEngineLauncher(engineDir)
-assert(
-  !emptyCheck.found,
-  `the engine directory starts empty: no launcher under ${engineDir} or its kernels/ ` +
-    `subdirectories (${emptyCheck.kernelBuilds} kernel build(s))`,
-)
+// The empty state is asserted through the app's own API once it is up (see step 2): a filesystem check
+// for "no launcher" is true both BEFORE and AFTER a correct install, because the build lands under
+// `kernels/<version>/` while the root keeps only the marker — so it asserts nothing at all. What the
+// product believes is the only answer that cannot pass for the wrong reason.
 
 const { firefox } = await import('playwright-core')
 const { spawn } = await import('node:child_process')
@@ -309,6 +303,17 @@ assert(
 if (health.body?.data?.version !== expectedVersion) report()
 executed.push('reading the app version from its own health endpoint')
 
+// The engine directory was created empty before the app started. Ask the app what IT believes, which is
+// the only authoritative answer: a filesystem check for "no launcher" is true both before and after a
+// correct install, so it cannot tell "starts empty" from "installed somewhere I did not look".
+const beforeInstall = await api('/api/v1/kernel')
+assert(
+  beforeInstall.body?.data?.installed === false &&
+    (beforeInstall.body?.data?.kernels ?? []).length === 0,
+  `the application starts with no engine installed: ${JSON.stringify(beforeInstall.body?.data ?? null)}`,
+)
+executed.push('asserting the empty engine state through the app, not through the filesystem')
+
 async function api(route, init = {}) {
   const response = await fetch(`${bridge.apiBase}${route}`, {
     ...init,
@@ -416,15 +421,26 @@ void sse
 const installMs = Date.now() - installStarted
 assert(Boolean(installedInfo), `the application reports the engine installed after ${installMs} ms`)
 if (installedInfo) note(`kernel: ${JSON.stringify(installedInfo)}`)
-const installedLauncher = findEngineLauncher(engineDir)
+// The product's own answer, not the shape of the directory. `installedInfo` is the last poll of
+// `GET /api/v1/kernel` during the install, so this asserts what the app will actually launch with — and
+// it keeps working when the layout moves again, which is what the filesystem version could not do: it
+// asserted `camoufox.exe` flat in the root and went red on a correct install.
 assert(
-  installedLauncher.found,
-  `the engine launcher exists on disk (${installedLauncher.where ?? 'not found'}) — checked both ` +
-    `names and both layouts (${installedLauncher.kernelBuilds} kernel build(s))`,
+  installedInfo?.installed === true,
+  `the application reports an installed engine: installed=${installedInfo?.installed}`,
 )
 assert(
-  existsSync(path.join(engineDir, 'version.json')),
-  `version.json exists on disk at ${path.join(engineDir, 'version.json')}`,
+  Array.isArray(installedInfo?.kernels) && installedInfo.kernels.length > 0,
+  `the application lists at least one kernel build: ${JSON.stringify(installedInfo?.kernels ?? [])}`,
+)
+const brokenKernels = (installedInfo?.kernels ?? []).filter(kernel => kernel.problem !== null)
+assert(
+  brokenKernels.length === 0,
+  `every listed kernel build is usable: ${JSON.stringify(brokenKernels)}`,
+)
+assert(
+  typeof installedInfo?.defaultVersion === 'string' && installedInfo.defaultVersion.length > 0,
+  `the application names a default kernel: ${String(installedInfo?.defaultVersion)}`,
 )
 note(`SSE kernel progress lines observed: ${kernelProgress.length}`)
 
