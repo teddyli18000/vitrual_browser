@@ -60,4 +60,3 @@ console.log(
   JSON.stringify({ mode, markerLeftInTarget: marker, installError: failure, ok: !marker }, null, 2),
 )
 process.exit(marker ? 1 : 0)
-
