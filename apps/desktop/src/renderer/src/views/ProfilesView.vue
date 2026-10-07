@@ -16,6 +16,7 @@ import { useKernelStore } from '../stores/kernel'
 import { usePrefsStore } from '../stores/prefs'
 import { useProfilesStore } from '../stores/profiles'
 import { useRuntimeStore } from '../stores/runtime'
+import { useMinuteClock } from '../utils/clock'
 import { countCookies } from '../utils/cookies'
 import { saveTextFile } from '../utils/download'
 import { formatRelative, proxyLabel } from '../utils/format'
@@ -47,6 +48,18 @@ const OS_KEY: Record<OsTarget, MessageKey> = {
 const batching = ref(false)
 const batchDone = ref(0)
 const batchTotal = ref(0)
+/**
+ * The shared minute clock, and the reason the labels are computed in one map.
+ *
+ * An earlier version of this change called itself a performance fix on the reasoning that a per-render
+ * `Date.now()` was recomputed for every row. An independent review showed that was wrong: `formatRelative`
+ * still ran per row, and a reactive `now` ADDS a dependency. What the shared clock buys is freshness - a
+ * label stops being stale until something else triggers a render - and agreement between this table and
+ * the detail panel. The per-render cost is addressed below, where it actually was: the template used to
+ * call the formatter TWICE for every row (`lastStarted(row)` in the class binding and again in the
+ * interpolation), and it now reads one computed map that is built once per change.
+ */
+const now = useMinuteClock()
 
 const filtered = computed(() => {
   const term = search.value.trim().toLowerCase()
@@ -80,9 +93,23 @@ const groupOptions = computed(() => [
   ...store.groups.map(group => ({ value: group.id, label: group.name })),
 ])
 
-function lastStarted(profile: Profile): string {
-  return formatRelative(prefs.lastStartedOf(profile.id, runtime.startedAt(profile.id)))
-}
+/**
+ * Every row's relative label, built once per change rather than per row per render.
+ *
+ * This is the change that addresses the actual cost. The template asks for a row's label in two places,
+ * so the old form called `formatRelative` twice per row on every render; a computed map means the work
+ * happens once per dependency change no matter how many times the template reads it.
+ */
+const relativeTimes = computed<Record<string, string>>(() => {
+  const labels: Record<string, string> = {}
+  for (const profile of store.items) {
+    labels[profile.id] = formatRelative(
+      prefs.lastStartedOf(profile.id, runtime.startedAt(profile.id)),
+      now.value,
+    )
+  }
+  return labels
+})
 
 /* ------------------------------------------------------------------------ actions */
 
@@ -507,7 +534,7 @@ onUnmounted(() => {
 
         <ElTableColumn :label="t('profiles.col.lastStarted')" width="128">
           <template #default="{ row }">
-            <span :class="{ 'vfox-muted': !lastStarted(row) }">{{ lastStarted(row) || '—' }}</span>
+            <span :class="{ 'vfox-muted': !relativeTimes[row.id] }">{{ relativeTimes[row.id] || '—' }}</span>
           </template>
         </ElTableColumn>
 

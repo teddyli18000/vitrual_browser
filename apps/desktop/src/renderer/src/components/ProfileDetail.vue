@@ -7,7 +7,11 @@ import { t } from '../i18n'
 import { usePrefsStore } from '../stores/prefs'
 import { useRuntimeStore } from '../stores/runtime'
 import { copyText } from '../utils/clipboard'
+import { useMinuteClock } from '../utils/clock'
 import { formatBytes, formatDateTime, formatRelative } from '../utils/format'
+
+// The same clock the profile table reads, so the two views cannot show different relative times.
+const clock = useMinuteClock()
 
 const props = defineProps<{ profile: Profile }>()
 
@@ -103,7 +107,7 @@ async function copyEndpoint(): Promise<void> {
     <div class="cell">
       <div class="k">{{ t('profiles.col.lastStarted') }}</div>
       <div class="v">
-        {{ formatRelative(prefs.lastStartedOf(profile.id, runtime.startedAt(profile.id))) || '—' }}
+        {{ formatRelative(prefs.lastStartedOf(profile.id, runtime.startedAt(profile.id)), clock) || '—' }}
       </div>
     </div>
 

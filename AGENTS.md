@@ -26,6 +26,20 @@ rule, a trap, or neither? If neither, it does not go here.
   Vue 3 + Vite + Element Plus + Pinia, nothing else without justification.
 - **Portable.** All data lives in the product's own folder and the folder can be moved as a whole;
   nothing may persist an absolute path.
+- **File management - where our bytes may land.** The owner's rule, and it is absolute.
+  **installed**: nothing of ours outside the product's own data directory - not in %TEMP%, not in the
+  user profile at large, not scattered logs. (The data directory itself is `%APPDATA%\VFox` in that
+  mode, so "no caches in the user profile" would forbid the product's own storage; the boundary is the
+  data directory, not the profile.) **portable**: **everything we produce stays inside the portable
+  folder** - every byte we write, including engine downloads, browser profiles, cookie databases, caches
+  and logs, must be inside it, and writing anywhere else is a defect. **portable independence**: the
+  folder copied to any location must work - nothing persists an absolute path, nothing lives in the
+  registry, no machine state outside the folder. A feature that writes outside the boundary is wrong even
+  if it works, because it breaks the promise that the folder is the product.
+  *Current state: one known violation, `packages/core/src/kernel.ts` stages the ~550 MB engine download
+  in `os.tmpdir()` (issue #93). It is removed again on success, so the bytes are transient - but
+  transient is not the promise, and an interrupted download leaves them there. Until #93 lands this clause
+  is a target, not a fact, the same way rule 6 is about the packaged artifact.*
 - **No secrets in the repo.** Proxy credentials live in the user's local profile store only.
 - **Window sizing is a ratio of the real work area**, with the ceiling relative to that work area. An
   absolute pixel ceiling is a bug: it becomes a small window on a large display.
