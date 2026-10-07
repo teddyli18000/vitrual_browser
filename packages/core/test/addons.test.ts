@@ -17,6 +17,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { ProfileSchema } from '@vfox/shared'
+import type { FingerprintConfig } from '@vfox/shared'
+import { createIdentity } from '../src/identity.js'
 import AdmZip from 'adm-zip'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -215,30 +217,47 @@ async function fakeEngine(): Promise<string> {
  * mattered was the silent one. The fixture builds what it needs, so the block runs everywhere.
  */
 async function writeEngineProperties(engineDir: string): Promise<void> {
+  // DERIVED, NOT ENUMERATED — and this comment matters more than the list it replaces.
+  //
+  // The list used to be hand-written, and CI named the keys it was missing EIGHT AT A TIME over two
+  // runs: `window.screenX, screen.width, screen.height, …` and then `screen.colorDepth,
+  // screen.pixelDepth, navigator.userAgent, …`. A hand-written list that fails whenever the product
+  // grows a key is a test that gets "fixed" by adding the key, which is the habit this repository keeps
+  // writing down.
+  //
+  // THE KEYS COME FROM THE PRODUCT. `createIdentity(...).config` is documented as "Config keys to pin so
+  // the engine cannot re-roll them" — it IS the CAMOU_CONFIG key set, and it needs no engine.
+  //
+  // WHY IT DERIVES FROM AN IDENTITY AND NOT FROM THE CONFIG UNDER TEST: deriving from the config being
+  // validated would declare every key that config contains, and this block would assert nothing at all.
+  // Deriving from a generated identity leaves a rogue config key UNDECLARED, so it still fails here by
+  // name. Deriving from the wrong side is the one-line mistake that turns this into a check that cannot
+  // fail, which is why the source is named here rather than left to the reader.
+  //
+  // THE TYPE VOCABULARY IS camoufox-js's (`dist/utils.js:88-107`) AND ITS `default` ARM IS A TRAP: an
+  // unrecognised type string returns false for EVERY value, so one wrong spelling takes this whole block
+  // down with a message about the config rather than about the type. The string type is `str`, NOT
+  // `string` — that is the first spelling anyone reaches for. Valid: str, int, uint, double, bool,
+  // array, dict.
+  const generated = await createIdentity({ os: 'windows' } as FingerprintConfig, null)
+  const typeOf = (value: unknown): string =>
+    Array.isArray(value)
+      ? 'array'
+      : typeof value === 'number'
+        ? Number.isInteger(value)
+          ? 'int'
+          : 'double'
+        : typeof value === 'boolean'
+          ? 'bool'
+          : typeof value === 'object' && value !== null
+            ? 'dict'
+            : 'str'
   const properties = [
     { property: 'addons', type: 'array' },
-    { property: 'canvas:seed', type: 'int' },
-    { property: 'audio:seed', type: 'int' },
-    { property: 'fonts:spacing_seed', type: 'int' },
-    { property: 'canvas:aaOffset', type: 'int' },
-    { property: 'canvas:aaCapOffset', type: 'int' },
-    { property: 'window.history.length', type: 'int' },
-    { property: 'window.screenY', type: 'int' },
-    // The eight CI named when the list was short. VFox sets them for every profile, and camoufox-js
-    // refuses to launch a config containing a key the schema does not declare.
-    //
-    // THIS LIST MUST COVER WHAT THE PRODUCT'S CONFIG SETS, and nothing enforces that - which is the
-    // right direction: a new fingerprint key fails this block BY NAME, with the key in the message,
-    // rather than shipping unasserted. That is what happened here, and it took one CI run to say
-    // exactly which keys were missing.
-    { property: 'window.screenX', type: 'int' },
-    { property: 'screen.width', type: 'int' },
-    { property: 'screen.height', type: 'int' },
-    { property: 'screen.availWidth', type: 'int' },
-    { property: 'screen.availHeight', type: 'int' },
-    { property: 'screen.availLeft', type: 'int' },
-    { property: 'window.outerWidth', type: 'int' },
-    { property: 'window.outerHeight', type: 'int' },
+    ...Object.entries(generated.config).map(([property, value]) => ({
+      property,
+      type: typeOf(value),
+    })),
   ]
   await fs.writeFile(path.join(engineDir, 'properties.json'), JSON.stringify(properties), 'utf8')
   // Two fields, not one: `formatKernelVersion()` joins them and `readKernelVersion()` splits them back.
