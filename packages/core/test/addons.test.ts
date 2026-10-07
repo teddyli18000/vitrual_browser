@@ -224,6 +224,21 @@ async function writeEngineProperties(engineDir: string): Promise<void> {
     { property: 'canvas:aaCapOffset', type: 'int' },
     { property: 'window.history.length', type: 'int' },
     { property: 'window.screenY', type: 'int' },
+    // The eight CI named when the list was short. VFox sets them for every profile, and camoufox-js
+    // refuses to launch a config containing a key the schema does not declare.
+    //
+    // THIS LIST MUST COVER WHAT THE PRODUCT'S CONFIG SETS, and nothing enforces that - which is the
+    // right direction: a new fingerprint key fails this block BY NAME, with the key in the message,
+    // rather than shipping unasserted. That is what happened here, and it took one CI run to say
+    // exactly which keys were missing.
+    { property: 'window.screenX', type: 'int' },
+    { property: 'screen.width', type: 'int' },
+    { property: 'screen.height', type: 'int' },
+    { property: 'screen.availWidth', type: 'int' },
+    { property: 'screen.availHeight', type: 'int' },
+    { property: 'screen.availLeft', type: 'int' },
+    { property: 'window.outerWidth', type: 'int' },
+    { property: 'window.outerHeight', type: 'int' },
   ]
   await fs.writeFile(path.join(engineDir, 'properties.json'), JSON.stringify(properties), 'utf8')
   // Two fields, not one: `formatKernelVersion()` joins them and `readKernelVersion()` splits them back.
