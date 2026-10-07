@@ -36,7 +36,16 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
   // with zero telemetry it is the only diagnostic channel the product has.
   const logger = combineLoggers(createFileLogger(dataDir), options.logger)
 
-  const store = new Store(dataDir, logger)
+  /**
+   * Whether the store may write while reading.
+   *
+   * A store READ can repair a corrupt table, and a repair is a rename plus a rewrite. This starts
+   * false and is set from the lock once it is settled, so an instance that was refused the data
+   * directory — and told "this instance is read-only and will not write the store" — cannot write it
+   * through a repair either.
+   */
+  let mayWriteStore = false
+  const store = new Store(dataDir, logger, { mayRepair: () => mayWriteStore })
 
   /**
    * The WebGL pairs the stored profiles already report.
@@ -56,12 +65,13 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     }
     return taken
   }
-  await store.load()
-
   // Engine processes from a previous run still hold their profile's parent.lock, which would make
   // the next launch of that profile fail with "profile in use". Only the instance that owns the
   // data directory may do that: a second instance must never kill the first one's running profiles.
   const dataDirLock = await acquireDataDirLock(store.dataDir, logger)
+  // Settled before anything reads the store, because a read can repair a corrupt table and that is a
+  // write. A refused instance still reads the recovered rows; it just leaves the files alone.
+  mayWriteStore = dataDirLock.acquired
   if (dataDirLock.acquired) {
     try {
       await reconcileOrphans({ dataDir: store.dataDir, logger })
@@ -69,6 +79,11 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
       logger.warn(`orphan reconciliation failed: ${message(error)}`)
     }
   }
+
+  // Loaded AFTER the lock is settled, deliberately. `load()` validates both tables, and a corrupt one
+  // is repaired by writing the backup over it — so loading first would let an instance that was just
+  // refused the directory repair the store it promised not to write.
+  await store.load()
 
   const registry = new RuntimeRegistry({
     launch: launchCamoufox,

@@ -110,12 +110,25 @@ export class Store {
 
   #queue: Promise<unknown> = Promise.resolve()
   #logger: CoreLogger | undefined
+  /**
+   * Whether this instance may WRITE while reading.
+   *
+   * A store read can repair a corrupt table, and a repair is a rename plus a rewrite. A core that was
+   * refused the data-directory lock is told "this instance is read-only and will not write the store",
+   * so it must not repair either — otherwise the promise is false and a second instance can rewrite
+   * `profiles.json` while the owner is writing it. It still READS the recovered rows; it leaves the
+   * files exactly as they are and says so.
+   */
+  #mayRepair: () => boolean
 
-  constructor(dataDir: string, logger?: CoreLogger) {
+  constructor(dataDir: string, logger?: CoreLogger, options: { mayRepair?: () => boolean } = {}) {
     this.dataDir = path.resolve(dataDir)
     this.profilesFile = path.join(this.dataDir, 'profiles.json')
     this.groupsFile = path.join(this.dataDir, 'groups.json')
     this.#logger = logger
+    // Default true: every caller that does not own a lock concept — the tests, the scripts, a single
+    // core — keeps the previous behaviour, and only the core passes a predicate.
+    this.#mayRepair = options.mayRepair ?? (() => true)
   }
 
   /**
@@ -476,6 +489,15 @@ export class Store {
     if (backupRaw !== null) {
       const recovered = parseTable(backupRaw, schema, label)
       if (recovered.ok) {
+        if (!this.#mayRepair()) {
+          this.#logger?.error(
+            `${file} was invalid (${parsed.reason}); the backup at ${backup} parses, so its ` +
+              `${recovered.value.length} entries are being read — but this instance does not own the ` +
+              'data directory, so the files are left exactly as they are. Close the other VFox ' +
+              'instance and start again to repair them.',
+          )
+          return recovered.value
+        }
         const quarantine = `${file.replace(/\.json$/, '')}.corrupt-${timestamp()}.json`
         await fs.rename(file, quarantine)
         await writeJson(file, recovered.value)

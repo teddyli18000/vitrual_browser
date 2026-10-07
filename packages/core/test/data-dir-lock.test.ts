@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -77,5 +78,53 @@ describe('the data-directory lock', () => {
 
     // A stale lock must never lock the user out — that would be worse than the bug being fixed.
     await expect(core.profiles.create({ name: 'after the crash' })).resolves.toBeTruthy()
+  })
+
+  /**
+   * The three ways a lock can fail to be attributable to a LIVING process. Each must fall through to
+   * takeover, because "a lock that cannot be attributed to a living process must never lock the user
+   * out of their own data" is the requirement this whole path exists for — and it is the one the
+   * first version got backwards, refusing an unreadable lock instead of taking it over.
+   */
+  it('takes over from an unreadable lock, so a corrupt file cannot lock the user out', async () => {
+    await fs.writeFile(path.join(dataDir, 'core.lock'), 'not json at all\n', 'utf8')
+
+    const core = await openCore()
+
+    expect(core.dataDirLock.owned).toBe(true)
+    await expect(core.profiles.create({ name: 'after a corrupt lock' })).resolves.toBeTruthy()
+  })
+
+  it('takes over a pre-token lock carrying our own pid, so an upgrade starts', async () => {
+    // A lock written before tokens existed has our pid and no token. Reading that as a foreign holder
+    // would refuse to start against our own previous run's file after an upgrade — the same mistake as
+    // refusing an unreadable lock, in the other direction.
+    await fs.writeFile(
+      path.join(dataDir, 'core.lock'),
+      `${JSON.stringify({ pid: process.pid, startedAt: '2024-01-01T00:00:00.000Z' })}\n`,
+      'utf8',
+    )
+
+    const core = await openCore()
+
+    expect(core.dataDirLock.owned).toBe(true)
+    await expect(core.profiles.create({ name: 'after our own leftover' })).resolves.toBeTruthy()
+  })
+
+  it('refuses a lock with our pid but a different token — the token identifies the core', async () => {
+    // Two cores in ONE process share a pid, so a pid alone cannot tell "another instance" from "my own
+    // leftover", and comparing pids is how the first version let a second writer in. This lock is
+    // alive (it is us) and foreign (the token is not ours), so it must refuse.
+    await fs.writeFile(
+      path.join(dataDir, 'core.lock'),
+      `${JSON.stringify({ pid: process.pid, token: randomUUID(), startedAt: new Date().toISOString() })}\n`,
+      'utf8',
+    )
+
+    const core = await openCore()
+
+    expect(core.dataDirLock.owned).toBe(false)
+    expect(core.dataDirLock.owner).toBe(process.pid)
+    await expect(core.profiles.create({ name: 'must be refused' })).rejects.toThrow(/pid \d+/)
   })
 })
