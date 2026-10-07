@@ -29,10 +29,16 @@ export async function resolveDataDir(explicit?: string): Promise<string> {
 
 export async function openCore(dataDir?: string): Promise<Core> {
   const { createCore } = await import('@vfox/core')
+  const { createFanoutLogger, createRotatingLogger } = await import('@vfox/server')
+  const resolved = await resolveDataDir(dataDir)
   return createCore({
-    dataDir: await resolveDataDir(dataDir),
-    // stderr only: `vfox mcp` speaks its protocol over stdout.
-    logger: createStderrLogger(),
+    dataDir: resolved,
+    // stderr for the terminal — `vfox mcp` speaks its protocol over stdout — fanned out with the same
+    // rotating file log `startServer` always writes. `createCore` adds a file log of its own only when
+    // NO logger is supplied, so passing the stderr logger alone silently stopped recording every
+    // non-serve command in `<dataDir>/logs/vfox.log`, which is the file the desktop's "copy
+    // diagnostics" action reads. Fanning out, rather than dropping the file sink, keeps both.
+    logger: createFanoutLogger(createRotatingLogger({ dataDir: resolved }), createStderrLogger()),
   })
 }
 
