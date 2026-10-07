@@ -688,6 +688,60 @@ one at the root, and if the engine uses another, every verdict here has been abo
       )
     }
 
+    // A SECOND CYCLE, because the one structural difference left between CI and the owner's machine is
+    // that CI's profile is seconds old while theirs has been launched many times. If a warmed profile
+    // keeps the cookie and a fresh one does not, this phase is measuring a property of a new profile
+    // rather than the product's promise - and it must say so rather than blame the product.
+    try {
+      const warmed = await connect(secondEndpoint)
+      try {
+        const page = await warmed.newPage()
+        await page.goto(setter, { waitUntil: 'domcontentloaded' })
+        const reseeded = await page.evaluate(READ_DOCUMENT_STATE)
+        note(
+          `second cycle: the cookie was set again on the relaunched profile (page sees ` +
+            `${reseeded.cookie.includes(COOKIE) ? 'it' : 'nothing'})`,
+        )
+      } finally {
+        await warmed.close()
+      }
+      await api(`/api/v1/profiles/${profileA.id}/stop`, { method: 'POST', body: '{}' })
+      const third = await api(`/api/v1/profiles/${profileA.id}/launch`, {
+        method: 'POST',
+        body: '{}',
+      })
+      const thirdEndpoint = endpointOf(third)
+      if (!thirdEndpoint) {
+        note(
+          'second cycle: the third launch returned no wsEndpoint, so the cycle could not be measured',
+        )
+      } else {
+        const again = await connect(thirdEndpoint)
+        let survived = false
+        try {
+          const page = await again.newPage()
+          await page.goto(reader, { waitUntil: 'domcontentloaded' })
+          const seen = await page.evaluate(READ_DOCUMENT_STATE)
+          survived = seen.cookie.includes(COOKIE)
+        } finally {
+          await again.close()
+        }
+        note(
+          `second cycle: the cookie ${survived ? 'SURVIVED' : 'was lost again'} across a stop and ` +
+            'relaunch of an already-warmed profile. Survived means the first cycle is the difference and ' +
+            'this phase should warm the profile before measuring; lost again means a profile in CI never ' +
+            'keeps cookies and the search goes back to the engine.',
+        )
+        checks.push(
+          survived
+            ? 'a warmed profile keeps the cookie - the first cycle is the difference'
+            : 'a warmed profile loses it too - the engine is discarding it',
+        )
+      }
+    } catch (error) {
+      note(`second cycle could not run: ${error.message}`)
+    }
+
     const lost = []
     if (!after.cookie) {
       lost.push(
