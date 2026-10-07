@@ -43,6 +43,17 @@ export interface ProfileDraft {
   startUrl: string
   headless: boolean
 
+  /**
+   * The engine kernel this profile launches with, or `null` for "not chosen here".
+   *
+   * `null` is omitted from the payload rather than sent as a value, and the two verbs mean different
+   * things by that: creating a profile lets the server pin the default kernel (so a new profile's
+   * engine can never change behind the user's back), while updating one leaves the existing pin
+   * exactly as it was. Sending an explicit `null` would un-pin the profile, which is a deliberate act
+   * with an API and a CLI behind it and not something this form should do by accident.
+   */
+  kernel: string | null
+
   os: OsTarget
 
   screenAuto: boolean
@@ -95,6 +106,7 @@ export function emptyDraft(): ProfileDraft {
     notes: '',
     startUrl: '',
     headless: false,
+    kernel: null,
     os: 'windows',
     screenAuto: true,
     screen: { ...DEFAULT_SCREEN },
@@ -136,6 +148,10 @@ export function draftFrom(profile: Profile): ProfileDraft {
   draft.notes = profile.notes
   draft.startUrl = text(profile.launch.startUrl)
   draft.headless = profile.launch.headless
+  // The pin as stored. `null` on a profile written before kernels could be pinned, which the resolver
+  // reads as "the engine its identity was born with"; the form leaves it alone rather than inventing
+  // one.
+  draft.kernel = profile.kernel
   draft.os = fp.os
 
   draft.screenAuto = fp.screen === null
@@ -253,6 +269,9 @@ export function payloadFrom(draft: ProfileDraft): DraftConversion {
       notes: draft.notes,
       proxy,
       fingerprint,
+      // Omitted when the user did not choose one — see `ProfileDraft.kernel` for why that is not the
+      // same as sending `null`.
+      ...(draft.kernel ? { kernel: draft.kernel } : {}),
       launch: {
         headless: draft.headless,
         startUrl: draft.startUrl.trim().length > 0 ? draft.startUrl.trim() : null,

@@ -63,6 +63,7 @@ export const en: Messages = {
   'profiles.col.dataDir': 'Data directory',
   'profiles.action.start': 'Start',
   'profiles.action.stop': 'Stop',
+  'profiles.action.fixKernel': 'Install engine',
   'profiles.action.clone': 'Clone',
   'profiles.action.export': 'Export',
   'profiles.action.delete': 'Delete',
@@ -295,6 +296,10 @@ export const en: Messages = {
   'error.kernelMissing':
     'The engine is not installed, so profiles cannot start. Download it in Settings (about 550 MB).',
   'error.goSettings': 'Open settings',
+  'error.kernelMissingPinned':
+    'This profile is pinned to engine {version}, which is not installed, so it cannot launch. Install that kernel, or pin the profile to another one.',
+  'error.kernelMissingPinnedBanner':
+    '{count} profile(s) are pinned to an engine that is not installed: {version}',
   'error.launchFailed': 'Could not start "{name}": {reason}',
   'error.stopFailed': 'Could not stop "{name}": {reason}',
   'error.exportFailed': 'Export failed: {reason}',
@@ -336,6 +341,14 @@ export const en: Messages = {
   'field.headlessHint':
     'Headless shows no window and is meant for automation / CI. Off by default.',
 
+  'field.kernel': 'Engine kernel',
+  'field.kernelHint':
+    'The profile is pinned to this kernel; leave empty to follow the default one.',
+  'field.kernelFollowDefault': 'Follow the default ({version})',
+  'field.kernelNoEngine': 'No kernel is installed yet',
+  'field.kernelOptionDefault': '{version} (default)',
+  'field.kernelChangeWarning':
+    'Changing the kernel changes the device fingerprint this profile reports; sites it is signed in to may re-check it.',
   'fp.os': 'Operating system',
   'fp.osHint': 'Spoofs the UA / platform / font traits of that system',
   'fp.screen': 'Screen range',
@@ -445,6 +458,16 @@ export const en: Messages = {
   'settings.kernelDone': 'Engine installed',
   'settings.kernelError': 'Install failed: {reason}',
   'settings.kernelStarted': 'Engine download started; progress shows up here',
+  'settings.kernelDefault': 'Default engine',
+  'settings.kernelTotal': '{size} on disk',
+  'settings.kernelIsDefault': 'Default',
+  'settings.kernelProblem': 'Unusable',
+  'settings.kernelSize': 'Size',
+  'settings.kernelPinned': 'Pinned',
+  'settings.kernelNone': 'No engine kernel is installed yet.',
+  'settings.kernelRemoveConfirm':
+    'Delete kernel {version}? Any profile pinned to it will not be able to launch until it is installed again or re-pinned to another kernel.',
+  'settings.kernelRemoved': 'Deleted kernel {version}',
   'settings.language': 'Language',
   'settings.languageHint': 'Simplified Chinese by default',
   'settings.about': 'About',

@@ -1,7 +1,7 @@
 import type { KernelInfo, KernelProgress } from '@vfox/shared'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { getKernel, installKernel } from '../api/endpoints'
+import { getKernel, installKernel, removeKernel } from '../api/endpoints'
 import { errorMessage } from '../api/http'
 
 const BUSY_PHASES: KernelProgress['phase'][] = ['checking', 'downloading', 'extracting']
@@ -14,6 +14,16 @@ export const useKernelStore = defineStore('kernel', () => {
 
   const busy = computed(() => progress.value !== null && BUSY_PHASES.includes(progress.value.phase))
 
+  /** Every kernel directory, including the ones that cannot be launched. */
+  const kernels = computed(() => info.value?.kernels ?? [])
+  /** The engine an unpinned profile and a new profile get. */
+  const defaultVersion = computed(() => info.value?.defaultVersion ?? null)
+  /** The versions this build was tested against and can therefore install. */
+  const availableVersions = computed(() => info.value?.availableVersions ?? [])
+  /** At least one usable kernel is installed. Not the same question as "this profile's pin is
+   * installed" — see `resolveKernelForProfile` in the core, and `errorCodeOf` in the runtime store. */
+  const installed = computed(() => info.value?.installed === true)
+
   async function refresh(): Promise<void> {
     try {
       info.value = await getKernel()
@@ -23,9 +33,9 @@ export const useKernelStore = defineStore('kernel', () => {
     }
   }
 
-  async function install(): Promise<void> {
+  async function install(version?: string): Promise<void> {
     try {
-      await installKernel()
+      await installKernel(version)
       progress.value = {
         phase: 'checking',
         percent: null,
@@ -35,6 +45,22 @@ export const useKernelStore = defineStore('kernel', () => {
       }
     } catch (err) {
       error.value = errorMessage(err)
+    }
+  }
+
+  /**
+   * Remove one kernel. The refusal (409, naming the profiles that pin it) is returned rather than
+   * swallowed, because that message IS the explanation — the caller shows it as-is.
+   */
+  async function remove(version: string): Promise<string | null> {
+    try {
+      info.value = await removeKernel(version)
+      error.value = null
+      return null
+    } catch (err) {
+      const message = errorMessage(err)
+      error.value = message
+      return message
     }
   }
 
@@ -51,5 +77,18 @@ export const useKernelStore = defineStore('kernel', () => {
     if (next.phase === 'error') error.value = next.message ?? '安装失败'
   }
 
-  return { info, progress, error, busy, refresh, install, applyProgress }
+  return {
+    info,
+    progress,
+    error,
+    busy,
+    kernels,
+    defaultVersion,
+    availableVersions,
+    installed,
+    refresh,
+    install,
+    remove,
+    applyProgress,
+  }
 })

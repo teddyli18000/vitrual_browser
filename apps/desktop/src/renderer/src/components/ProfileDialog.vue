@@ -11,6 +11,7 @@ import {
   payloadFrom,
 } from '../forms/profile-draft'
 import { t } from '../i18n'
+import { useKernelStore } from '../stores/kernel'
 import { useProfilesStore } from '../stores/profiles'
 import AutoField from './AutoField.vue'
 import ProxyFields from './ProxyFields.vue'
@@ -27,6 +28,7 @@ const emit = defineEmits<{
 }>()
 
 const store = useProfilesStore()
+const kernel = useKernelStore()
 const draft = ref<ProfileDraft>(emptyDraft())
 const activeTab = ref('basic')
 const saving = ref(false)
@@ -154,6 +156,39 @@ function close(): void {
               <div class="field-label">{{ t('field.headless') }}</div>
               <div class="hint">{{ t('field.headlessHint') }}</div>
             </div>
+          </div>
+
+          <!--
+            The engine pin. `null` means "not chosen here", which the payload omits rather than sends:
+            on create that lets the server pin the current default, and on edit it leaves the existing
+            pin alone. Un-pinning is deliberately not offered — it is an act with an API and a CLI
+            behind it, and this form must not be able to re-point a working fleet by accident.
+          -->
+          <div class="field span-2">
+            <span class="field-label">{{ t('field.kernel') }}</span>
+            <ElSelect
+              v-model="draft.kernel"
+              clearable
+              :placeholder="
+                kernel.defaultVersion
+                  ? t('field.kernelFollowDefault', { version: kernel.defaultVersion })
+                  : t('field.kernelNoEngine')
+              "
+            >
+              <ElOption
+                v-for="entry in kernel.kernels"
+                :key="entry.version"
+                :label="
+                  entry.isDefault
+                    ? t('field.kernelOptionDefault', { version: entry.version })
+                    : entry.version
+                "
+                :value="entry.version"
+                :disabled="entry.problem !== null"
+              />
+            </ElSelect>
+            <div class="hint">{{ t('field.kernelHint') }}</div>
+            <div v-if="profile && profile.kernel" class="hint err">{{ t('field.kernelChangeWarning') }}</div>
           </div>
         </div>
       </ElTabPane>
