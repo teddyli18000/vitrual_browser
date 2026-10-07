@@ -40,6 +40,7 @@ import {
   checkUnpackedResolution,
   checkWebglDatabase,
   describeArtifact,
+  findEngineLauncher,
 } from './lib/artifact.mjs'
 import { runDurabilityPhase } from './lib/durability.mjs'
 import { restartPhase } from './lib/restart.mjs'
@@ -170,9 +171,14 @@ mkdirSync(engineDir, { recursive: true })
 writeFileSync(path.join(appDir, 'portable'), 'written by apps/desktop/e2e/packaged-e2e.mjs\n')
 
 step('1. launching the packaged application with an EMPTY engine directory')
+// LAYOUT- AND PLATFORM-AGNOSTIC: `findEngineLauncher` checks both launcher names and both layouts, so
+// this asserts "no engine is installed" rather than "no `camoufox.exe` sits flat in one place" — which
+// would have passed on an install that put the launcher under `kernels/<version>/`.
+const emptyCheck = findEngineLauncher(engineDir)
 assert(
-  !existsSync(path.join(engineDir, 'camoufox.exe')),
-  `the engine directory starts empty: ${engineDir}`,
+  !emptyCheck.found,
+  `the engine directory starts empty: no launcher under ${engineDir} or its kernels/ ` +
+    `subdirectories (${emptyCheck.kernelBuilds} kernel build(s))`,
 )
 
 const { firefox } = await import('playwright-core')
@@ -410,9 +416,11 @@ void sse
 const installMs = Date.now() - installStarted
 assert(Boolean(installedInfo), `the application reports the engine installed after ${installMs} ms`)
 if (installedInfo) note(`kernel: ${JSON.stringify(installedInfo)}`)
+const installedLauncher = findEngineLauncher(engineDir)
 assert(
-  existsSync(path.join(engineDir, 'camoufox.exe')),
-  `camoufox.exe exists on disk at ${path.join(engineDir, 'camoufox.exe')}`,
+  installedLauncher.found,
+  `the engine launcher exists on disk (${installedLauncher.where ?? 'not found'}) — checked both ` +
+    `names and both layouts (${installedLauncher.kernelBuilds} kernel build(s))`,
 )
 assert(
   existsSync(path.join(engineDir, 'version.json')),

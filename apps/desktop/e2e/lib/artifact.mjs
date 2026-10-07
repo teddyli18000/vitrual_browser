@@ -524,3 +524,31 @@ export function checkUnpackedResolution(_artifact, options) {
 
   return { ok: failures.length === 0, failures: failures.slice(0, 12), checked }
 }
+
+/**
+ * Find the engine launcher without deciding the LAYOUT or the PLATFORM.
+ *
+ * Two facts this must not assume, each of which has already cost this repository a cycle:
+ *   - the launcher is `camoufox.exe` on Windows and `camoufox` elsewhere. Hard-coding the extension is
+ *     what made four kernel tests invisible on the platform CI runs on.
+ *   - since the multi-kernel work the launcher lives either at the engine root or under
+ *     `kernels/<version>/`, so a flat-only check fails against a CORRECT install the day that lands —
+ *     the same defect `verify-install.mjs` already had once. A check that goes red on a correct result
+ *     trains everyone to ignore it.
+ *
+ * @param {string} engineDir
+ * @returns {{ found: boolean, where: string | null, kernelBuilds: number }}
+ */
+export function findEngineLauncher(engineDir) {
+  const names = ['camoufox.exe', 'camoufox']
+  const hasLauncher = dir => names.some(name => existsSync(path.join(dir, name)))
+  const kernelsDir = path.join(engineDir, 'kernels')
+  const builds = existsSync(kernelsDir)
+    ? readdirSync(kernelsDir, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => path.join(kernelsDir, entry.name))
+    : []
+  if (hasLauncher(engineDir)) return { found: true, where: engineDir, kernelBuilds: builds.length }
+  const build = builds.find(hasLauncher)
+  return { found: Boolean(build), where: build ?? null, kernelBuilds: builds.length }
+}
