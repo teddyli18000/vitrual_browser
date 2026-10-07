@@ -534,6 +534,15 @@ export async function runDurabilityPhase({
         'database from a jar that never held our cookie rather than deleting one row.',
     )
 
+    // THE NUMBER THE FILE LISTINGS CANNOT GIVE, and the last one the mechanism needs. The sizes are
+    // identical before and after the stop and the -wal is empty in both readings, so the database was not
+    // rewritten and there was nothing to checkpoint - which leaves "a row was deleted in place" as the
+    // shape. What decides between the two remaining mechanisms is the TOTAL row count AFTER the stop: zero
+    // means the engine replaced the jar, unchanged means it removed our row specifically, and those have
+    // opposite fixes - one is about what the cookie service loaded at startup, the other about the row.
+    const rowDetailAfterStop = await cookieRowDetail(userdataDir(profileA.id))
+    note(`cookie row columns after the stop: ${rowDetailAfterStop}`)
+
     /**
      * Print the launcher's own account of the stop, because CI cannot see it any other way.
      *
