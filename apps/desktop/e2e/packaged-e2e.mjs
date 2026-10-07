@@ -43,6 +43,7 @@ import {
 } from './lib/artifact.mjs'
 import { runDurabilityPhase } from './lib/durability.mjs'
 import { reportIdleCost } from './lib/idle-cost.mjs'
+import { restartPhase } from './lib/restart.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..', '..', '..')
@@ -185,56 +186,87 @@ const { spawn } = await import('node:child_process')
 // protection for a fingerprint browser — so the app is driven as an ordinary process through its
 // OWN API, which is also the contract a user automation uses.
 const apiPort = process.env.VFOX_E2E_PORT ?? '9200'
-const app = spawn(artifact.executable, [], {
-  cwd: appDir,
-  env: {
-    ...process.env,
-    ELECTRON_RUN_AS_NODE: '',
-    // NOT `VFOX_DATA_DIR`. It is the first entry in the documented resolution order and would
-    // shadow the `portable` marker written above, so the suite would exercise the env-var branch
-    // while the zip a user downloads takes the marker branch. That is the configuration that
-    // actually ships, and until now nothing tested it.
-    VFOX_API_PORT: apiPort,
-    // The whole point of phase 2: the app must fetch the kernel itself, into a directory that has
-    // never held one.
-    CAMOUFOX_INSTALL_DIR: engineDir,
-  },
-  stdio: ['ignore', 'ignore', 'pipe'],
-})
-
-const appStderr = []
-app.stderr?.on('data', chunk => {
-  const text = String(chunk)
-  appStderr.push(text)
-  for (const line of text.split('\n')) if (line.trim()) console.log(`      [app] ${line.trim()}`)
-})
-
-let appExited = null
-app.on('exit', (code, signal) => {
-  appExited = { code, signal }
-})
-
 const apiBase = `http://127.0.0.1:${apiPort}`
 const tokenFile = path.join(dataDir, 'api-token')
-let token = null
-const launchDeadline = Date.now() + 120_000
-while (Date.now() < launchDeadline) {
-  if (appExited) {
-    fail(`the packaged application exited during startup: ${JSON.stringify(appExited)}`)
-    report()
-  }
-  try {
-    if (!token && existsSync(tokenFile)) token = readFileSync(tokenFile, 'utf8').trim()
-    if (token) {
-      const probe = await fetch(`${apiBase}/api/v1/health`, {
-        headers: { 'x-vfox-token': token },
-      })
-      if (probe.ok) break
+const appStderr = []
+
+/**
+ * Start the packaged application.
+ *
+ * A FUNCTION because the suite now starts it TWICE: the restart phase stops the app and starts it again
+ * with the same environment and data directory, which is the journey the owner actually performs and the
+ * one where a portable product can quietly lose everything. Everything here is byte-for-byte what the
+ * single inline start used to be — same `cwd`, same env, same `stdio`, same stderr capture — including
+ * the deliberate ABSENCE of `VFOX_DATA_DIR`, which is what makes the `portable` marker the thing under
+ * test rather than the env-var branch that ships to nobody.
+ */
+function spawnApp() {
+  const child = spawn(artifact.executable, [], {
+    cwd: appDir,
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '',
+      // NOT `VFOX_DATA_DIR`. It is the first entry in the documented resolution order and would
+      // shadow the `portable` marker written above, so the suite would exercise the env-var branch
+      // while the zip a user downloads takes the marker branch. That is the configuration that
+      // actually ships, and until now nothing tested it.
+      VFOX_API_PORT: apiPort,
+      // The whole point of phase 2: the app must fetch the kernel itself, into a directory that has
+      // never held one.
+      CAMOUFOX_INSTALL_DIR: engineDir,
+    },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+
+  child.stderr?.on('data', chunk => {
+    const text = String(chunk)
+    appStderr.push(text)
+    for (const line of text.split('\n')) if (line.trim()) console.log(`      [app] ${line.trim()}`)
+  })
+
+  return child
+}
+
+/**
+ * Wait for the app's own loopback API to answer.
+ *
+ * Takes the PROCESS as an argument rather than closing over the first one, so the restarted process gets
+ * the same treatment — a restart that never answers must fail the same way the first start would.
+ */
+async function waitForApi(child) {
+  let exited = null
+  child.on('exit', (code, signal) => {
+    exited = { code, signal }
+  })
+  let token = null
+  const deadline = Date.now() + 120_000
+  while (Date.now() < deadline) {
+    if (exited) return { started: false, exited, token }
+    try {
+      if (!token && existsSync(tokenFile)) token = readFileSync(tokenFile, 'utf8').trim()
+      if (token) {
+        const probe = await fetch(`${apiBase}/api/v1/health`, {
+          headers: { 'x-vfox-token': token },
+        })
+        if (probe.ok) return { started: true, exited: null, token }
+      }
+    } catch {
+      // The server binds late and the token file is written non-atomically; keep polling.
     }
-  } catch {
-    // The server binds late and the token file is written non-atomically; keep polling.
+    await new Promise(resolve => setTimeout(resolve, 500))
   }
-  await new Promise(resolve => setTimeout(resolve, 500))
+  return { started: false, exited: null, token }
+}
+
+const app = spawnApp()
+const firstStart = await waitForApi(app)
+const token = firstStart.token
+if (!firstStart.started) {
+  fail(
+    'the packaged application did not answer its API within 120 s' +
+      (firstStart.exited ? ` (exited: ${JSON.stringify(firstStart.exited)})` : ''),
+  )
+  report()
 }
 
 if (!token) {
@@ -764,6 +796,30 @@ if (after) {
   )
 }
 executed.push('stopping every profile and asserting no engine process is orphaned')
+
+// ------------------------------------------------- 8. restarting the APPLICATION, not a profile
+// Placed at the very END so it does not conflict with the phase `engine` is adding in the same file.
+// The wiring lives here rather than inside the module so the module stays testable on its own.
+let runningApp = app
+await restartPhase({
+  dataDir,
+  engineDir,
+  apiPort,
+  expectedProfiles: profiles.map(profile => ({ id: profile.id, name: profile.name })),
+  api,
+  spawnApp: async () => {
+    const next = spawnApp()
+    const started = await waitForApi(next)
+    if (started.started) runningApp = next
+    return { started: started.started }
+  },
+  stopApp: async () => {
+    runningApp.kill()
+    await new Promise(resolve => setTimeout(resolve, 5_000))
+  },
+  report: { note, log: message => console.log(message), assert },
+})
+executed.push('restarting the packaged application and re-reading its state from disk')
 
 app.kill()
 // Best effort, and it says so. The app was just killed and Windows can still hold the directory
