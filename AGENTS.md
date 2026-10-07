@@ -178,6 +178,38 @@ rule, a trap, or neither? If neither, it does not go here.
   `(none)` when none is: same code, two environments, two outputs. Pin `CAMOUFOX_INSTALL_DIR` at an empty
   directory (or a fixture engine directory) inside the case, and assert the empty state *and* the table
   shape in cases the test creates itself.
+- **A test that SKIPS where the merge is judged is the same defect as one that cannot fail.** The
+  launcher-wiring block in `packages/core/test/addons.test.ts` was gated on
+  `existsSync(<CAMOUFOX_INSTALL_DIR>/properties.json)`. CI installs no engine, so it skipped — that is the
+  `4 skipped` in the suite numbers — and it was the only place the launcher-wiring contract was asserted.
+  On a machine with an engine the same commit *failed* instead. Two environments, two results, and the
+  silent one was CI. If a case needs a fixture, **build the fixture**; do not skip.
+- **A fixture must be shaped like the thing it stands in for.** The fake engine above needed THREE things,
+  and each was learned from a failure: `addons/<key>/manifest.json`, `properties.json` (camoufox-js reads
+  it from beside the executable and throws `UnknownProperty` for any key it does not list,
+  `dist/utils.js:61-87`), and **`version.json`**. The last one is the one that matters: every launch
+  reaches `camoufoxPath()` through the addon path, and with no readable `version.json` that function
+  starts its own engine download — measured at **ten outbound requests from one launch**, and
+  `Version information not found at …\version.json. Please run \`camoufox fetch\` to install.` It is two
+  fields, `version` and `release`, not one combined string.
+- **Toolchain, when `node_modules` is missing.** Worktrees OUTSIDE the repository install; ones inside it
+  resolve upward to the main checkout and install nothing. `pnpm install --frozen-lockfile` there exits 1
+  on a postinstall script (`EPERM` on `spawn`, the pipe ban) **but the packages are linked and tsc, vitest
+  and biome all work** — do not read that exit code as a failed install. vitest cannot actually run:
+  `vite` spawns a child with a pipe and the sandbox forbids it (`spawn EPERM`), so a local check has to be
+  a plain `.mjs` over the built `dist/`.
+- **Two git traps that cost pushes this session.** `GIT_EDITOR=true` is a Unix-ism — the editor is run
+  through `sh` — so a rebase that needs a message uses `git commit --no-edit -C <sha>` instead. And a
+  branch created with `git worktree add <dir> origin/<branch>` has **`origin/main` as its configured
+  upstream**, so a bare `--force-with-lease` leases against `main` and can never succeed; name the
+  expected value: `--force-with-lease=<branch>:<old-sha>`.
+- **GitHub does not run `pull_request` workflows for a PR with merge conflicts.** A branch that conflicts
+  with `main` gets **no CI at all** — not a broken workflow, not a lost event — and the failure looks
+  exactly like broken infrastructure. Three rounds were spent on that before `gh pr view <n> --json
+  mergeable` answered it. **Check `mergeable` first when a push produces no run.** Relatedly,
+  `concurrency: cancel-in-progress: true` means a second push cancels the first run, so a `cancelled`
+  conclusion is expected rather than alarming, and pushing twice in a row throws away the first run's
+  evidence.
 
 ### Checks that cannot fail
 
@@ -250,6 +282,26 @@ that were killed before they were run. None of them was the cause. **The instrum
 **The tell, in hindsight:** `originAttributes` on the failing row read `^userContextId=6` while all eleven
 cookies that survive on the owner's own machine read empty. A measured difference **on the failing item
 itself** beats a difference inferred between two populations, and it was the one that closed it.
+
+**The second instrument, found months later and in the same family: a probe that bypasses the product.**
+A probe was written to measure how many outbound requests a launch makes when the engine directory has no
+`version.json`. It called camoufox-js's `launchOptions()` **directly**, so every number and every string it
+produced described the LIBRARY in isolation — and one of its rows, the developer-facing
+`Version information not found … Please run \`camoufox fetch\` to install.`, was filed in two issues as
+evidence about **what a user is told**. It is not: the product has exactly one production `launchOptions(`
+call site (`launcher.ts`), reached only behind `resolveKernelForProfile`, and `usableKernels` already
+excludes any directory without a readable `version.json`, so that string never reaches a user. Settled by
+running the product's own path with a pin that cannot exist: `errorCode: 'kernel_missing'`, `fetches: 0`,
+and no mention of `camoufox fetch`. **Before quoting a probe's output as a product claim, check whether the
+probe takes the path the product takes.** The count itself was real and is what issue #79 is about — the
+five requests that remain are the uBlock Origin download, which happens on a *healthy* launch too.
+
+**And the third: a guard that cannot go red on the change it protects.** A test asserted a message produced
+by an exported helper, while the retry loop that DECIDES to throw it was not exported and not reachable — so
+putting `throw lastError` back left every new test green. The fix is a seam: `renameWithRetry(from, to,
+attempt = fs.rename)`, exported, so a test can make the rename fail without Windows holding a file open.
+**When a fix is a new code path, the test has to be able to reach the path, not just its output.** Reverting
+the fix now fails the test, and the control fails 3 of 3 claims.
 
 ### Packaging and release
 
