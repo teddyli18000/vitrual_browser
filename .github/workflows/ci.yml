@@ -248,6 +248,14 @@ jobs:
       - name: Capture the UI screenshots
         run: node apps/desktop/scripts/screenshot-ui.mjs
 
+      # The owner reported the app as "not slow to start - sluggish in use", and nothing in this
+      # repository could turn that feeling into a number. This measures the real built renderer
+      # against the real server and the real SSE stream: long tasks, total blocking time, and
+      # event-to-DOM latency. The budgets are generous on purpose - it catches a stall, not a 5 ms
+      # difference - and the script prints every measurement so a trend is visible in the log.
+      - name: Measure the profile table's responsiveness
+        run: node apps/desktop/scripts/perf-ui.mjs
+
       # `if: always()` so the screenshots of a failing run are still retrievable — they are the
       # evidence used to diagnose it. `error` (not `warn`) because "no PNGs" is itself a failure:
       # a run that produces nothing to look at has not verified the UI.

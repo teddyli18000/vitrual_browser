@@ -62,9 +62,11 @@ rule, a trap, or neither? If neither, it does not go here.
 6. **Verify the artifact that ships, not the directory that was built.** v0.3.4 passed every check
    against `release/win-unpacked` and failed every install on the owner's machine, because that directory
    let module resolution walk up into this repository's own `node_modules`. *Current state: `ci.yml` and
-   `release.yml` still run the packaged suite against `release/win-unpacked`; the zip and installer are
-   built, hashed and published without ever being extracted and run. Closing that is task-17 — until it
-   lands, this rule is a target, not a fact.*
+   `release.yml` still run the packaged suite against `release/win-unpacked`, so the zip and installer
+   are built, hashed and published without ever being extracted and run in CI. Closing that is task-17.
+   The rule has been executed once by hand, against the owner's own download of v0.3.6: the four
+   packaging guards pass on the extracted portable folder, and the resolution guard scanned 1153 files
+   there - which also disproved a claim that it was structurally blind. See the trap below.*
 7. Releases are cut from a green `main`, one at a time, never batched.
 8. Before pushing a branch assembled from the shared working tree, check **both** directions:
    ```powershell
@@ -176,6 +178,78 @@ rule, a trap, or neither? If neither, it does not go here.
   `(none)` when none is: same code, two environments, two outputs. Pin `CAMOUFOX_INSTALL_DIR` at an empty
   directory (or a fixture engine directory) inside the case, and assert the empty state *and* the table
   shape in cases the test creates itself.
+
+### Checks that cannot fail
+
+**This is the defect class this repository keeps rediscovering.** Most instances looked green, which is
+what made them believable; the last one looked red and was believed for a different reason - it looked
+like diligence. Seven instances, in the order they were found:
+
+- the packaging guard that scanned **zero modules** and returned green (its own comment records the
+  earlier version with the same symptom);
+- a linter that could not run where the code was written - biome refuses a path outside its root, and the
+  worktree had no `node_modules` - so "lint clean" was a claim nobody had tested;
+- a cookie comparison that ran **after `browser.close()`**, where asking a closed browser for its
+  cookies can only ever answer "none";
+- a liveness probe built on `tasklist`'s exit code, which is **1 for a process that is alive** on this
+  machine, so a five-second grace period ended on its first iteration and never waited;
+- a latency measurement that waited for a UI state the row was **already in**, so it reported about zero
+  milliseconds and could not fail;
+- a stop-liveness check that opened the profile's `cookies.sqlite` and treated a thrown error as proof a
+  browser survived. SQLite opens its databases with FILE_SHARE_READ | FILE_SHARE_WRITE, so a LIVE engine
+  lets a second open succeed - the check passed unconditionally in the exact scenario it existed for, and
+  it was the only check in the suite whose purpose was to catch a survived process tree;
+- **its mirror image**, which is why the class is not only about passing: a preflight that tested
+  `window.vfox.api`, a member that has never existed in the interface, the preload or the bridge, so the
+  check **failed while printing a working `apiBase` in its own message**. A check that cannot pass wastes
+  the run it is in just as thoroughly as one that cannot fail, and it is harder to notice because it looks
+  like diligence.
+
+**What they have in common is not carelessness, it is the absence of a question: "what would this print
+if the thing it checks were broken?"** Ask it before shipping any assertion, and prove the answer by
+running it red. Two habits that follow:
+
+0. **When a failure is diagnosed, fix the message in the same change - and then ask what the new message
+   would have to say to prove the check itself can go red.** PR #85 is the worked example: it corrected a
+   wrong `endpointOf` and, in the same change, added a liveness check that could not fail. The message fix
+   is the easy half and it feels like the whole job. The second half is the one that catches the guard.
+
+1. **Assert your inputs before your verdict.** A guard should say how many files it walked, how many
+   modules it loaded, how many targets it reached - and refuse to report a result when that count is
+   zero or implausibly small. A reduced fixture then reports "I walked 2 files, which is not the
+   artifact" instead of a green tick. The resolution guard's `checked: 0` was exactly this, and the
+   number that proved the guard fine was `checked: 1153` on a complete install.
+2. **Print the measurement even when it passes.** A verdict alone hides a trend; the numbers make a
+   regression visible before it becomes a failure, and they are what a reviewer can check without
+   re-running anything.
+
+### Instruments that disagree with themselves
+
+**The most expensive defect in this repository's history so far, and it is not a check that cannot fail -
+it is a check whose two halves measure different things.** The durability phase reported "a profile loses
+its state across a stop and relaunch" for eleven CI runs. It never did. The phase **wrote** its cookie
+through a page from `browser.newPage()` on a browser obtained from `firefox.connect(wsEndpoint)`, and in
+Playwright's Firefox that creates a **new BrowserContext, which is a Firefox container** - so the cookie
+was stored with `originAttributes = "^userContextId=6"` and the container, with its whole jar, was deleted
+when the browser closed. The phase then **read** through `browser.contexts()[0]`, the persistent default
+container, and correctly found nothing. `totalRows` went 2 → 0 with the database file unchanged: a DELETE
+of the container's rows, not of ours.
+
+**The rule: on a connected browser, `browser.newPage()` is a new container, and cookies written there do
+not belong to the profile. Use `browser.contexts()[0]` - the context the engine was launched with, which
+is the default container a user's own window uses.** A phase that writes in one context and reads in
+another will agree with itself about the read, be wrong about the write, and look perfectly consistent in
+every log.
+
+**What it cost, recorded so the next person does not repeat the search:** eight hypotheses were killed
+honestly along the way - write failure, a surviving process, an uncheckpointed WAL, the relaunch using a
+different directory, a loopback-origin artifact, the forced kill landing mid-shutdown, session-cookie
+deletion, and the profile being too new - plus a shutdown-preference hypothesis and a scheme hypothesis
+that were killed before they were run. None of them was the cause. **The instrument was.**
+
+**The tell, in hindsight:** `originAttributes` on the failing row read `^userContextId=6` while all eleven
+cookies that survive on the owner's own machine read empty. A measured difference **on the failing item
+itself** beats a difference inferred between two populations, and it was the one that closed it.
 
 ### Packaging and release
 
