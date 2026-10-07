@@ -43,7 +43,7 @@ import { spawnSync } from 'node:child_process'
 import type { Profile } from '@vfox/shared'
 import type { LaunchOptions } from 'camoufox-js'
 import { firefox } from 'playwright-core'
-import { addonPaths, excludeDefaultAddons, listAddons } from './addons.js'
+import { addonPaths, excludeDefaultAddons, listAddons, pruneEngineAddons } from './addons.js'
 import { camoufoxModule } from './camoufox.js'
 import { acceptedKeys, dropUnacceptedKeys, withUnknownKeyTolerance } from './engine-config.js'
 import { type FingerprintWarning, toEngineOptions } from './fingerprint.js'
@@ -106,6 +106,17 @@ export async function toServerOptions(
   // afterwards does nothing at all — the option is an input, not an output (measured: the addon
   // never reached `CAMOU_CONFIG`, and only the engine's own default was loaded).
   const installed = await listAddons(userDataDir)
+  // Before any engine addon path is handed over: camoufox-js trusts an existing directory without
+  // looking inside it and then rejects the same path in `confirmPaths`, so a directory left by a
+  // download that never finished fails the launch instead of being fetched again. The mechanism, with
+  // its source lines, is on `pruneEngineAddons`.
+  const pruned = await pruneEngineAddons(engineDir)
+  if (pruned.length > 0) {
+    warn(
+      `removed ${pruned.length} unusable engine addon director${pruned.length === 1 ? 'y' : 'ies'} ` +
+        `(${pruned.join(', ')}) — the engine will download ${pruned.length === 1 ? 'it' : 'them'} again`,
+    )
+  }
   const excludeDefaults = await excludeDefaultAddons(
     engineDir,
     installed.flatMap(addon => (addon.id === null ? [] : [addon.id])),
