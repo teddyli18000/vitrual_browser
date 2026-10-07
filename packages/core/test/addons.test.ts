@@ -557,6 +557,17 @@ describe('what the launcher is handed', () => {
    * The per-test assertion is kept: if the fixture ever fails to materialise, that says so directly
    * instead of arriving as a camoufox-js message about a missing version file.
    */
+  // SAVE AND RESTORE — a test that changes a PROCESS-WIDE variable leaves the process as it found it.
+  //
+  // `CAMOUFOX_INSTALL_DIR` is process-wide, camoufox-js freezes it when it is LOADED, and this file now
+  // has two blocks that care about it for different reasons. `afterAll` below deletes the fixture
+  // directory, so a variable left pointing at it makes every later lookup resolve to a path that no
+  // longer exists — which is how a change to this block reached past it and failed a block that had been
+  // passing. The module-level `engineDir` is captured and restored for the same reason: it is shared
+  // state, and assigning it here without putting it back is the same defect one level up.
+  const previousInstallDir = process.env.CAMOUFOX_INSTALL_DIR
+  const previousEngineDir = engineDir
+
   beforeAll(async () => {
     // Its OWN directory, not `root`: `beforeAll` runs before the outer `beforeEach` creates `root`, and
     // the fixture has to outlive every case anyway - see the docblock above.
@@ -572,6 +583,11 @@ describe('what the launcher is handed', () => {
 
   afterAll(async () => {
     await fs.rm(engineDir, { recursive: true, force: true })
+    // Put the process back. `delete` rather than assigning `undefined`, which would leave the variable
+    // DEFINED with the string "undefined" — a different environment, and one that fails somewhere else.
+    if (previousInstallDir === undefined) delete process.env.CAMOUFOX_INSTALL_DIR
+    else process.env.CAMOUFOX_INSTALL_DIR = previousInstallDir
+    engineDir = previousEngineDir
   })
 
   beforeEach(() => {
