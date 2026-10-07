@@ -232,7 +232,9 @@ describe('a write that could not be persisted (issue #74)', () => {
   // expectations fail, because the path, the code and the attempt count are all absent from it.
   it('names the file, the reason, how long we tried, and that nothing was half-written', () => {
     const error = Object.assign(
-      new Error("EPERM: operation not permitted, rename 'C:\\vfox\\data\\profiles.json.tmp' -> '…'"),
+      new Error(
+        "EPERM: operation not permitted, rename 'C:\\vfox\\data\\profiles.json.tmp' -> '…'",
+      ),
       { code: 'EPERM' },
     )
     const message = persistFailure('C:\\vfox\\data\\profiles.json', error)
