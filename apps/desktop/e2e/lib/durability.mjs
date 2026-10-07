@@ -699,7 +699,7 @@ export async function runDurabilityPhase({
     )
     checks.push(
       apiSurvived
-        ? 'the API-set cookie survived - the store persists, the page-set one is the difference'
+        ? 'the cookie store persists across the stop'
         : 'neither cookie survived - the profile cookie store is not being persisted',
     )
 
@@ -800,8 +800,8 @@ one at the root, and if the engine uses another, every verdict here has been abo
         )
         checks.push(
           survived
-            ? 'a warmed profile keeps the cookie - the first cycle is the difference'
-            : 'a warmed profile loses it too - the engine is discarding it',
+            ? 'a warmed profile keeps its state too'
+            : 'a warmed profile loses it - the first cycle is the difference',
         )
       }
     } catch (error) {
@@ -842,6 +842,12 @@ one at the root, and if the engine uses another, every verdict here has been abo
     pass(`profile ${profileA.name}: cookie and localStorage survived a full stop and relaunch`)
 
     // Isolation, in the same phase: durability with a shared directory would pass everything above.
+    //
+    // STOP IT FIRST, for the same reason profile A needed it: phase 6 launches every profile, so B is
+    // already running by the time the isolation check reaches it and the API answers 409 "is already
+    // running". The launch below is a FRESH start, which is the point - it must be B's own session,
+    // reading B's own directory, and a launch against an already-running profile would not prove that.
+    await api(`/api/v1/profiles/${profileB.id}/stop`, { method: 'POST', body: '{}' })
     const launchedB = await api(`/api/v1/profiles/${profileB.id}/launch`, {
       method: 'POST',
       body: '{}',
