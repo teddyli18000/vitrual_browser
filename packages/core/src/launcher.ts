@@ -345,7 +345,7 @@ export function killProcessTree(pid: number | null, debug?: (message: string) =>
     stdio: 'ignore',
     windowsHide: true,
   })
-  debug(
+  debug?.(
     `taskkill /PID ${pid} /T /F -> ${result.error ? result.error.message : `exit ${result.status}`}`,
   )
 }
