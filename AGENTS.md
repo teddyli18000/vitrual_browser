@@ -181,9 +181,9 @@ rule, a trap, or neither? If neither, it does not go here.
 
 ### Checks that cannot fail
 
-**This is the defect class this repository keeps rediscovering, and every instance looked green.** A
-check that cannot fail is worse than no check, because it is believed. Seven instances, in the order
-they were found:
+**This is the defect class this repository keeps rediscovering.** Most instances looked green, which is
+what made them believable; the last one looked red and was believed for a different reason - it looked
+like diligence. Seven instances, in the order they were found:
 
 - the packaging guard that scanned **zero modules** and returned green (its own comment records the
   earlier version with the same symptom);
