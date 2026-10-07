@@ -101,7 +101,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     resolveKernel: async profile =>
       resolveKernelForProfile({
         profile,
-        kernels: await cachedKernels(),
+        kernels: await installedKernels(),
         preferred: ENGINE_VERSION,
       }),
     userDataDir: id => store.userDataDir(id),
@@ -115,27 +115,29 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
   })
 
   /**
-   * Installed kernels without their disk cost.
+   * Installed kernels without their disk cost — re-listed on every call, deliberately.
    *
-   * `kernel.info()` measures every kernel directory because the settings panel shows the number; the
-   * launch path only needs to know *which* kernels exist, and walking a ~1 GB tree on every launch
-   * would be a tax the user feels for a number they are not looking at. Memoised per process: the
-   * only writers are this process's install/remove, which clear it.
+   * This used to be memoised per process and cleared by our own install/remove, which made the launch
+   * path and `kernel.info()` disagree. Delete `kernels/<version>` behind the app's back and
+   * `kernel.info()` reports the kernel gone while a launch still believes it is installed: the resolver
+   * never returns `kernel_missing`, the launch falls through to the launcher's own refusal, and the
+   * runtime records `errorCode: null`. The GUI can only offer "install that version" for
+   * `kernel_missing`, so the one action that would fix the situation is unreachable. The staleness ran
+   * the other way too — a kernel the CLI installed while the app was running was invisible, so a profile
+   * pinned to it was told to install something that was already there.
+   *
+   * One answer instead of two. `listInstalledKernels` without sizes is a `readdir` plus two `exists`
+   * calls per kernel — cheap beside spawning an engine, and cheap beside being wrong about whether the
+   * engine a profile is pinned to exists.
    */
-  let kernelsCache: InstalledKernel[] | null = null
-  const cachedKernels = async (): Promise<InstalledKernel[]> => {
-    kernelsCache ??= await listInstalledKernels(await resolveEngineDir(), { withSize: false })
-    return kernelsCache
-  }
-  const forgetKernels = (): void => {
-    kernelsCache = null
-  }
+  const installedKernels = async (): Promise<InstalledKernel[]> =>
+    listInstalledKernels(await resolveEngineDir(), { withSize: false })
 
   /** The engine a profile will actually run on, used to generate its identity against that engine. */
   async function engineFor(profile: Profile): Promise<string | null> {
     const resolution = resolveKernelForProfile({
       profile,
-      kernels: await cachedKernels(),
+      kernels: await installedKernels(),
       preferred: ENGINE_VERSION,
     })
     return resolution.ok ? resolution.version : null
@@ -152,7 +154,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     if (requested !== undefined) {
       return requested
     }
-    return defaultKernelVersion(await cachedKernels(), ENGINE_VERSION)
+    return defaultKernelVersion(await installedKernels(), ENGINE_VERSION)
   }
 
   /**
@@ -359,11 +361,10 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     install: async version => {
       const info = await kernelManager.install(version)
       // A new kernel is a new entry in the registry; the memoised launch-path list is now stale.
-      forgetKernels()
       return info
     },
     remove: async version => {
-      const kernels = await cachedKernels()
+      const kernels = await installedKernels()
       const blocked: string[] = []
       for (const profile of await store.listProfiles()) {
         const resolution = resolveKernelForProfile({ profile, kernels, preferred: ENGINE_VERSION })
@@ -384,7 +385,6 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
         )
       }
       const info = await kernelManager.remove(version)
-      forgetKernels()
       return info
     },
     on: (_event, listener) => kernelManager.on('progress', listener),
