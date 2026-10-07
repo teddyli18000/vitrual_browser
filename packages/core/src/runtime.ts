@@ -8,12 +8,21 @@
 
 import type { Profile, ProfileRuntime, RuntimeStatus } from '@vfox/shared'
 import type { CoreLogger } from './index.js'
+import type { KernelResolution } from './kernels.js'
 import type { BrowserExit, BrowserHandle, BrowserLauncher } from './launcher.js'
 
 export interface RuntimeRegistryOptions {
   launch: BrowserLauncher
   /** Resolve a profile for launching; `undefined` means the id is unknown. */
   resolveProfile: (id: string) => Promise<Profile | undefined>
+  /**
+   * Which engine kernel this profile must launch with.
+   *
+   * Called before the launcher, so a profile whose pinned kernel is missing is refused **before any
+   * process is spawned** — the failure is recorded with `errorCode: 'kernel_missing'` rather than
+   * surfacing as a half-open window or an engine-level error the user cannot act on.
+   */
+  resolveKernel: (profile: Profile) => Promise<KernelResolution>
   userDataDir: (id: string) => string
   /**
    * The ids the store currently knows. Asynchronous because the store reads `profiles.json` per
@@ -81,6 +90,7 @@ export class RuntimeRegistry {
       wsEndpoint: null,
       startedAt: null,
       lastError: null,
+      errorCode: null,
     })
     let releaseStarting = () => {}
     entry.starting = new Promise<void>(resolve => {
@@ -93,9 +103,29 @@ export class RuntimeRegistry {
         throw new Error(`Unknown profile: ${id}`)
       }
 
+      // Before anything is spawned: which engine this profile runs on. A refusal here is a refusal
+      // with an action attached, not a launch that fails later with an engine-level message.
+      const kernel = await this.#options.resolveKernel(profile)
+      if (!kernel.ok) {
+        const refusal = new Error(kernel.message)
+        this.#set(id, {
+          status: 'error',
+          pid: null,
+          wsEndpoint: null,
+          startedAt: null,
+          lastError: kernel.message,
+          errorCode: kernel.code,
+        })
+        throw refusal
+      }
+      if (kernel.warning) {
+        this.#options.logger.warn(kernel.warning)
+      }
+
       const handle = await this.#options.launch({
         profile,
         userDataDir: this.#options.userDataDir(id),
+        engineDir: kernel.dir,
         warn: message => this.#options.logger.warn(message),
         debug: message => this.#options.logger.debug(message),
       })
@@ -103,7 +133,13 @@ export class RuntimeRegistry {
       if (entry.closing) {
         // stop() arrived while the engine was still starting up.
         await handle.close()
-        this.#set(id, { status: 'stopped', pid: null, wsEndpoint: null, startedAt: null })
+        this.#set(id, {
+          status: 'stopped',
+          pid: null,
+          wsEndpoint: null,
+          startedAt: null,
+          errorCode: null,
+        })
         return this.get(id)
       }
 
@@ -115,16 +151,21 @@ export class RuntimeRegistry {
         wsEndpoint: handle.wsEndpoint,
         startedAt: new Date().toISOString(),
         lastError: null,
+        errorCode: null,
       })
       return this.get(id)
     } catch (error) {
-      this.#set(id, {
-        status: entry.closing ? 'stopped' : 'error',
-        pid: null,
-        wsEndpoint: null,
-        startedAt: null,
-        lastError: errorMessage(error),
-      })
+      // The kernel refusal already recorded its own state; do not overwrite it with a generic error.
+      if (this.#entries.get(id)?.runtime.errorCode !== 'kernel_missing') {
+        this.#set(id, {
+          status: entry.closing ? 'stopped' : 'error',
+          pid: null,
+          wsEndpoint: null,
+          startedAt: null,
+          lastError: errorMessage(error),
+          errorCode: null,
+        })
+      }
       throw error
     } finally {
       entry.starting = null
@@ -136,7 +177,13 @@ export class RuntimeRegistry {
   async stop(id: string): Promise<ProfileRuntime> {
     const entry = this.#entries.get(id)
     if (!entry || entry.runtime.status === 'stopped' || entry.runtime.status === 'error') {
-      this.#set(id, { status: 'stopped', pid: null, wsEndpoint: null, startedAt: null })
+      this.#set(id, {
+        status: 'stopped',
+        pid: null,
+        wsEndpoint: null,
+        startedAt: null,
+        errorCode: null,
+      })
       return this.get(id)
     }
 
@@ -159,7 +206,13 @@ export class RuntimeRegistry {
       }
     }
 
-    this.#set(id, { status: 'stopped', pid: null, wsEndpoint: null, startedAt: null })
+    this.#set(id, {
+      status: 'stopped',
+      pid: null,
+      wsEndpoint: null,
+      startedAt: null,
+      errorCode: null,
+    })
     entry.closing = false
     return this.get(id)
   }
@@ -202,6 +255,7 @@ export class RuntimeRegistry {
       lastError: clean
         ? null
         : `browser exited unexpectedly (code ${exit.exitCode}, signal ${exit.signal})`,
+      errorCode: null,
     })
   }
 
@@ -239,6 +293,7 @@ function stopped(id: string): ProfileRuntime {
     wsEndpoint: null,
     startedAt: null,
     lastError: null,
+    errorCode: null,
   }
 }
 

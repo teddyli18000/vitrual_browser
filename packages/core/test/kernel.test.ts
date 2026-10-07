@@ -2,8 +2,19 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { KernelInfoSchema, type KernelProgress } from '@vfox/shared'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyKernelDir, type EngineInstaller, KernelManager } from '../src/kernel.js'
+import { kernelLauncherName } from '../src/kernels.js'
+
+/**
+ * The launcher's file name for the platform running the test.
+ *
+ * Hard-coding `camoufox.exe` made every fixture kernel invisible on the Linux CI runner: the build
+ * was reported as having no launcher, so an "installed engine" came back as `installed: false`. That
+ * is the same class of mistake as a test that reads the machine — the assertion was about the
+ * developer's platform rather than about the code.
+ */
+const LAUNCHER = kernelLauncherName()
 
 let installDir: string
 let originalKernelDir: string | undefined
@@ -61,33 +72,55 @@ describe('info', () => {
       version: null,
       path: null,
       source: 'missing',
+      kernels: [],
+      defaultVersion: null,
+      totalBytes: 0,
+      // The installable list is a compile-time constant, so it is present even with nothing installed:
+      // that is what lets the settings panel offer a version on a machine that has no engine yet.
+      availableVersions: ['152.0.4-beta.30', '152.0.4-beta.29', '152.0.4-beta.28'],
     })
   })
 
   it('reports an installed engine with its version and path', async () => {
-    await fs.writeFile(path.join(installDir, 'camoufox.exe'), 'binary')
+    // A legacy flat install: the launcher, the version marker, and the engine's property table, which
+    // camoufox-js reads from the directory the executable lives in.
+    await fs.writeFile(path.join(installDir, LAUNCHER), 'binary')
+    await fs.writeFile(path.join(installDir, 'properties.json'), '[]')
     await fs.writeFile(
       path.join(installDir, 'version.json'),
       JSON.stringify({ version: '152.0.4', release: 'beta.31' }),
     )
 
     const { kernel } = manager()
-    expect(await kernel.info()).toEqual({
+    const info = await kernel.info()
+
+    expect(info).toMatchObject({
       installed: true,
       version: '152.0.4-beta.31',
       path: installDir,
       source: 'cache',
+      defaultVersion: '152.0.4-beta.31',
     })
+    expect(info.kernels).toHaveLength(1)
+    expect(info.kernels[0]).toMatchObject({
+      version: '152.0.4-beta.31',
+      location: 'legacy-root',
+      problem: null,
+    })
+    expect(info.totalBytes).toBeGreaterThan(0)
   })
 
-  it('warns instead of pretending when version.json is unusable', async () => {
+  it('warns instead of pretending when the directory holds no engine at all', async () => {
     await fs.writeFile(path.join(installDir, 'version.json'), 'not json')
 
     const { kernel, log } = manager()
     const info = await kernel.info()
 
-    expect(info.installed).toBe(true)
+    // A directory with no readable version.json is not an installed engine, and saying it is would be
+    // the lie the old behaviour told; the warning names the directory the user configured.
+    expect(info.installed).toBe(false)
     expect(info.version).toBeNull()
+    expect(info.kernels).toEqual([])
     expect(log.warn).toHaveBeenCalledOnce()
 
     await fs.writeFile(
@@ -98,17 +131,40 @@ describe('info', () => {
 })
 
 describe('install', () => {
+  // Each install test gets its own kernel root: the `info` tests above leave a legacy build in the
+  // shared directory, and a leftover kernel is exactly the state these assertions must not depend on.
+  let installRoot: string
+
+  beforeEach(async () => {
+    installRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'vfox-kernel-install-'))
+    process.env.CAMOUFOX_INSTALL_DIR = installRoot
+  })
+
+  afterEach(async () => {
+    process.env.CAMOUFOX_INSTALL_DIR = installDir
+    await fs.rm(installRoot, { recursive: true, force: true })
+  })
+
   it('emits checking -> the installer phases -> done with complete objects', async () => {
     const seen: KernelProgress[] = []
-    const { kernel } = manager(async emit => {
+    const { kernel } = manager(async (emit, request) => {
       emit({
         phase: 'downloading',
         percent: 42,
         receivedBytes: 42,
         totalBytes: 100,
-        message: 'Downloading Camoufox 152.0.4-beta.31',
+        message: `Downloading Camoufox ${request.version}`,
       })
-      emit({ phase: 'extracting', message: 'Extracting Camoufox 152.0.4-beta.31' })
+      emit({ phase: 'extracting', message: `Extracting Camoufox ${request.version}` })
+      // A real installer leaves a complete build behind; the manager's `done` message is only allowed
+      // to claim success when one is actually there.
+      await fs.mkdir(request.targetDir, { recursive: true })
+      await fs.writeFile(path.join(request.targetDir, LAUNCHER), 'binary')
+      await fs.writeFile(path.join(request.targetDir, 'properties.json'), '[]')
+      await fs.writeFile(
+        path.join(request.targetDir, 'version.json'),
+        JSON.stringify({ version: '152.0.4', release: 'beta.30' }),
+      )
     })
     kernel.on('progress', progress => seen.push(progress))
 
@@ -120,7 +176,7 @@ describe('install', () => {
       percent: null,
       receivedBytes: null,
       totalBytes: null,
-      message: 'Checking the latest Camoufox release',
+      message: 'Checking Camoufox 152.0.4-beta.30',
     })
     expect(seen[1]?.percent).toBe(42)
     expect(seen[2]).toEqual({
@@ -128,12 +184,46 @@ describe('install', () => {
       percent: null,
       receivedBytes: null,
       totalBytes: null,
-      message: 'Extracting Camoufox 152.0.4-beta.31',
+      message: 'Extracting Camoufox 152.0.4-beta.30',
     })
     expect(seen[3]?.percent).toBe(100)
     for (const progress of seen) {
       expect(progress.phase).toBeTypeOf('string')
     }
+    expect(info.installed).toBe(true)
+    expect(info.kernels).toHaveLength(1)
+    expect(info.kernels[0]).toMatchObject({
+      version: '152.0.4-beta.30',
+      location: 'kernels',
+      problem: null,
+    })
+    // The kernel went to the versioned directory, not into the root.
+    expect(info.path).toBe(path.join(installRoot, 'kernels', '152.0.4-beta.30'))
+  })
+
+  it('refuses a version this build was not tested against', async () => {
+    const { kernel } = manager(async () => {})
+
+    await expect(kernel.install('156.0.1-beta.34')).rejects.toThrow(
+      'not one of the versions this build was tested against',
+    )
+  })
+
+  it('is a no-op when the requested version is already installed', async () => {
+    const dir = path.join(installRoot, 'kernels', '152.0.4-beta.30')
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, LAUNCHER), 'binary')
+    await fs.writeFile(path.join(dir, 'properties.json'), '[]')
+    await fs.writeFile(
+      path.join(dir, 'version.json'),
+      JSON.stringify({ version: '152.0.4', release: 'beta.30' }),
+    )
+    const installer = vi.fn<EngineInstaller>(async () => {})
+    const { kernel } = manager(installer)
+
+    const info = await kernel.install('152.0.4-beta.30')
+
+    expect(installer).not.toHaveBeenCalled()
     expect(info.installed).toBe(true)
   })
 

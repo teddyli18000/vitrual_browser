@@ -119,6 +119,18 @@ export const ProfileSchema = z.object({
   fingerprint: FingerprintSchema,
   /** Generated once, re-injected on every launch. See {@link FingerprintIdentitySchema}. */
   identity: FingerprintIdentitySchema.nullable().default(null),
+  /**
+   * Engine kernel this profile launches with, as a version string (`152.0.4-beta.30`).
+   *
+   * `null` means "written before kernels could be pinned" — a store from v0.3.x or earlier. Such a
+   * profile resolves by preference (see `packages/core/src/kernels.ts`): the engine its identity was
+   * generated against when that is installed, otherwise the default kernel. Profiles created from
+   * v0.4.0 on are pinned at creation, so their engine can never change behind the user's back.
+   *
+   * A version string, never a path: the kernel root is resolved at runtime, which is what keeps the
+   * product folder movable.
+   */
+  kernel: z.string().min(1).nullable().default(null),
   launch: LaunchPrefsSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -132,6 +144,8 @@ export const ProfileCreateSchema = z.object({
   color: z.string().nullable().optional(),
   proxy: ProxySchema.nullable().optional(),
   fingerprint: FingerprintSchema.partial().optional(),
+  /** Omit to pin the profile to the current default kernel; `null` leaves it unpinned. */
+  kernel: z.string().min(1).nullable().optional(),
   launch: LaunchPrefsSchema.partial().optional(),
 })
 export type ProfileCreate = z.infer<typeof ProfileCreateSchema>
@@ -168,6 +182,19 @@ export type ProfileBatchCreate = z.infer<typeof ProfileBatchCreateSchema>
 export const RuntimeStatusSchema = z.enum(['stopped', 'starting', 'running', 'stopping', 'error'])
 export type RuntimeStatus = z.infer<typeof RuntimeStatusSchema>
 
+/**
+ * Machine-readable failure classes for `ProfileRuntime`.
+ *
+ * The GUI branches on this rather than matching English prose: string-matching a message is how a UI
+ * silently stops offering the fix the day someone rewords it. Extend the enum when a new failure
+ * class needs its own action in the interface.
+ */
+export const RuntimeErrorCodeSchema = z.enum([
+  /** The profile's pinned engine kernel is not installed; nothing was spawned. */
+  'kernel_missing',
+])
+export type RuntimeErrorCode = z.infer<typeof RuntimeErrorCodeSchema>
+
 export const ProfileRuntimeSchema = z.object({
   profileId: z.string().min(1),
   status: RuntimeStatusSchema,
@@ -180,18 +207,78 @@ export const ProfileRuntimeSchema = z.object({
   wsEndpoint: z.string().nullable().default(null),
   startedAt: z.string().nullable().default(null),
   lastError: z.string().nullable().default(null),
+  /** Set alongside `lastError` when the failure has a specific action attached to it. */
+  errorCode: RuntimeErrorCodeSchema.nullable().default(null),
 })
 export type ProfileRuntime = z.infer<typeof ProfileRuntimeSchema>
 
 /* ----------------------------------------------------------------------- kernel */
 
+/** Where an installed kernel's build lives. */
+export const KernelLocationSchema = z.enum([
+  /** `<kernelRoot>/kernels/<version>/` — where every kernel installed from v0.4.0 on goes. */
+  'kernels',
+  /**
+   * The kernel root itself, holding a build installed by an older VFox. Honoured in place: moving
+   * ~1 GB while a browser may hold those files open is the one operation that can fail halfway.
+   */
+  'legacy-root',
+])
+export type KernelLocation = z.infer<typeof KernelLocationSchema>
+
+export const InstalledKernelSchema = z.object({
+  version: z.string().min(1),
+  /** Absolute path of the kernel directory. Runtime state — never persisted, never sent anywhere. */
+  path: z.string().min(1),
+  location: KernelLocationSchema,
+  /** Size on disk in bytes, measured when `kernel.info()` runs. */
+  bytes: z.number().int().nonnegative(),
+  /** How many profiles pin this version. */
+  profileCount: z.number().int().nonnegative().default(0),
+  isDefault: z.boolean().default(false),
+  /**
+   * Set when the directory is not a usable build — a missing launcher, a missing `properties.json`
+   * (camoufox-js validates the launch config against the *pinned* directory's copy), or a directory
+   * name that disagrees with its `version.json`. A kernel with a problem is listed, never launched.
+   */
+  problem: z.string().nullable().default(null),
+})
+export type InstalledKernel = z.infer<typeof InstalledKernelSchema>
+
 export const KernelInfoSchema = z.object({
+  /** At least one usable kernel is installed. */
   installed: z.boolean(),
+  /** The default kernel's version — what an unpinned profile and a newly created profile get. */
   version: z.string().nullable(),
   path: z.string().nullable(),
   source: z.enum(['cache', 'bundled', 'missing']),
+  /** Every kernel directory found, usable or not. */
+  kernels: z.array(InstalledKernelSchema).default([]),
+  defaultVersion: z.string().nullable().default(null),
+  /**
+   * The engine versions this build was tested against and can therefore install.
+   *
+   * Shipped in the status payload rather than looked up: a version-discovery request would be a
+   * fourth outbound call, and the product allows exactly three. Being a compile-time constant, it is
+   * also the list the settings panel offers to install.
+   */
+  availableVersions: z.array(z.string()).default([]),
+  /** Disk cost of every installed kernel, so the UI can say it before the user adds another. */
+  totalBytes: z.number().int().nonnegative().default(0),
 })
 export type KernelInfo = z.infer<typeof KernelInfoSchema>
+
+/** `POST /kernel/install` body: which tested version to install. Omit for the preferred one. */
+export const KernelInstallRequestSchema = z.object({
+  version: z.string().min(1).optional(),
+})
+export type KernelInstallRequest = z.infer<typeof KernelInstallRequestSchema>
+
+/** `POST /kernel/remove` body. */
+export const KernelRemoveRequestSchema = z.object({
+  version: z.string().min(1),
+})
+export type KernelRemoveRequest = z.infer<typeof KernelRemoveRequestSchema>
 
 export const KernelPhaseSchema = z.enum([
   'idle',

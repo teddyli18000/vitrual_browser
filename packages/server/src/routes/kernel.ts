@@ -1,12 +1,17 @@
 import type { KernelProgress } from '@vfox/shared'
-import { API_ROUTES } from '@vfox/shared'
+import { API_ROUTES, KernelInstallRequestSchema, KernelRemoveRequestSchema } from '@vfox/shared'
 import type { FastifyInstance } from 'fastify'
 
-import { conflict, ok } from '../errors.js'
+import { conflict, notFound, ok } from '../errors.js'
 import type { RouteDeps } from '../types.js'
+import { parse } from '../validate.js'
 
 /**
- * Kernel (Camoufox engine) status and install.
+ * Kernel (Camoufox engine) status, install and remove.
+ *
+ * Several kernels coexist under `<engine root>/kernels/<version>/`; `GET` reports all of them with
+ * their disk cost, and each profile pins the one it launches with. Installing a version that is
+ * already present is a no-op, and installing never re-points an existing profile.
  *
  * The install downloads ~493 MB, so it can never run inside the HTTP response: the route returns
  * `{ started: true }` immediately and the download reports itself on the `kernel` SSE event.
@@ -19,19 +24,25 @@ export function registerKernelRoutes(app: FastifyInstance, deps: RouteDeps): voi
 
   app.get(API_ROUTES.kernel, async () => ok(await core.kernel.info()))
 
-  app.post(API_ROUTES.kernelInstall, async (_request, reply) => {
+  app.post(API_ROUTES.kernelInstall, async (request, reply) => {
     if (installing) throw conflict('A kernel install is already in progress')
+
+    // Validated before the 202 so an untested version is a 400 the caller can act on, instead of a
+    // background failure that only ever appears on the SSE stream.
+    const { version } = parse(KernelInstallRequestSchema, request.body ?? {})
 
     installing = true
     const fallback = hub.kernelProgressFromCore
       ? undefined
       : (value: KernelProgress) => hub.publishKernel(value)
 
-    hub.publishKernel(progress('checking', 'checking engine'))
+    hub.publishKernel(
+      progress('checking', version ? `checking engine ${version}` : 'checking engine'),
+    )
     void (async () => {
       try {
         fallback?.(progress('downloading', 'installing engine'))
-        const info = await core.kernel.install()
+        const info = await core.kernel.install(version)
         fallback?.(
           progress(
             'done',
@@ -57,6 +68,26 @@ export function registerKernelRoutes(app: FastifyInstance, deps: RouteDeps): voi
 
     reply.code(202)
     return ok({ started: true })
+  })
+
+  app.post(API_ROUTES.kernelRemove, async request => {
+    const { version } = parse(KernelRemoveRequestSchema, request.body)
+    try {
+      return ok(await core.kernel.remove(version))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // "Not installed" is a 404 and "in use by these profiles" is a 409: the caller acts on those
+      // differently, so they must not arrive as the same status. Anything else is a genuine failure
+      // and is rethrown — mapping every unexpected error onto 409 told the GUI to show an "in use"
+      // dialog for a bug.
+      if (/is not installed/.test(message)) {
+        throw notFound(message)
+      }
+      if (/is in use by/.test(message)) {
+        throw conflict(message)
+      }
+      throw error
+    }
   })
 }
 

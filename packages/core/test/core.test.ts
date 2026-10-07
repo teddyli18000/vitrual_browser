@@ -83,6 +83,7 @@ describe('runtime', () => {
         wsEndpoint: null,
         startedAt: null,
         lastError: null,
+        errorCode: null,
       },
     ])
     expect(core.runtime.get(created.id).status).toBe('stopped')

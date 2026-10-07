@@ -572,12 +572,16 @@ describe('VirtualBrowser-compatible aliases', () => {
 describe('kernel', () => {
   it('reports the kernel info', async () => {
     const res = await h.app.inject({ method: 'GET', url: API_ROUTES.kernel, headers: h.auth })
-    expect(res.json().data).toEqual({
+    // The four original fields keep their meaning — they describe the *default* kernel — and the
+    // multi-kernel fields are additive, so an older client keeps working.
+    expect(res.json().data).toMatchObject({
       installed: true,
       version: '146.0.1',
       path: path.join(h.dataDir, 'kernel'),
       source: 'cache',
+      defaultVersion: '146.0.1',
     })
+    expect(res.json().data.kernels.length).toBeGreaterThan(0)
   })
 
   it('starts an install without blocking and 409s a second one', async () => {

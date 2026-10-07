@@ -2,8 +2,13 @@
  * Wiring: store + runtime registry + kernel manager behind the frozen `Core` surface.
  */
 
-import type { Profile, ProfileAddon } from '@vfox/shared'
-import { CookieImportResultSchema, FingerprintSchema, ProfileBatchCreateSchema } from '@vfox/shared'
+import type { InstalledKernel, Profile, ProfileAddon } from '@vfox/shared'
+import {
+  CookieImportResultSchema,
+  ENGINE_VERSION,
+  FingerprintSchema,
+  ProfileBatchCreateSchema,
+} from '@vfox/shared'
 import { installAddon, listAddons, listEngineAddons, removeAddon } from './addons.js'
 import { importProfileZip, writeProfileZip } from './archive.js'
 import { cookieDbPath, readJar, writeJar } from './cookies.js'
@@ -20,6 +25,7 @@ import type {
   RuntimeApi,
 } from './index.js'
 import { applyKernelDir, KernelManager, resolveEngineDir } from './kernel.js'
+import { defaultKernelVersion, listInstalledKernels, resolveKernelForProfile } from './kernels.js'
 import { launchCamoufox } from './launcher.js'
 import { createFileLogger } from './log.js'
 import { formatNetscape, parseNetscape } from './netscape.js'
@@ -92,11 +98,62 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
   const registry = new RuntimeRegistry({
     launch: launchCamoufox,
     resolveProfile: async id => store.getProfile(id),
+    resolveKernel: async profile =>
+      resolveKernelForProfile({
+        profile,
+        kernels: await cachedKernels(),
+        preferred: ENGINE_VERSION,
+      }),
     userDataDir: id => store.userDataDir(id),
     profileIds: () => store.profileIds(),
     logger,
   })
-  const kernelManager = new KernelManager({ kernelDir: options.kernelDir, logger })
+  const kernelManager = new KernelManager({
+    kernelDir: options.kernelDir,
+    logger,
+    preferredVersion: ENGINE_VERSION,
+  })
+
+  /**
+   * Installed kernels without their disk cost.
+   *
+   * `kernel.info()` measures every kernel directory because the settings panel shows the number; the
+   * launch path only needs to know *which* kernels exist, and walking a ~1 GB tree on every launch
+   * would be a tax the user feels for a number they are not looking at. Memoised per process: the
+   * only writers are this process's install/remove, which clear it.
+   */
+  let kernelsCache: InstalledKernel[] | null = null
+  const cachedKernels = async (): Promise<InstalledKernel[]> => {
+    kernelsCache ??= await listInstalledKernels(await resolveEngineDir(), { withSize: false })
+    return kernelsCache
+  }
+  const forgetKernels = (): void => {
+    kernelsCache = null
+  }
+
+  /** The engine a profile will actually run on, used to generate its identity against that engine. */
+  async function engineFor(profile: Profile): Promise<string | null> {
+    const resolution = resolveKernelForProfile({
+      profile,
+      kernels: await cachedKernels(),
+      preferred: ENGINE_VERSION,
+    })
+    return resolution.ok ? resolution.version : null
+  }
+
+  /**
+   * The pin a newly created profile gets.
+   *
+   * Pinned at creation so its engine can never change behind the user's back: the engine is the
+   * fingerprint, and a profile that silently moves to another build reports a different device.
+   * `null` from the caller means "leave it unpinned", which only makes sense for imported stores.
+   */
+  async function pinForNewProfile(requested: string | null | undefined): Promise<string | null> {
+    if (requested !== undefined) {
+      return requested
+    }
+    return defaultKernelVersion(await cachedKernels(), ENGINE_VERSION)
+  }
 
   /**
    * Guarantee a stored device identity before a profile is launched.
@@ -107,7 +164,10 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
    */
   async function ensureIdentity(id: string): Promise<Profile> {
     const profile = await store.requireProfile(id)
-    const engine = (await kernelManager.info()).version
+    // The engine this profile will actually launch on, not merely the default: with kernels pinned,
+    // generating an identity against one build and launching another is how a profile ends up
+    // reporting a device it was never given.
+    const engine = await engineFor(profile)
     if (identityIsCurrent(profile, engine)) {
       return profile
     }
@@ -151,8 +211,9 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     get: async id => store.getProfile(id),
     async create(input) {
       requireWriteAccess('create a profile')
-      const profile = await store.createProfile(input)
-      const engine = (await kernelManager.info()).version
+      const kernel = await pinForNewProfile(input.kernel)
+      const profile = await store.createProfile({ ...input, kernel })
+      const engine = await engineFor(profile)
       const created = await createIdentity(
         profile.fingerprint,
         engine,
@@ -168,7 +229,11 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
     async createBatch(input) {
       requireWriteAccess('create profiles')
       const batch = ProfileBatchCreateSchema.parse(input)
-      const engine = (await kernelManager.info()).version
+      // Every profile in the batch is pinned to the same kernel for the same reason a single one is:
+      // a batch is a fleet, and a fleet whose engines move underneath it is the failure this feature
+      // exists to prevent.
+      const kernel = await pinForNewProfile(undefined)
+      const engine = kernel
       // The fingerprint constraints are shared, the *device* is not: `createIdentity` runs
       // browserforge's generator once per profile, so twenty profiles on the same platform and proxy
       // are twenty different machines rather than twenty copies of one.
@@ -186,6 +251,7 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
         entries.push({
           input: {
             name: `${batch.namePrefix} ${index + 1}`,
+            kernel,
             ...(batch.groupId === undefined ? {} : { groupId: batch.groupId }),
             ...(batch.proxy === undefined ? {} : { proxy: batch.proxy }),
             ...(batch.launch === undefined ? {} : { launch: batch.launch }),
@@ -273,8 +339,54 @@ export async function createCoreImpl(options: CoreOptions): Promise<Core> {
   }
 
   const kernel: KernelApi = {
-    info: () => kernelManager.info(),
-    install: () => kernelManager.install(),
+    info: async () => {
+      const info = await kernelManager.info()
+      // Who is pinned to each kernel. The settings panel needs the number to say what a removal would
+      // break before the user asks for it, and the removal guard asks the same question below.
+      const profiles = await store.listProfiles()
+      for (const entry of info.kernels) {
+        entry.profileCount = profiles.filter(profile => {
+          const resolution = resolveKernelForProfile({
+            profile,
+            kernels: info.kernels,
+            preferred: ENGINE_VERSION,
+          })
+          return resolution.ok && resolution.version === entry.version
+        }).length
+      }
+      return info
+    },
+    install: async version => {
+      const info = await kernelManager.install(version)
+      // A new kernel is a new entry in the registry; the memoised launch-path list is now stale.
+      forgetKernels()
+      return info
+    },
+    remove: async version => {
+      const kernels = await cachedKernels()
+      const blocked: string[] = []
+      for (const profile of await store.listProfiles()) {
+        const resolution = resolveKernelForProfile({ profile, kernels, preferred: ENGINE_VERSION })
+        if (!resolution.ok || resolution.version !== version) {
+          continue
+        }
+        const { status } = registry.get(profile.id)
+        const running = status === 'running' || status === 'starting' || status === 'stopping'
+        blocked.push(running ? `${profile.name} (running)` : profile.name)
+      }
+      if (blocked.length > 0) {
+        const shown = blocked.slice(0, 5).join(', ')
+        const rest = blocked.length > 5 ? `, +${blocked.length - 5} more` : ''
+        throw new Error(
+          `Kernel ${version} is in use by ${blocked.length} profile(s): ${shown}${rest}. ` +
+            'Re-pin them to another kernel first (`vfox kernel pin <profile> <version>`), ' +
+            'or stop them.',
+        )
+      }
+      const info = await kernelManager.remove(version)
+      forgetKernels()
+      return info
+    },
     on: (_event, listener) => kernelManager.on('progress', listener),
   }
 

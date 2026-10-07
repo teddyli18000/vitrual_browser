@@ -181,6 +181,9 @@ export class Store {
         proxy: draft.proxy ?? null,
         fingerprint: draft.fingerprint ?? {},
         identity: null,
+        // The engine pin. Omitted and explicitly-null both land here as `null`; the caller that knows
+        // which kernels are installed resolves the default before this runs (`pinForNewProfile`).
+        kernel: draft.kernel ?? null,
         launch: draft.launch ?? {},
         createdAt: now,
         updatedAt: now,
@@ -223,6 +226,7 @@ export class Store {
             webgl: entry.webgl ?? null,
           },
           identity: entry.identity,
+          kernel: draft.kernel ?? null,
           launch: draft.launch ?? {},
           createdAt: now,
           updatedAt: now,
@@ -273,6 +277,9 @@ export class Store {
         ...(draft.notes === undefined ? {} : { notes: draft.notes }),
         ...(draft.color === undefined ? {} : { color: draft.color }),
         ...(draft.proxy === undefined ? {} : { proxy: draft.proxy }),
+        // `null` is meaningful here — it un-pins the profile — so it must survive the merge exactly
+        // as `groupId: null` does.
+        ...(draft.kernel === undefined ? {} : { kernel: draft.kernel }),
         // `fingerprint`/`launch` patches are partial merges, and they merge the keys the caller
         // actually sent — not the parsed value. `FingerprintSchema.partial()` still applies the
         // inner `.default()`s, so the parsed object cannot tell "field omitted" from "field set to
