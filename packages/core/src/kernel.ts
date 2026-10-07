@@ -481,6 +481,24 @@ export const installCamoufoxEngine: EngineInstaller = async (emit, request) => {
           ),
         warn: message => emit({ phase: 'extracting', message }),
       })
+    } catch (error) {
+      // camoufox-js's own `setVersion()` writes `<INSTALL_DIR>/version.json` — the TARGET, not the
+      // incoming directory — and it runs before the extraction, so a failure in the extraction leaves a marker
+      // in a directory whose engine is absent or stale. `inspectKernel` keys on that file, so the marker
+      // must not outlive a failed install. Our rollback removes the staging and incoming directories;
+      // this is the one the library wrote, so it is removed here explicitly. Do not delete this as
+      // redundant: without it the library's marker survives every failed install.
+      //
+      // The measured case is an extraction failure. Whether setVersion() also precedes the DOWNLOAD is
+      // not measured, so this comment does not claim it: a harness whose HEAD succeeds and whose body
+      // dies mid-stream is what would settle it.
+      //
+      // Only when no launcher is present. A previous healthy engine that the swap restored has its own
+      // marker, and removing that would break a working install to clean up a failed one.
+      if (!(await exists(path.join(target, LAUNCH_FILE)))) {
+        await fs.rm(path.join(target, VERSION_FILE), { force: true })
+      }
+      throw error
     } finally {
       await fs.rm(staging, { recursive: true, force: true })
     }
