@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { Store } from '../src/store.js'
+import { persistFailure, renameWithRetry, Store } from '../src/store.js'
 
 let dataDir: string
 
@@ -221,5 +221,82 @@ describe('groups', () => {
     await expect(store.createGroup('   ')).rejects.toThrow('must not be empty')
     await expect(store.renameGroup('nope', 'x')).rejects.toThrow('Unknown group')
     await expect(store.removeGroup('nope')).rejects.toThrow('Unknown group')
+  })
+})
+
+describe('a write that could not be persisted (issue #74)', () => {
+  // WHAT THIS GUARD IS FOR, and what it is not, because an independent review corrected both.
+  //
+  // It is NOT the red-first demonstration of the message. Against the old behaviour - `throw lastError` -
+  // only two of the four claims below discriminate: "says how long it tried" and "nothing is half-written"
+  // fail on the raw error, while "names the file" and "names the code" pass on both, because the raw EPERM
+  // already contains the `.tmp` path and the code. They are kept as a CONTRACT rather than as evidence:
+  // they go red if someone rewords the message and drops the path or the code, which is a real risk.
+  //
+  // The demonstration lives in `renameWithRetry`'s second test below, which can go red on the fix itself -
+  // the first version of this file could not, because the retry loop that decides to throw was not
+  // reachable from a test. Revert `throw lastError` and that one fails; reword the message and these do.
+  it('names the file, the reason, how long we tried, and that nothing was half-written', () => {
+    const error = Object.assign(
+      new Error(
+        "EPERM: operation not permitted, rename 'C:\\vfox\\data\\profiles.json.tmp' -> '…'",
+      ),
+      { code: 'EPERM' },
+    )
+    const message = persistFailure('C:\\vfox\\data\\profiles.json', error)
+
+    expect(message).toContain('C:\\vfox\\data\\profiles.json')
+    expect(message).toContain('EPERM')
+    expect(message).toContain('10 attempts')
+    // "was not replaced" rather than "still holds its previous contents": on the FIRST write to a data
+    // directory the target does not exist and the .bak copy is skipped, so the stronger sentence is false
+    // there. This one is true in both cases.
+    expect(message).toContain('was not replaced')
+  })
+
+  it('survives an error with no code, and still names the file', () => {
+    const message = persistFailure('/data/profiles.json', new Error('something else entirely'))
+    expect(message).toContain('/data/profiles.json')
+    expect(message).toContain('no code')
+    expect(message).toContain('something else entirely')
+  })
+
+  // THE ONE THAT CAN GO RED ON THE FIX. `renameWithRetry` takes an injectable rename precisely so this
+  // does not need Windows to hold a file open, which no test can arrange and this sandbox cannot do at
+  // all. Put `throw lastError` back and this fails; that is the whole point of the seam.
+  it('gives up after ten attempts and throws the persistFailure message, with the original as cause', async () => {
+    let calls = 0
+    const alwaysEperm = async () => {
+      calls += 1
+      throw Object.assign(new Error('EPERM: operation not permitted, rename …'), { code: 'EPERM' })
+    }
+
+    const thrown = await renameWithRetry(
+      'C:\\vfox\\data\\profiles.json.tmp',
+      'C:\\vfox\\data\\profiles.json',
+      alwaysEperm,
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    )
+
+    expect(calls).toBe(10)
+    expect(thrown).toBeInstanceOf(Error)
+    const message = (thrown as Error).message
+    expect(message).toContain('C:\\vfox\\data\\profiles.json')
+    expect(message).toContain('10 attempts')
+    expect(message).toContain('was not replaced')
+    expect((thrown as Error).cause).toBeInstanceOf(Error)
+  })
+
+  it('does not retry a code that is not retryable, and passes it through untouched', async () => {
+    let calls = 0
+    const enoent = async () => {
+      calls += 1
+      throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
+    }
+
+    await expect(renameWithRetry('a', 'b', enoent)).rejects.toThrow('ENOENT')
+    expect(calls).toBe(1)
   })
 })

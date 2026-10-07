@@ -626,11 +626,25 @@ async function writeJson(file: string, value: unknown): Promise<void> {
   await renameWithRetry(temp, file)
 }
 
-async function renameWithRetry(from: string, to: string): Promise<void> {
+/**
+ * Exported, and the rename is injectable, for one reason: a test must be able to make this fail without
+ * Windows holding a file open.
+ *
+ * An independent review found that the first version of this change shipped a test that stayed GREEN when
+ * the fix was reverted - it asserted the message, and the message comes from a function the test could
+ * reach, while the retry loop that DECIDES to throw it was neither exported nor reachable. A guard that
+ * cannot go red on the change it protects is the defect class this repository has recorded seven times,
+ * and a seam is a cheap way not to add an eighth.
+ */
+export async function renameWithRetry(
+  from: string,
+  to: string,
+  rename: (from: string, to: string) => Promise<void> = (a, b) => fs.rename(a, b),
+): Promise<void> {
   let lastError: unknown
   for (let attempt = 0; attempt < RENAME_ATTEMPTS; attempt += 1) {
     try {
-      await fs.rename(from, to)
+      await rename(from, to)
       return
     } catch (error) {
       lastError = error
@@ -641,7 +655,33 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, RENAME_RETRY_MS))
     }
   }
-  throw lastError
+  // EXHAUSTED. Rethrowing `lastError` here is what made this reach the user as a bare 500 carrying
+  // `EPERM: operation not permitted, rename '…'` - a filesystem error they cannot act on, naming neither
+  // what was being written nor what state they are left in.
+  //
+  // SCOPE, corrected by an independent review: this covers the RENAME, and the rename is not the only step
+  // that can fail. A full disk or a read-only volume (ENOSPC, EROFS - a write-protected USB stick, which
+  // portable mode invites) fails the `.tmp` write above it and still reaches the user as a bare errno. And
+  // "another process is holding the file open … it clears on its own" is only true of the retryable set:
+  // ENOTEMPTY is retried without being a held-open file. What this message guarantees is what a rename
+  // guarantees - the target was not replaced, so nothing is half-written.
+  throw new Error(persistFailure(to, lastError), { cause: lastError })
+}
+
+/**
+ * The message a user sees when a write could not be persisted, built separately so a test can assert it
+ * without having to make Windows hold a file open. Issue #74 asks for the path and the reason; the state
+ * sentence matters as much, because "the write did not land" is actionable and a bare EPERM is not.
+ */
+export function persistFailure(target: string, error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  const reason = errorMessage(error)
+  return (
+    `could not save ${target} after ${RENAME_ATTEMPTS} attempts over about ` +
+    `${RENAME_ATTEMPTS * RENAME_RETRY_MS} ms (${code ?? 'no code'}): ${reason}. ` +
+    `Another process is holding the file open - on Windows that is usually antivirus, the search indexer ` +
+    `or a file-sync client. The file was not replaced, so nothing is half-written.`
+  )
 }
 
 function timestamp(): string {
