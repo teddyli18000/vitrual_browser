@@ -116,6 +116,30 @@ async function readState(page, reader) {
  * `true` / `false` / `'unknown: …'`. The third state matters: a locked or unreadable database must not be
  * reported as "not durable" — they are different defects and only one of them is ours.
  */
+/**
+ * A page in the browser's DEFAULT context, not a new one.
+ *
+ * `browser.newPage()` on a connected browser creates a fresh BrowserContext, and in Playwright's Firefox
+ * that is a container (`userContextId`). Cookies set there are stored under that container's
+ * `originAttributes`, and the container - with its whole jar - is deleted when the browser closes. That
+ * is what made this phase report "a profile loses its state" for eleven runs: the cookie was real, the
+ * profile was fine, and the row was in a container nobody keeps.
+ *
+ * `browser.contexts()[0]` is the persistent context the engine was launched with - the same default
+ * container the product's own window uses, and the one every surviving cookie on the owner's machine is
+ * in.
+ */
+async function pageInDefaultContext(browser) {
+  const context = browser.contexts()[0]
+  if (!context) {
+    throw new Error(
+      'the connected browser has no context, so the default container is unavailable. Reading cookies ' +
+        'from a new context would measure a container instead of the profile.',
+    )
+  }
+  return context.newPage()
+}
+
 async function cookieRowOnDisk(userdata, timeoutMs = 5000) {
   const file = path.join(userdata, 'cookies.sqlite')
   const until = Date.now() + timeoutMs
@@ -418,7 +442,7 @@ export async function runDurabilityPhase({
     let browser = await connect(wsEndpoint)
     let seeded
     try {
-      const page = await browser.newPage()
+      const page = await pageInDefaultContext(browser)
       // The SETTER route, once. Every later navigation uses the reader.
       await page.goto(setter, { waitUntil: 'domcontentloaded' })
       seeded = await page.evaluate(READ_DOCUMENT_STATE)
@@ -652,7 +676,7 @@ export async function runDurabilityPhase({
 
     let apiSurvived = false
     try {
-      const page = await browser.newPage()
+      const page = await pageInDefaultContext(browser)
       // The READER route: it sets nothing, so anything observed here came from the profile's own store.
       // `readState` is the shape the checks below were written against: `after.cookie` is the
       // Playwright cookie ENTRY (they ask it for `.expires`) and `after.document.cookie` is the string.
@@ -833,7 +857,7 @@ one at the root, and if the engine uses another, every verdict here has been abo
     browser = await connect(endpointB)
     let other
     try {
-      const page = await browser.newPage()
+      const page = await pageInDefaultContext(browser)
       // Read-only, so B's page cannot manufacture the very state this check looks for.
       other = await readState(page, reader)
     } finally {
