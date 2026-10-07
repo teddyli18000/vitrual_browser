@@ -780,7 +780,14 @@ if (after) {
 executed.push('stopping every profile and asserting no engine process is orphaned')
 
 // ------------------------------------------------- 8. restarting the APPLICATION, not a profile
-// Placed at the very END so it does not conflict with the phase `engine` is adding in the same file.
+//
+// WHY IT IS PLACED HERE, and both halves matter:
+//   - AFTER phase 7 and BEFORE the cleanup below, because the restart must run while the data
+//     directory and the engine directory still exist. Moving it after `rmSync(dataDir, …)` would make
+//     it assert against a store that was just deleted, and it would pass or fail for a reason that has
+//     nothing to do with the restart.
+//   - AT THE VERY END of the run, so an edit in the middle of this file from another branch cannot
+//     conflict with it. `engine` is adding a phase to this same file.
 // The wiring lives here rather than inside the module so the module stays testable on its own.
 let runningApp = app
 await restartPhase({
