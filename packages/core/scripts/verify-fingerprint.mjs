@@ -78,17 +78,25 @@ const SITE_TARGETS = [
     url: 'https://abrahamjuliot.github.io/creepjs/',
     kind: 'oracle',
     parse: 'creepjs',
-    scope: ['#lies', '.lies', '[class*="lie"]', '#fingerprint', 'main'],
-    // WAIT FOR A PANEL, NOT FOR A DURATION. The live run proved the content is worker-driven: the
-    // header (FP ID, fuzzy hash, `3008.00 ms`) is in the DOM while every analysis panel is absent and
-    // no selector matches at all — `#fingerprint: 0 matches`, `main: 0 matches`, and `shadow roots:
-    // 0 chars`, which killed the shadow-DOM hypothesis outright. A fixed `waitMs` on a page whose real
-    // content arrives when its Web Worker finishes is a race, so this polls until a panel exists.
+    // NO `waitMs` here. #82 removed it because it ADDED a fixed wait on top of the poll — 55 s total —
+    // while the comment below says a fixed duration is the problem.
     //
-    // If none appears within the timeout that is the FINDING, not a reason to extend it: the run
-    // reports `no panel appeared within 30000 ms` plus the custom-element inventory, and the next
-    // correction comes from that list rather than from another guess at CreepJS's markup.
-    waitFor: ['#lies', '.lies', '[class*="lie"]', '#fingerprint', 'lies-panel', 'fp-lies'],
+    // `scope` names containers the inventory PROVED exist. The previous list — `#lies`, `.lies`,
+    // `[class*="lie"]`, `#fingerprint` — returned 0 matches on every single one: they were guessed from
+    // memory, which is the third time in this runner that guessing a page's markup has cost a round.
+    scope: ['#fingerprint-data', 'fuzzy-fingerprint', '#fp-app'],
+    // EXPAND COLLAPSED PANELS FIRST. The inventory lists dozens of `toggle-open-creep-*` /
+    // `toggle-close-creep-*` ids, so the panels are collapsible and a COLLAPSED panel's content is very
+    // likely not in the DOM at all — which is exactly what `#lies: 0 matches` plus a 3999-character
+    // body containing no count looks like. `toggle-open` is the state needed when they are closed.
+    expand: '[id^="toggle-open-creep-"]',
+    // If expanding still produces no panel, poll for the VERDICT SHAPE rather than for an element — a
+    // percentage near "trust", or the word "lies" — inside the app container. CreepJS's full analysis is
+    // slow and a CI runner is not fast, so this budget is longer than the element poll. The output says
+    // WHICH of the two paths produced content, so a run cannot be read as one when it was the other.
+    textPattern: /\b(\d+\s+lies?|trust[^\d%]{0,20}\d{1,3}\s*%)\b/i,
+    textTimeoutMs: 45_000,
+    waitFor: ['#fingerprint-data', 'fuzzy-fingerprint', '#fp-app'],
     panelTimeoutMs: 30_000,
   },
   {
@@ -1013,7 +1021,7 @@ async function readWorkerSurface(page) {
               : gl.getParameter(gl.RENDERER)
           }
         } catch (error) {
-          out.webglError = String(error && error.message ? error.message : error)
+          out.webglError = String(error?.message ? error.message : error)
         }
         self.postMessage(out)
       }
@@ -1091,6 +1099,40 @@ async function exitIp() {
 async function resultText(page, target) {
   const tried = []
 
+  // EXPAND COLLAPSED PANELS BEFORE READING. A collapsed panel's content is not in the DOM, and the
+  // inventory showed this page's panels are toggled by `toggle-open-creep-*` / `toggle-close-creep-*`.
+  // Bounded, and the number clicked is reported so a run says how much was actually opened.
+  if (target.expand) {
+    let clicked = 0
+    let matched = 0
+    try {
+      const toggles = page.locator(target.expand)
+      matched = await toggles.count()
+      for (let index = 0; index < Math.min(matched, 60); index += 1) {
+        try {
+          await toggles.nth(index).click({ timeout: 2_000 })
+          clicked += 1
+        } catch {
+          // A toggle that will not click is not fatal.
+        }
+      }
+    } catch (error) {
+      tried.push(`expand failed: ${String(error?.message ?? error).split('\n')[0]}`)
+    }
+    tried.push(`expanded ${clicked} of ${matched} panel toggle(s) via ${target.expand}`)
+
+    // AND PRINTED UNCONDITIONALLY, which is the part that makes it evidence rather than a note.
+    //
+    // This line lived only in `tried`, and `tried` is surfaced only on an UNREAD verdict - so the
+    // regression it exists to expose, "opened nothing and passed anyway", was precisely the case where it
+    // was not printed. A run with `expanded 0 of 0` and a green verdict was indistinguishable from one
+    // that opened forty panels, which is the difference between a count and a guard. An independent
+    // review found this; the reasoning is theirs and it is worth keeping next to the line.
+    console.log(
+      `[fingerprint] ${target.kind}: expanded ${clicked} of ${matched} panel toggle(s) via ${target.expand}`,
+    )
+  }
+
   // Wait for a PANEL to exist rather than for a duration, when the target declares one. A fixed wait on
   // a page whose real content is produced by a Web Worker is a race: CreepJS's header is in the DOM
   // while every analysis panel is still absent.
@@ -1116,6 +1158,30 @@ async function resultText(page, target) {
         ? `panel appeared: ${appeared}`
         : `no panel appeared within ${budget} ms (polled: ${target.waitFor.join(', ')})`,
     )
+
+    // Second path: if no element appeared, poll for the verdict SHAPE. The output distinguishes the two
+    // so a run cannot be read as "the panel appeared" when it was the text pattern, or vice versa.
+    if (!appeared && target.textPattern) {
+      const textBudget = target.textTimeoutMs ?? 45_000
+      const textDeadline = Date.now() + textBudget
+      while (Date.now() < textDeadline && !appeared) {
+        const text =
+          (await page
+            .locator('body')
+            .innerText()
+            .catch(() => '')) || ''
+        if (target.textPattern.test(text)) {
+          appeared = 'text pattern'
+          break
+        }
+        await page.waitForTimeout(2_000)
+      }
+      tried.push(
+        appeared === 'text pattern'
+          ? `a verdict-shaped text pattern appeared within ${textBudget} ms`
+          : `no verdict-shaped text pattern appeared within ${textBudget} ms either`,
+      )
+    }
   }
 
   for (const selector of target.scope ?? []) {
@@ -1165,18 +1231,26 @@ async function resultText(page, target) {
   const inventory = await page
     .evaluate(() => {
       const custom = new Set()
+      const classes = new Set()
       for (const element of document.querySelectorAll('*')) {
         const tag = element.tagName.toLowerCase()
         if (tag.includes('-')) custom.add(tag)
       }
+      // Classes are the other half of the inventory, and a selector would key on them: the ids told us
+      // the panels are toggles, and the class names are what a container selector would actually use.
+      for (const element of document.querySelectorAll('[class]')) {
+        for (const name of element.classList) classes.add(name)
+      }
       return {
         custom: [...custom].slice(0, 40),
         ids: [...document.body.querySelectorAll('[id]')].map(element => element.id).slice(0, 40),
+        classes: [...classes].slice(0, 60),
       }
     })
-    .catch(() => ({ custom: [], ids: [] }))
+    .catch(() => ({ custom: [], ids: [], classes: [] }))
   tried.push(`custom elements: ${inventory.custom.join(', ') || 'none'}`)
   tried.push(`ids: ${inventory.ids.join(', ') || 'none'}`)
+  tried.push(`classes: ${inventory.classes.join(', ') || 'none'}`)
 
   return { text: shadow.length > 0 ? `${body}\n${shadow}` : body, scope: null, tried }
 }
