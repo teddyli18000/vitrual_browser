@@ -177,10 +177,15 @@ export async function restartPhase({
       (renamed.length ? `; renamed: ${renamed.map(profile => profile.id).join(', ')}` : ''),
   )
 
-  // (c) The engine is still installed where it was.
+  // (c) The engine is still installed where it was - ASKED OF THE APP, NOT OF THE FILESYSTEM. The
+  // multi-kernel work moves the launcher into <root>/kernels/<version>/ and leaves only version.json at
+  // the root, so a path assertion here fails on a CORRECT install the moment that lands. What the
+  // product reports is the property, and it cannot drift with the layout.
+  const engineAfterRestart = await api('/api/v1/kernel').catch(() => null)
+  const kernelInfo = engineAfterRestart?.body?.data ?? null
   assert(
-    existsSync(path.join(engineDir, 'camoufox.exe')),
-    `the engine is still installed at ${path.join(engineDir, 'camoufox.exe')}`,
+    kernelInfo?.installed === true,
+    `the engine is still installed after the restart (${JSON.stringify(kernelInfo)})`,
   )
   assert(
     existsSync(path.join(engineDir, 'version.json')),
