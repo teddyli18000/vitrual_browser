@@ -432,24 +432,38 @@ void sse
 const installMs = Date.now() - installStarted
 assert(Boolean(installedInfo), `the application reports the engine installed after ${installMs} ms`)
 if (installedInfo) note(`kernel: ${JSON.stringify(installedInfo)}`)
-// THE LAUNCHER IS NOT ASSERTED BY PATH. Where a kernel build lives is the product's business, and the
-// multi-kernel layout moves it into <root>/kernels/<version>/ with only version.json left at the root -
-// so a filesystem assertion here fails on a CORRECT install the moment that lands. What is asserted is
-// what the application reports, which is the property and cannot drift: at least one kernel, every
-// listed kernel usable, and a default chosen.
+// THE LAUNCHER IS NOT ASSERTED BY A HARD-CODED PATH. Where a kernel build lives is the product's
+// business, and the multi-kernel work moves it into <root>/kernels/<version>/ with only version.json left
+// at the root - so asserting `camoufox.exe` at the root fails on a CORRECT install the moment that lands.
+//
+// What is asserted instead is what the application reports, including the path IT names: that path is
+// checked to exist, which is layout-agnostic because the app is the one saying where it put the engine.
+// The richer fields the kernel work adds are asserted WHEN PRESENT, so they switch on by themselves
+// rather than needing another edit here - and the first version of this wrote them unconditionally, which
+// CI caught immediately against an API that does not have them yet.
 assert(
-  Array.isArray(installedInfo?.kernels) && installedInfo.kernels.length > 0,
-  `the application reports at least one installed kernel (${JSON.stringify(installedInfo?.kernels ?? null)})`,
-)
-const unusable = (installedInfo?.kernels ?? []).filter(kernel => kernel.problem)
-assert(
-  unusable.length === 0,
-  `every installed kernel is usable; unusable: ${JSON.stringify(unusable.map(kernel => ({ version: kernel.version, problem: kernel.problem })))}`,
+  installedInfo?.installed === true,
+  `the application reports the engine installed (${JSON.stringify(installedInfo)})`,
 )
 assert(
-  typeof installedInfo?.defaultVersion === 'string' && installedInfo.defaultVersion.length > 0,
-  `the application names a default kernel (${JSON.stringify(installedInfo?.defaultVersion ?? null)})`,
+  typeof installedInfo?.path === 'string' && existsSync(installedInfo.path),
+  `the path the application reports exists on disk (${JSON.stringify(installedInfo?.path ?? null)})`,
 )
+if (Array.isArray(installedInfo?.kernels)) {
+  assert(
+    installedInfo.kernels.length > 0,
+    `the application reports at least one installed kernel (${JSON.stringify(installedInfo.kernels)})`,
+  )
+  const unusable = installedInfo.kernels.filter(kernel => kernel.problem)
+  assert(
+    unusable.length === 0,
+    `every installed kernel is usable; unusable: ${JSON.stringify(unusable.map(kernel => ({ version: kernel.version, problem: kernel.problem })))}`,
+  )
+  assert(
+    typeof installedInfo.defaultVersion === 'string' && installedInfo.defaultVersion.length > 0,
+    `the application names a default kernel (${JSON.stringify(installedInfo?.defaultVersion ?? null)})`,
+  )
+}
 assert(
   existsSync(path.join(engineDir, 'version.json')),
   `version.json exists on disk at ${path.join(engineDir, 'version.json')}`,

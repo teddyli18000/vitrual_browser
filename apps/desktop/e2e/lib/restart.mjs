@@ -184,9 +184,7 @@ export async function restartPhase({
   const engineAfterRestart = await api('/api/v1/kernel').catch(() => null)
   const kernelInfo = engineAfterRestart?.body?.data ?? null
   assert(
-    kernelInfo?.installed === true &&
-      Array.isArray(kernelInfo.kernels) &&
-      kernelInfo.kernels.length > 0,
+    kernelInfo?.installed === true,
     `the engine is still installed after the restart (${JSON.stringify(kernelInfo)})`,
   )
   assert(
