@@ -281,7 +281,13 @@ async function observedConfig(engineDir: string): Promise<Record<string, unknown
  * as the pin-set derivation, one level out: the guessing is gone, but the sample is one.
  */
 async function convergeSchema(engineDir: string): Promise<Record<string, unknown>> {
-  const declared = new Map<string, string>()
+  // SEEDED WITH `addons`, and the seed is load-bearing. This loop writes `properties.json` itself and
+  // writes exactly `[...declared]` - it does NOT go through `writeEngineProperties`, which is the one
+  // place that hardcodes `addons`. So an unseeded map converges on a schema that omits the single key
+  // camoufox-js assigns to every config, and every later launch reads a fixture whose own author thought
+  // it declared `addons`: "Unknown property addons in config", from a file that was supposed to accept
+  // it. Found by ci, who narrowed it to this one line from the probe's output.
+  const declared = new Map<string, string>([['addons', 'array']])
   for (let attempt = 1; attempt <= 64; attempt += 1) {
     await fs.writeFile(
       path.join(engineDir, 'properties.json'),
