@@ -332,12 +332,35 @@ async function convergeSchema(engineDir: string): Promise<Record<string, unknown
         }
         if (added > 0) continue
       }
-      // SHAPE 3 — the type. camoufox-js's `InvalidPropertyType` names the key AND the expected type, so
-      // `dict` is only ever a placeholder that this corrects.
-      const wrongType = /Invalid type for property (\S+)\. Expected (\w+)/.exec(message)
+      // SHAPE 3 — the type, and the message has to be read the RIGHT WAY ROUND. `Expected dict, got
+      // number` does NOT mean "this key should be dict": it means "your declaration said dict and the
+      // value is a number". Reading `Expected` set the key to the type it already had, so `declared.set`
+      // was a no-op, the loop re-learned the same non-fact, and nine keys sat there for sixty-four
+      // attempts. The type to declare is the one that ACCEPTS THE VALUE, which is what `got` names.
+      //
+      // The map is deliberately the permissive spelling of each: a `number` becomes `double` because
+      // `int` would reject a float and `double` accepts both, and `double` is the engine's own
+      // vocabulary (`utils.js` `validateType`). Anything unrecognised falls through to the throw rather
+      // than guessing, so a new JavaScript type shows up as a failure instead of a silent wrong answer.
+      const TYPE_ACCEPTING: Record<string, string> = {
+        number: 'double',
+        string: 'str',
+        boolean: 'bool',
+        object: 'dict',
+      }
+      const wrongType = /Invalid type for property (\S+)\. Expected \w+, got (\w+)/.exec(message)
       const wrongTypeKey = wrongType?.[1]
-      const wrongTypeValue = wrongType?.[2]
-      if (wrongTypeKey && wrongTypeValue) {
+      const wrongTypeGot = wrongType?.[2]
+      let wrongTypeValue = wrongTypeGot ? TYPE_ACCEPTING[wrongTypeGot] : undefined
+      // `got object` is ambiguous, and the ambiguity is real: `typeof []` is `'object'`, so an array and
+      // a dict produce the same word. The message cannot settle it and the value is in the config this
+      // loop is trying to observe, so asking for it is circular. What settles it is the second attempt:
+      // a value the validator rejects as `dict` while calling it an object is an array, because the only
+      // other thing JavaScript calls an object is a dict and that is what just failed.
+      if (wrongTypeGot === 'object' && wrongTypeKey && declared.get(wrongTypeKey) === 'dict') {
+        wrongTypeValue = 'array'
+      }
+      if (wrongTypeKey && wrongTypeValue && declared.get(wrongTypeKey) !== wrongTypeValue) {
         declared.set(wrongTypeKey, wrongTypeValue)
         continue
       }
