@@ -148,6 +148,23 @@ rule, a trap, or neither? If neither, it does not go here.
   `import`. Do **not** put them in `<userdata>/extensions/`: that is Firefox's own sideload directory,
   where one gecko id would be loaded twice — once by the engine's `addons` option and once by Firefox's
   XPIProvider.
+- **Before changing where a path points, find out WHEN it was decided.** Two consecutive
+  hypotheses in one session failed for this reason, and both looked plausible. #103 says an explicit
+  `executable_path` does not stop camoufox-js's release lookup - measured, recorded, and unexplained. The
+  next attempt was to give the test fixture its own `addons/<name>/manifest.json`, on the theory that
+  `camoufoxPath()` reaches the engine *through the addon path*. Both fail for the same reason:
+  `pkgman.js:44` is `export const INSTALL_DIR = process.env.CAMOUFOX_INSTALL_DIR ? … : <per-user cache>`,
+  **a module-level constant evaluated once, when camoufox-js is first imported**. Every later write - a
+  per-call `executable_path`, a directory the fixture creates afterwards, an env assignment in `beforeAll`
+  - is a per-call change against a load-time decision. `getAddonPath()` and `camoufoxPath()` are the *same*
+  function reading the *same* frozen constant, which is why they agree with each other and disagree with
+  everything the test does.
+  **The test file already had the answer in a comment** - "frozen when camoufox-js is LOADED" - and the code
+  below it assigned the variable in `beforeAll` anyway. A comment that states a constraint the code does not
+  enforce is worse than no comment, because it is read and believed.
+  The tell, for next time: a path that is correct in one process and wrong in another, where the difference
+  is *when* something ran rather than *what* it was given.
+
 - **A profile zip is executable content.** Addons sit inside the profile directory, so importing someone
   else's profile imports their extensions and the engine loads them. That is a consequence of the
   layout, written down here so nobody has to learn it from an incident.
