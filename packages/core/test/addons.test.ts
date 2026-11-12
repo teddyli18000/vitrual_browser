@@ -155,8 +155,16 @@ const MANIFEST = JSON.stringify({
 })
 
 /** A fake engine directory: only what the addon wiring reads. */
-async function writeEngineAddon(key: string, id: string | null, name = key): Promise<string> {
-  const engineDir = await fakeEngine()
+async function writeEngineAddon(
+  key: string,
+  id: string | null,
+  name = key,
+  target?: string,
+): Promise<string> {
+  // `target` exists for the launcher-wiring block: it converges ONE engine schema for the whole
+  // block and must keep using that directory. A fresh `fakeEngine()` carries the permissive
+  // `properties.json = []`, whose first rejection is `Unknown property addons in config`.
+  const engineDir = target ?? (await fakeEngine())
   const dir = path.join(engineDir, 'addons', key)
   await fs.mkdir(dir, { recursive: true })
   await fs.writeFile(
@@ -675,10 +683,14 @@ describe('the engine’s own addons', () => {
  * judged in. On a machine that had an engine the same commit failed instead, with
  * `ENOENT: … engine\properties.json`. Two environments, two results, and the silent one was CI.
  *
- * Everything this block needs it now builds itself: `writeEngineAddon` writes the addon AND a
- * `properties.json` for the fake engine it creates, and each case passes that directory in explicitly.
- * A block that skips is a block that cannot fail, and this repository has that defect class written
- * down seven times.
+ * Everything this block needs it now builds itself: ONE engine directory in `beforeAll`, with a
+ * `version.json` and a `properties.json` converged against the config the product actually hands over.
+ * Every case passes THAT directory in explicitly. Calling `fakeEngine()` inside a case instead builds
+ * a second directory with the permissive `properties.json = []`, and camoufox-js then rejects the
+ * first undeclared key (`Unknown property addons in config`) before any wiring can be observed — which
+ * is exactly the CI failure this block shipped with, four red cases against a converged fixture that
+ * no case used. A block that skips is a block that cannot fail; so is a block that never reaches its
+ * assertion, and this repository has that defect class written down seven times.
  */
 
 /** The CAMOU_CONFIG the engine will actually read, reassembled from its env chunks. */
@@ -797,21 +809,15 @@ describe('what the launcher is handed', () => {
     const expected = addonDir(userDataDir, installed.slug)
     expect(path.isAbsolute(expected)).toBe(true)
 
-    const config = camouConfig(
-      await toServerOptions(profile(), userDataDir, vi.fn(), await fakeEngine()),
-    )
+    const config = camouConfig(await toServerOptions(profile(), userDataDir, vi.fn(), engineDir))
 
     expect(config.addons).toContain(expected)
   })
 
   it('does not accumulate the engine’s defaults across launches', async () => {
     const installed = await installAddon(userDataDir, await writeAddon(path.join(root, 'src', 'b')))
-    const first = camouConfig(
-      await toServerOptions(profile(), userDataDir, vi.fn(), await fakeEngine()),
-    )
-    const second = camouConfig(
-      await toServerOptions(profile(), userDataDir, vi.fn(), await fakeEngine()),
-    )
+    const first = camouConfig(await toServerOptions(profile(), userDataDir, vi.fn(), engineDir))
+    const second = camouConfig(await toServerOptions(profile(), userDataDir, vi.fn(), engineDir))
 
     // camoufox-js pushes its default addon paths into the array it was given, so a shared or cached
     // array would come back one entry longer on every launch.
@@ -820,7 +826,7 @@ describe('what the launcher is handed', () => {
   })
 
   it('excludes the engine’s copy of an addon the profile also has', async () => {
-    const engineDir = await writeEngineAddon('UBO', 'uBlock0@raymondhill.net')
+    await writeEngineAddon('UBO', 'uBlock0@raymondhill.net', 'UBO', engineDir)
     await installAddon(
       userDataDir,
       await writeAddon(path.join(root, 'src', 'own-ubo'), {
@@ -836,9 +842,7 @@ describe('what the launcher is handed', () => {
   })
 
   it('contributes nothing to a profile with no addons of its own', async () => {
-    const config = camouConfig(
-      await toServerOptions(profile(), userDataDir, vi.fn(), await fakeEngine()),
-    )
+    const config = camouConfig(await toServerOptions(profile(), userDataDir, vi.fn(), engineDir))
     const addons = (config.addons ?? []) as string[]
 
     expect(addons.some(entry => entry.includes(ADDON_STORE_DIR))).toBe(false)
