@@ -209,7 +209,12 @@ jobs:
   # @vfox/server, with the preload bridge injected.
   ui-screenshots:
     name: UI screenshots
-    runs-on: ubuntu-latest
+    # Playwright is pinned to 1.60.0 for the patched Juggler protocol, and that version does not
+    # support ubuntu26.04-x64. `ubuntu-latest` rolled to 26.04, so `playwright install --with-deps
+    # chromium` refused to install and this job failed before a single screenshot was taken. The
+    # last green run (37732060250) reported `Image: ubuntu-24.04`; pin that image explicitly rather
+    # than upgrading Playwright. Changing this label back to `ubuntu-latest` reopens #118.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Check out the repository
