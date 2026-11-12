@@ -51,6 +51,21 @@ jobs:
       - name: Validate the workflows
         run: node scripts/validate-workflows.mjs
 
+      # THE OUTBOUND-REQUEST COUNT. The product rule allows exactly three outbound calls — the engine
+      # download on first run, the user's own proxy, and the GeoIP lookup — and issue #79 measured a
+      # launch making ten: the release lookup retried five times plus a uBlock Origin download retried
+      # five times. Five of those survive on a HEALTHY launch, and nothing asserted it until now.
+      #
+      # It measures the LIBRARY directly — camoufox-js's `launchOptions()` against a fixture engine root —
+      # so the number covers the call the product makes on every launch, not the product's own
+      # user-visible path. That distinction is recorded because a probe that bypasses the product was
+      # once filed as evidence about what a user is told.
+      #
+      # The assertion is 5, NOT 0. Zero would go green while five requests remain; the step prints the
+      # number so the 5 -> 0 transition is visible when uBlock Origin is bundled rather than downloaded.
+      - name: Count the outbound requests of a launch
+        run: node packages/core/scripts/check-launch-fetches.mjs
+
       # Instant, static, and needs no build: it catches a broken Element Plus component
       # registration before any of the slow steps run.
       #
