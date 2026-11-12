@@ -44,24 +44,14 @@ mkdirSync(installDir, { recursive: true })
 console.error(`[fetch-kernel] install dir: ${installDir}`)
 console.error(`[fetch-kernel] pinned engine: ${ENGINE_VERSION}`)
 
-const readInstalledVersion = () => {
+/** The `{ version, release }` marker in `dir` as a full version string, or null when unreadable. */
+const readVersionFrom = dir => {
   try {
-    const raw = JSON.parse(readFileSync(path.join(installDir, 'version.json'), 'utf8'))
+    const raw = JSON.parse(readFileSync(path.join(dir, 'version.json'), 'utf8'))
     return raw.version && raw.release ? `${raw.version}-${raw.release}` : null
   } catch {
     return null
   }
-}
-
-const already = readInstalledVersion()
-const verifying = process.argv.includes('--verify-url')
-if (!verifying && already === ENGINE_VERSION && existsSync(path.join(installDir, 'camoufox.exe'))) {
-  console.error(`[fetch-kernel] already installed: ${already}`)
-  console.log(already)
-  process.exit(0)
-}
-if (already && already !== ENGINE_VERSION) {
-  console.error(`[fetch-kernel] replacing ${already} with the pinned ${ENGINE_VERSION}`)
 }
 
 let pkgman
@@ -170,29 +160,56 @@ if (process.argv.includes('--verify-url')) {
  * step exercises exactly the code a user's 一键安装 button runs.
  *
  * It requires `packages/core/dist` to exist, so the workflow builds the workspace before fetching.
+ * `--verify-url` exits above without reaching this block, so that step still needs no build.
  */
-const coreKernel = path.join(repoRoot, 'packages', 'core', 'dist', 'kernel.js')
-if (!existsSync(coreKernel)) {
-  console.error(
-    '[fetch-kernel] packages/core is not built. Run `pnpm --filter @vfox/core build` first — the\n' +
-      '  install deliberately reuses the application code rather than a second copy of it.',
-  )
-  process.exit(1)
+const coreDist = path.join(repoRoot, 'packages', 'core', 'dist')
+const coreKernel = path.join(coreDist, 'kernel.js')
+const coreKernels = path.join(coreDist, 'kernels.js')
+for (const built of [coreKernel, coreKernels]) {
+  if (!existsSync(built)) {
+    console.error(
+      '[fetch-kernel] packages/core is not built. Run `pnpm --filter @vfox/core build` first — the\n' +
+        '  install deliberately reuses the application code rather than a second copy of it.',
+    )
+    process.exit(1)
+  }
 }
 
-let installCamoufoxEngine
+let installCamoufoxEngine, kernelLayout, kernelLauncherPath
 try {
   ;({ installCamoufoxEngine } = await import(pathToFileURL(coreKernel).href))
+  ;({ kernelLayout, kernelLauncherPath } = await import(pathToFileURL(coreKernels).href))
 } catch (error) {
   console.error(`[fetch-kernel] cannot load the application installer: ${error.message}`)
   process.exit(1)
 }
 
+// Since v0.4.0 a kernel build lives in <root>/kernels/<version>/ and the root keeps only the
+// version.json marker, the shared addons and the GeoIP database. Derive the target through the
+// product's own layout helper — the one verify-install.mjs:44 uses — so CI cannot install into a
+// directory the product will not resolve. `CAMOUFOX_INSTALL_DIR` was set above, before the first
+// camoufox-js import; that is the ordering `applyKernelDir()` enforces for other callers.
+const layout = kernelLayout(installDir)
+const kernelDir = path.join(layout.kernelsDir, ENGINE_VERSION)
+
+const already = readVersionFrom(installDir)
+if (already === ENGINE_VERSION && existsSync(kernelLauncherPath(kernelDir))) {
+  console.error(`[fetch-kernel] already installed: ${already} at ${kernelDir}`)
+  console.log(already)
+  process.exit(0)
+}
+if (already && already !== ENGINE_VERSION) {
+  console.error(`[fetch-kernel] replacing ${already} with the pinned ${ENGINE_VERSION}`)
+}
+
 try {
-  await installCamoufoxEngine(progress => {
-    const detail = progress.message ? `: ${progress.message}` : ''
-    console.error(`[fetch-kernel] ${progress.phase}${detail}`)
-  })
+  await installCamoufoxEngine(
+    progress => {
+      const detail = progress.message ? `: ${progress.message}` : ''
+      console.error(`[fetch-kernel] ${progress.phase}${detail}`)
+    },
+    { version: ENGINE_VERSION, targetDir: kernelDir },
+  )
 } catch (error) {
   console.error(
     `[fetch-kernel] the application installer failed: ${error.message}\n` +
@@ -202,17 +219,32 @@ try {
   process.exit(1)
 }
 
-const finalVersion = readInstalledVersion()
-console.error(`[fetch-kernel] installed: ${finalVersion ?? 'unknown'}`)
-if (finalVersion !== ENGINE_VERSION) {
+// Assert the artifact, not the fact that the installer returned. The old flat-layout check
+// (<root>/camoufox.exe) cannot succeed on a versioned install: it would have gone red on a CORRECT
+// install. Print what was actually checked so a reviewer can read the guard's input, not just its
+// verdict (AGENTS.md §4, "Assert your inputs before your verdict").
+const finalVersion = readVersionFrom(installDir)
+const buildVersion = readVersionFrom(kernelDir)
+console.error(`[fetch-kernel] root marker: ${finalVersion ?? 'unknown'} at ${layout.markerFile}`)
+console.error(`[fetch-kernel] kernel build: ${buildVersion ?? 'unknown'} at ${kernelDir}`)
+if (finalVersion !== ENGINE_VERSION || buildVersion !== ENGINE_VERSION) {
   console.error(
-    `[fetch-kernel] expected ${ENGINE_VERSION} after install but found ${finalVersion ?? 'nothing'}`,
+    `[fetch-kernel] expected ${ENGINE_VERSION} in both markers, found ` +
+      `root=${finalVersion ?? 'nothing'} build=${buildVersion ?? 'nothing'}`,
   )
   process.exit(1)
 }
-if (!existsSync(path.join(installDir, 'camoufox.exe'))) {
-  console.error('[fetch-kernel] camoufox.exe is missing after install')
-  process.exit(1)
+const required = [
+  kernelLauncherPath(kernelDir),
+  path.join(kernelDir, 'properties.json'),
+  path.join(kernelDir, 'version.json'),
+]
+for (const file of required) {
+  if (!existsSync(file)) {
+    console.error(`[fetch-kernel] ${file} is missing after install`)
+    process.exit(1)
+  }
 }
+console.error(`[fetch-kernel] verified ${required.length} file(s) in ${kernelDir}`)
 
 console.log(finalVersion)
