@@ -148,6 +148,26 @@ rule, a trap, or neither? If neither, it does not go here.
   `import`. Do **not** put them in `<userdata>/extensions/`: that is Firefox's own sideload directory,
   where one gecko id would be loaded twice — once by the engine's `addons` option and once by Firefox's
   XPIProvider.
+- **Before changing where a path points, find out WHEN it was decided.** camoufox-js resolves
+  `INSTALL_DIR` from `CAMOUFOX_INSTALL_DIR` once, at first import (`pkgman.js:44-45`), and the addon
+  lookup `getAddonPath(name) → getPath(join('addons', name)) → camoufoxPath()` (`addons.js:47-60`)
+  reads that one root. Three distinct things get conflated here, and none substitutes for another:
+  (1) `INSTALL_DIR` is a frozen **path string**, not a frozen filesystem snapshot. Writing the env var
+  after the import changes nothing; creating a directory or a valid `version.json` **at the captured
+  path** later does change what the next check sees. (2) `executable_path` is a per-launch public
+  option that selects the kernel executable and makes `loadProperties()` read `properties.json` from
+  beside it (`utils.js:60-71`, `packages/core/src/launcher.ts`); it does not move `INSTALL_DIR`, so it
+  cannot suppress the release lookup `camoufoxPath()` starts. (3) `getAddonPath()` and
+  `camoufoxPath()` are **different functions in one call chain**, not the same function - they share
+  one resolved root. The old "the executable is reached *through* the addon path" framing merges (2)
+  and (3) and is wrong; `packages/core/docs/engine-kernels.md` is the authoritative split between the
+  shared addon/cache root and the per-kernel executable.
+  **The test file already had the answer in a comment** - "frozen when camoufox-js is LOADED" - while
+  the code below it assigned the variable in `beforeAll`, after static imports had loaded the module.
+  Measured in #103: the same assignment before the import resolved to the fixture, after it to the real
+  cache. A comment that states a constraint the code does not enforce is worse than no comment, because
+  it is read and believed. The tell, for next time: a path that is correct in one process and wrong in
+  another, where the difference is *when* something ran rather than *what* it was given.
 - **A profile zip is executable content.** Addons sit inside the profile directory, so importing someone
   else's profile imports their extensions and the engine loads them. That is a consequence of the
   layout, written down here so nobody has to learn it from an incident.
